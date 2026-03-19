@@ -2,13 +2,10 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 
 const API_BASE = '/api'
 
-// Read API key from meta tag or window config (set by deployment)
 function getApiKey() {
-  // Check for global config (can be set in index.html or by deployment)
   if (typeof window !== 'undefined' && window.__DASHBOARD_API_KEY__) {
     return window.__DASHBOARD_API_KEY__
   }
-  // Check meta tag
   const meta = document.querySelector('meta[name="dashboard-api-key"]')
   if (meta) {
     return meta.getAttribute('content')
@@ -22,6 +19,7 @@ export function useApi(endpoint, intervalMs = 5000) {
   const [error, setError] = useState(null)
   const [lastUpdated, setLastUpdated] = useState(null)
   const mountedRef = useRef(true)
+  const errorLoggedRef = useRef(false)
 
   const fetchData = useCallback(async () => {
     try {
@@ -43,10 +41,16 @@ export function useApi(endpoint, intervalMs = 5000) {
         setData(json)
         setError(null)
         setLastUpdated(new Date())
+        errorLoggedRef.current = false
       }
     } catch (err) {
       if (mountedRef.current) {
         setError(err.message)
+        // Only log the first error to avoid console spam when backend is down
+        if (!errorLoggedRef.current) {
+          console.warn(`[useApi] ${endpoint}: ${err.message}`)
+          errorLoggedRef.current = true
+        }
       }
     } finally {
       if (mountedRef.current) {
