@@ -66,6 +66,8 @@ def candles():
 def orderbook():
     """Get L2 order book from Hyperliquid."""
     coin = request.args.get("coin", "BTC").upper()
+    nlevels = request.args.get("levels", 30, type=int)
+    nlevels = min(nlevels, 50)
 
     data = post_hyperliquid_info({
         "type": "l2Book",
@@ -80,7 +82,7 @@ def orderbook():
     asks_raw = levels[1] if len(levels) > 1 else []
 
     bids = []
-    for b in bids_raw[:15]:
+    for b in bids_raw[:nlevels]:
         bids.append({
             "price": float(b.get("px", 0)),
             "size": float(b.get("sz", 0)),
@@ -88,7 +90,7 @@ def orderbook():
         })
 
     asks = []
-    for a in asks_raw[:15]:
+    for a in asks_raw[:nlevels]:
         asks.append({
             "price": float(a.get("px", 0)),
             "size": float(a.get("sz", 0)),

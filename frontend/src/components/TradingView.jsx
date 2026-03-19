@@ -71,14 +71,15 @@ export default function TradingView({ tradingPairs }) {
     } catch { setChartLoading(false) }
   }, [selectedCoin, interval])
 
-  // ─── Fetch order book ──────────────────────────────────────────────────
+  // ─── Fetch order book (request 30 levels to support 25-level display) ──
   const fetchOrderBook = useCallback(async () => {
     try {
-      const res = await fetch(`/api/orderbook?coin=${selectedCoin}`, { headers: getHeaders() })
+      const res = await fetch(`/api/orderbook?coin=${selectedCoin}&levels=30`, { headers: getHeaders() })
       if (!res.ok) return
       const data = await res.json()
       if (!mountedRef.current) return
 
+      // Store previous sizes for flash detection
       const newPrevBids = {}
       const newPrevAsks = {}
       bids.forEach(b => { newPrevBids[b.price] = b.size })
