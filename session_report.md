@@ -9,6 +9,11 @@ Automated trading bot for Hyperliquid exchange powered by **Claude Opus 4.6** vi
 ```
 hyperliquid/
 ├── hyperliquid_bot_executable_orders.py  # Main bot entry point
+├── config/
+│   ├── __init__.py
+│   └── bot_config.py                    # BotConfig dataclass (all env vars)
+├── cycle_orchestrator.py                 # Trading cycle phases (health → portfolio → SL/TP → trade)
+├── portfolio_service.py                  # Portfolio state fetching from Hyperliquid
 ├── exchange_client.py                    # Hyperliquid API client (EIP-712 signing)
 ├── llm_engine.py                         # Claude Opus 4.6 via OpenRouter (with retry)
 ├── execution_engine.py                   # Order execution logic
@@ -21,7 +26,21 @@ hyperliquid/
 ├── bot_live_writer.py                    # Live status for dashboard
 ├── notifier.py                           # Telegram notifications
 ├── models.py                             # Data models (dataclass/enum, break-even config)
-├── api_server.py                         # Flask API for dashboard + Prometheus /metrics
+├── api/
+│   ├── __init__.py                       # Flask app factory
+│   ├── config.py                         # API configuration constants
+│   ├── auth.py                           # API key authentication decorator
+│   ├── json_provider.py                  # Custom JSON provider (Decimal → float)
+│   ├── helpers.py                        # Shared helpers (file I/O, Hyperliquid proxy, sanitization)
+│   └── routes/
+│       ├── __init__.py
+│       ├── health.py                     # /api/health (no auth)
+│       ├── bot.py                        # /api/status, /api/portfolio, /api/config, etc.
+│       ├── trading.py                    # /api/trades, /api/performance, /api/trades/export
+│       ├── market.py                     # /api/candles, /api/orderbook (Hyperliquid proxy)
+│       ├── logs.py                       # /api/logs (sanitized)
+│       └── metrics.py                    # /metrics (Prometheus format)
+├── api_server.py                         # Thin entry point for API server
 ├── check_current_positions.py            # Position checker utility
 ├── close_sol_position.py                 # SOL position closer utility
 ├── hyperliquid_minimal_order.py          # Minimal order test utility
@@ -32,14 +51,23 @@ hyperliquid/
 ├── README.md                             # Project documentation
 ├── utils/
 │   ├── __init__.py
+│   ├── file_io.py                        # Atomic file writes with 0o600 permissions
+│   ├── http.py                           # Shared HTTP session factory with retry
 │   ├── circuit_breaker.py                # Circuit breaker pattern
-│   ├── rate_limiter.py                   # Token bucket rate limiter (active)
-│   ├── retry.py                          # HTTP retry with backoff (used by LLM)
-│   ├── decimals.py                       # Decimal arithmetic utilities + safe_decimal
+│   ├── rate_limiter.py                   # Token bucket rate limiter
+│   ├── retry.py                          # HTTP retry with backoff
+│   ├── decimals.py                       # Decimal arithmetic utilities
 │   ├── validation.py                     # Input validation
 │   ├── metrics.py                        # Metrics collection + Prometheus export
-│   ├── health.py                         # Health monitoring (active in bot)
+│   ├── health.py                         # Health monitoring
 │   └── logging_config.py                 # Structured JSON logging
+├── tests/
+│   ├── __init__.py
+│   ├── test_models.py
+│   ├── test_risk_manager.py
+│   ├── test_technical_indicators.py
+│   ├── test_decimals.py
+│   └── test_state_store.py
 ├── frontend/
 │   ├── package.json
 │   ├── vite.config.js
@@ -47,7 +75,7 @@ hyperliquid/
 │   ├── postcss.config.js
 │   ├── index.html
 │   └── src/
-│       ├── main.jsx                      # Entry point with ErrorBoundary
+│       ├── main.jsx
 │       ├── App.jsx
 │       ├── index.css
 │       ├── hooks/useApi.js
@@ -55,52 +83,52 @@ hyperliquid/
 │           ├── StatusBadge.jsx
 │           ├── StatCard.jsx
 │           ├── PositionsTable.jsx
-│           ├── ManagedPositions.jsx       # Shows SL/TP/trailing/break-even status
+│           ├── ManagedPositions.jsx
 │           ├── TradeHistory.jsx
-│           ├── EquityChart.jsx            # Real equity curve from snapshots
+│           ├── EquityChart.jsx
+│           ├── PriceChart.jsx            # Real-time candlestick chart
+│           ├── OrderBook.jsx             # L2 order book with depth
 │           ├── CircuitBreakerStatus.jsx
 │           ├── LogViewer.jsx
 │           ├── DrawdownBar.jsx
 │           ├── ConnectionStatus.jsx
 │           ├── ExportButton.jsx
-│           └── ErrorBoundary.jsx          # React error boundary
+│           └── ErrorBoundary.jsx
 └── state/                                # Runtime state (auto-created)
-    ├── bot_state.json                    # Includes equity_snapshots[]
+    ├── bot_state.json
     ├── bot_metrics.json
     ├── bot_live_status.json
     └── managed_positions.json
 ```
 
-## Key Improvements Applied
+## Architecture
 
-### Code Quality
-- **Unified `safe_decimal`**: All files use `utils/decimals.safe_decimal` — no more duplicated `_safe_decimal` methods
-- **Centralized `decimal_sqrt`**: 20 Newton-Raphson iterations (was 50), used everywhere
-- **`utils/retry.py` integrated**: LLM engine uses `retry_request()` with exponential backoff + jitter
-- **No global mutations**: `TRADING_PAIRS` is now instance attribute `self._trading_pairs`
-
-### Trading Logic
-- **RSI with Wilder's smoothing**: Standard RSI calculation matching TradingView
-- **Tick size from `szDecimals`**: Uses Hyperliquid meta field as primary source (was inferring from mid price)
-- **Break-even stop**: Moves SL to entry + 0.1% after +1.5% profit (configurable)
-- **Multi-timeframe analysis**: 5m (intraday) + 1h (medium) + 4h (long-term) with alignment detection
-
-### Risk Management
-- **Rate limiter active**: Token bucket for Hyperliquid API (20 tokens, 2/s) and OpenRouter (5 tokens, 0.5/s)
-- **Health monitor active**: Checks exchange connectivity, disk space, state writability every 10 cycles
-- **Configuration validation**: Critical env vars validated at startup with warnings
-- **Correlation engine**: Prevents opening correlated positions in same direction
-
-### Observability
-- **Prometheus `/metrics` endpoint**: Counters, gauges, circuit breaker states in text format
-- **Real equity curve**: Portfolio value snapshots every cycle (last 500 points)
-- **Structured JSON logging**: File + console with configurable level
-- **React ErrorBoundary**: Catches component crashes with recovery UI
-
-### Dashboard
-- **Break-even indicator**: Shows BE activation status on managed positions
-- **Real equity chart**: AreaChart from portfolio snapshots (not just trade activity)
-- **Export CSV**: Download trade history as CSV file
+```
+┌─────────────────────────────────────────────────────────┐
+│                    Dashboard React                       │
+│  (Charts, Order Book, Positions, Trades, Logs, BE)      │
+└──────────────────────┬──────────────────────────────────┘
+                       │ HTTP (polling every 5s)
+┌──────────────────────▼──────────────────────────────────┐
+│              API Server (Flask Blueprints)                │
+│  api/routes: health, bot, trading, market, logs, metrics │
+└──────────────────────┬──────────────────────────────────┘
+                       │ Reads shared JSON files
+┌──────────────────────▼──────────────────────────────────┐
+│              Bot Process                                 │
+│                                                           │
+│  BotConfig ──→ HyperliquidBot ──→ CycleOrchestrator     │
+│                                                           │
+│  Phases per cycle:                                        │
+│    1. Health check                                        │
+│    2. Portfolio snapshot (PortfolioService)               │
+│    3. SL/TP/Trailing/Break-even (PositionManager)        │
+│    4. Emergency de-risk (RiskManager)                    │
+│    5. Correlation analysis (CorrelationEngine)           │
+│    6. Per-coin: technicals → LLM → risk → execute       │
+│    7. State persistence (StateStore)                     │
+└──────────────────────────────────────────────────────────┘
+```
 
 ## Quick Start
 
@@ -120,16 +148,6 @@ cd frontend && npm install && npm run dev
 ```
 
 Open http://localhost:3000
-
-## Prometheus Integration
-
-Metrics available at `http://localhost:5000/metrics` in Prometheus text format.
-
-Example Grafana queries:
-- `bot_balance_usd` — Current balance
-- `rate(bot_trades_executed_total[1h])` — Trades per hour
-- `bot_margin_usage_ratio` — Current margin usage
-- `bot_circuit_breaker_hyperliquid_info_state` — Circuit breaker state
 
 ## Status: PRODUCTION READY
 Last Updated: 2025

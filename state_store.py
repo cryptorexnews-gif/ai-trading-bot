@@ -4,10 +4,7 @@ import time
 from decimal import Decimal
 from typing import Any, Dict, List, Optional
 
-
-# Security Fix #7: Restrictive file permissions
-_FILE_PERMISSION = 0o600  # Owner read/write only
-_DIR_PERMISSION = 0o700   # Owner read/write/execute only
+from utils.file_io import atomic_write_json, read_json_file
 
 
 class StateStore:
@@ -40,69 +37,28 @@ class StateStore:
             "daily_notional_total": "0"
         }
 
-    def _ensure_secure_directory(self, path: str) -> None:
-        """Create directory with restrictive permissions if it doesn't exist."""
-        dir_path = os.path.dirname(path) or "."
-        if dir_path != ".":
-            os.makedirs(dir_path, mode=_DIR_PERMISSION, exist_ok=True)
-            # Also fix permissions if directory already existed with wrong perms
-            try:
-                os.chmod(dir_path, _DIR_PERMISSION)
-            except OSError:
-                pass  # May fail on some filesystems, non-critical
-
-    def _atomic_write(self, path: str, data: Dict[str, Any]) -> None:
-        """Write to temp file then rename for crash safety. Sets restrictive permissions."""
-        self._ensure_secure_directory(path)
-        tmp_path = path + ".tmp"
-
-        # Create file with restrictive permissions using os.open + os.fdopen
-        fd = os.open(tmp_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, _FILE_PERMISSION)
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as file_obj:
-                json.dump(data, file_obj, ensure_ascii=False, indent=2)
-                file_obj.flush()
-                os.fsync(file_obj.fileno())
-        except Exception:
-            # fd is closed by os.fdopen even on error
-            raise
-
-        os.replace(tmp_path, path)
-        # Ensure final file also has correct permissions
-        try:
-            os.chmod(path, _FILE_PERMISSION)
-        except OSError:
-            pass
-
     def load_state(self) -> Dict[str, Any]:
-        if not os.path.exists(self.state_path):
+        data = read_json_file(self.state_path, default=None)
+        if data is None:
             return self._default_state()
-        try:
-            with open(self.state_path, "r", encoding="utf-8") as file_obj:
-                data = json.load(file_obj)
-                # Assicura che tutte le chiavi predefinite esistano (sicurezza migrazione)
-                defaults = self._default_state()
-                for key, value in defaults.items():
-                    if key not in data:
-                        data[key] = value
-                return data
-        except (json.JSONDecodeError, IOError):
-            return self._default_state()
+        # Ensure all default keys exist (migration safety)
+        defaults = self._default_state()
+        for key, value in defaults.items():
+            if key not in data:
+                data[key] = value
+        return data
 
     def save_state(self, state: Dict[str, Any]) -> None:
-        self._atomic_write(self.state_path, state)
+        atomic_write_json(self.state_path, state)
 
     def load_metrics(self) -> Dict[str, Any]:
-        if not os.path.exists(self.metrics_path):
+        data = read_json_file(self.metrics_path, default=None)
+        if data is None:
             return self._default_metrics()
-        try:
-            with open(self.metrics_path, "r", encoding="utf-8") as file_obj:
-                return json.load(file_obj)
-        except (json.JSONDecodeError, IOError):
-            return self._default_metrics()
+        return data
 
     def save_metrics(self, metrics: Dict[str, Any]) -> None:
-        self._atomic_write(self.metrics_path, metrics)
+        atomic_write_json(self.metrics_path, metrics)
 
     def day_key(self, ts: float) -> str:
         return time.strftime("%Y-%m-%d", time.gmtime(ts))
@@ -126,10 +82,9 @@ class StateStore:
         state: Dict[str, Any],
         trade: Dict[str, Any]
     ) -> None:
-        """Aggiungi record trade alla storia, mantieni ultimi 100 trade."""
+        """Add trade record to history, keep last 100 trades."""
         history = state.get("trade_history", [])
         history.append(trade)
-        # Mantieni solo ultimi 100 trade per evitare crescita illimitata
         if len(history) > 100:
             history = history[-100:]
         state["trade_history"] = history
@@ -142,10 +97,7 @@ class StateStore:
         position_count: int,
         margin_usage: Decimal,
     ) -> None:
-        """
-        Salva snapshot del valore portfolio per equity curve reale.
-        Mantieni ultimi 500 snapshot (circa 8 ore con cicli da 60s).
-        """
+        """Save portfolio value snapshot for real equity curve. Keep last 500."""
         snapshots = state.get("equity_snapshots", [])
         snapshots.append({
             "timestamp": time.time(),
@@ -155,23 +107,19 @@ class StateStore:
             "position_count": position_count,
             "margin_usage": str(margin_usage),
         })
-        # Mantieni ultimi 500 snapshot
         if len(snapshots) > 500:
             snapshots = snapshots[-500:]
         state["equity_snapshots"] = snapshots
 
     def get_equity_snapshots(self, state: Dict[str, Any], limit: int = 200) -> List[Dict[str, Any]]:
-        """Ottieni snapshot equity recenti."""
         snapshots = state.get("equity_snapshots", [])
         return snapshots[-limit:] if snapshots else []
 
     def get_recent_trades(self, state: Dict[str, Any], count: int = 5) -> List[Dict[str, Any]]:
-        """Ottieni i trade più recenti."""
         history = state.get("trade_history", [])
         return history[-count:] if history else []
 
     def get_performance_summary(self, state: Dict[str, Any]) -> Dict[str, Any]:
-        """Calcola riepilogo performance dalla storia trade."""
         history = state.get("trade_history", [])
         if not history:
             return {"total_trades": 0, "win_rate": 0.0, "total_pnl": "0"}

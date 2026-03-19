@@ -1,23 +1,20 @@
 """
-Scrive stato bot live su file JSON condiviso.
-Il server API legge questo file per servire dati in tempo reale.
+Writes bot live status to shared JSON file.
+The API server reads this file to serve real-time data.
 """
 
 import json
-import os
 import time
 from decimal import Decimal
 from typing import Any, Dict, Optional
 
+from utils.file_io import atomic_write_json
+
 
 LIVE_STATUS_PATH = "state/bot_live_status.json"
 
-# Security Fix #7: Restrictive file permissions
-_FILE_PERMISSION = 0o600
-_DIR_PERMISSION = 0o700
 
-
-class DecimalEncoder(json.JSONEncoder):
+class _DecimalEncoder(json.JSONEncoder):
     def default(self, obj):
         if isinstance(obj, Decimal):
             return float(obj)
@@ -34,7 +31,7 @@ def write_live_status(
     last_decision: Optional[Dict[str, Any]] = None,
     error: str = ""
 ) -> None:
-    """Scrivi stato corrente bot su file condiviso per server API."""
+    """Write current bot status to shared file for API server."""
     status = {
         "is_running": is_running,
         "execution_mode": execution_mode,
@@ -47,35 +44,10 @@ def write_live_status(
         "updated_at": time.time()
     }
 
-    dir_path = os.path.dirname(LIVE_STATUS_PATH) or "."
-    if dir_path != ".":
-        os.makedirs(dir_path, mode=_DIR_PERMISSION, exist_ok=True)
-        try:
-            os.chmod(dir_path, _DIR_PERMISSION)
-        except OSError:
-            pass
-
-    tmp_path = LIVE_STATUS_PATH + ".tmp"
-
-    # Create file with restrictive permissions
-    fd = os.open(tmp_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, _FILE_PERMISSION)
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump(status, f, ensure_ascii=False, indent=2, cls=DecimalEncoder)
-            f.flush()
-            os.fsync(f.fileno())
-    except Exception:
-        raise
-
-    os.replace(tmp_path, LIVE_STATUS_PATH)
-    try:
-        os.chmod(LIVE_STATUS_PATH, _FILE_PERMISSION)
-    except OSError:
-        pass
+    atomic_write_json(LIVE_STATUS_PATH, status, cls=_DecimalEncoder)
 
 
 def _serialize_decision(decision: Dict[str, Any]) -> Dict[str, Any]:
-    """Serializza un dizionario decisione, convertendo Decimal."""
     result = {}
     for key, value in decision.items():
         if isinstance(value, Decimal):
@@ -86,7 +58,6 @@ def _serialize_decision(decision: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _serialize_portfolio(portfolio) -> Dict[str, Any]:
-    """Serializza stato portfolio per JSON."""
     if portfolio is None:
         return {}
     if hasattr(portfolio, "total_balance"):

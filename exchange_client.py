@@ -11,27 +11,9 @@ from eth_account.messages import encode_typed_data
 
 from utils.circuit_breaker import CircuitBreakerOpenError, get_or_create_circuit_breaker
 from utils.decimals import safe_decimal
+from utils.http import create_robust_session
 
 logger = logging.getLogger(__name__)
-
-
-def _create_robust_session() -> requests.Session:
-    """Create a requests session with connection pooling and retry adapter."""
-    session = requests.Session()
-    session.headers.update({"Content-Type": "application/json"})
-    adapter = requests.adapters.HTTPAdapter(
-        pool_connections=10,
-        pool_maxsize=10,
-        max_retries=requests.adapters.Retry(
-            total=2,
-            backoff_factor=0.5,
-            status_forcelist=[502, 503, 504],
-            allowed_methods=["POST"],
-        ),
-    )
-    session.mount("https://", adapter)
-    session.mount("http://", adapter)
-    return session
 
 
 class HyperliquidExchangeClient:
@@ -63,11 +45,10 @@ class HyperliquidExchangeClient:
         self.info_timeout = info_timeout
         self.exchange_timeout = exchange_timeout
 
-        self.session = _create_robust_session()
+        self.session = create_robust_session()
 
-        # Security Fix #1: Derive Account immediately, never store raw private key
+        # Security: Derive Account immediately, never store raw private key
         self.account = Account.from_key(private_key)
-        # private_key parameter goes out of scope here — not stored as self.private_key
 
         self._meta_cache: Optional[Dict[str, Any]] = None
         self._meta_cache_at = 0.0
@@ -76,14 +57,10 @@ class HyperliquidExchangeClient:
         self._mids_cache_ttl = 30
 
         self._info_cb = get_or_create_circuit_breaker(
-            "hyperliquid_info",
-            failure_threshold=5,
-            recovery_timeout=30.0
+            "hyperliquid_info", failure_threshold=5, recovery_timeout=30.0
         )
         self._exchange_cb = get_or_create_circuit_breaker(
-            "hyperliquid_exchange",
-            failure_threshold=3,
-            recovery_timeout=60.0
+            "hyperliquid_exchange", failure_threshold=3, recovery_timeout=60.0
         )
 
         logger.info(
@@ -93,7 +70,6 @@ class HyperliquidExchangeClient:
         )
 
     def __repr__(self) -> str:
-        """Prevent accidental secret leakage in logs/tracebacks."""
         return (
             f"<HyperliquidExchangeClient base_url={self.base_url} "
             f"mode={self.execution_mode} wallet={self.get_wallet_address_masked()}>"
@@ -103,11 +79,9 @@ class HyperliquidExchangeClient:
         return self.__repr__()
 
     def get_derived_address(self) -> str:
-        """Get the wallet address derived from the private key."""
         return self.account.address
 
     def get_wallet_address_masked(self) -> str:
-        """Get masked wallet address for logging."""
         addr = self.account.address
         if not addr or len(addr) < 12:
             return "invalid"
@@ -115,30 +89,17 @@ class HyperliquidExchangeClient:
 
     @staticmethod
     def validate_wallet_address(private_key: str, expected_address: str) -> bool:
-        """
-        Security Fix #6: Validate that the wallet address matches the private key.
-        Call this at startup before creating the client.
-        Returns True if addresses match (case-insensitive).
-        """
         derived = Account.from_key(private_key).address
         return derived.lower() == expected_address.lower()
 
     def _post_info(self, payload: Dict[str, Any], timeout: Optional[int] = None) -> Optional[Any]:
-        """POST to /info with circuit breaker and robust session."""
         if timeout is None:
             timeout = self.info_timeout
 
         def _do_post():
-            response = self.session.post(
-                f"{self.base_url}/info",
-                json=payload,
-                timeout=timeout
-            )
+            response = self.session.post(f"{self.base_url}/info", json=payload, timeout=timeout)
             if response.status_code != 200:
-                logger.error(
-                    f"/info type={payload.get('type', 'unknown')} "
-                    f"failed status={response.status_code}"
-                )
+                logger.error(f"/info type={payload.get('type', 'unknown')} failed status={response.status_code}")
                 response.raise_for_status()
             return response.json()
 
@@ -158,16 +119,13 @@ class HyperliquidExchangeClient:
             return None
 
     def _post_exchange(self, payload: Dict[str, Any], timeout: Optional[int] = None) -> Optional[Any]:
-        """POST to /exchange with circuit breaker and robust session."""
         if timeout is None:
             timeout = self.exchange_timeout
 
         def _do_post():
             response = self.session.post(
-                f"{self.base_url}/exchange",
-                json=payload,
-                headers={"Content-Type": "application/json"},
-                timeout=timeout
+                f"{self.base_url}/exchange", json=payload,
+                headers={"Content-Type": "application/json"}, timeout=timeout
             )
             if response.status_code != 200:
                 logger.error(f"/exchange failed status={response.status_code}")
@@ -193,7 +151,6 @@ class HyperliquidExchangeClient:
         now = time.time()
         if not force_refresh and self._meta_cache and (now - self._meta_cache_at) < self.meta_cache_ttl_sec:
             return self._meta_cache
-
         meta = self._post_info({"type": "meta"})
         if meta is None:
             return self._meta_cache
@@ -202,11 +159,9 @@ class HyperliquidExchangeClient:
         return meta
 
     def get_all_mids(self, force_refresh: bool = False) -> Optional[Dict[str, str]]:
-        """Get all mid prices with caching."""
         now = time.time()
         if not force_refresh and self._mids_cache and (now - self._mids_cache_at) < self._mids_cache_ttl:
             return self._mids_cache
-
         mids = self._post_info({"type": "allMids"})
         if mids is None:
             return self._mids_cache
@@ -236,7 +191,6 @@ class HyperliquidExchangeClient:
         return 10
 
     def get_sz_decimals(self, coin: str) -> Optional[int]:
-        """Get szDecimals from Hyperliquid meta for a coin."""
         meta = self.get_meta(force_refresh=False)
         if meta is None:
             return None
@@ -249,7 +203,6 @@ class HyperliquidExchangeClient:
         mids = self.get_all_mids()
         if mids and coin in mids:
             return safe_decimal(mids[coin], fallback_price)
-
         meta = self.get_meta(force_refresh=False)
         if meta is None:
             return fallback_price
@@ -259,13 +212,8 @@ class HyperliquidExchangeClient:
         return fallback_price
 
     def get_tick_size_and_precision(self, asset_id: int) -> Tuple[Decimal, int]:
-        """
-        Get tick size and precision for an asset.
-        Uses szDecimals from meta when available, falls back to mid price inference.
-        """
         meta = self.get_meta(force_refresh=False)
 
-        # Strategy 1: Use szDecimals from meta (most reliable)
         if meta is not None:
             universe = meta.get("universe", [])
             if 0 <= asset_id < len(universe):
@@ -276,7 +224,6 @@ class HyperliquidExchangeClient:
                     tick_size = Decimal("1").scaleb(-precision) if precision > 0 else Decimal("1")
                     return tick_size, precision
 
-        # Strategy 2: Infer from mid price (fallback)
         mids = self.get_all_mids()
         if mids is not None and meta is not None:
             universe = meta.get("universe", [])
@@ -291,12 +238,9 @@ class HyperliquidExchangeClient:
                 tick_size = Decimal("1").scaleb(-decimals) if decimals > 0 else Decimal("1")
                 return tick_size, decimals
 
-        # Strategy 3: Hardcoded defaults
         default_tick_sizes: Dict[int, Tuple[Decimal, int]] = {
-            0: (Decimal("0.1"), 1),
-            1: (Decimal("0.01"), 2),
-            5: (Decimal("0.001"), 3),
-            7: (Decimal("0.01"), 2),
+            0: (Decimal("0.1"), 1), 1: (Decimal("0.01"), 2),
+            5: (Decimal("0.001"), 3), 7: (Decimal("0.01"), 2),
             65: (Decimal("0.00001"), 5)
         }
         return default_tick_sizes.get(asset_id, (Decimal("0.01"), 2))
@@ -304,13 +248,7 @@ class HyperliquidExchangeClient:
     def _address_to_bytes(self, address: str) -> bytes:
         return bytes.fromhex(address[2:].lower())
 
-    def _action_hash(
-        self,
-        action: Dict[str, Any],
-        vault_address: Optional[str],
-        nonce: int,
-        expires_after: Optional[int]
-    ) -> bytes:
+    def _action_hash(self, action: Dict[str, Any], vault_address: Optional[str], nonce: int, expires_after: Optional[int]) -> bytes:
         data = msgpack.packb(action)
         data += nonce.to_bytes(8, "big")
         if vault_address is None:
@@ -326,40 +264,23 @@ class HyperliquidExchangeClient:
     def _l1_payload(self, phantom_agent: Dict[str, str]) -> Dict[str, Any]:
         return {
             "domain": {
-                "chainId": 1337,
-                "name": "Exchange",
-                "verifyingContract": "0x0000000000000000000000000000000000000000",
-                "version": "1",
+                "chainId": 1337, "name": "Exchange",
+                "verifyingContract": "0x0000000000000000000000000000000000000000", "version": "1",
             },
             "types": {
-                "Agent": [
-                    {"name": "source", "type": "string"},
-                    {"name": "connectionId", "type": "bytes32"},
-                ],
+                "Agent": [{"name": "source", "type": "string"}, {"name": "connectionId", "type": "bytes32"}],
                 "EIP712Domain": [
-                    {"name": "name", "type": "string"},
-                    {"name": "version", "type": "string"},
-                    {"name": "chainId", "type": "uint256"},
-                    {"name": "verifyingContract", "type": "address"},
+                    {"name": "name", "type": "string"}, {"name": "version", "type": "string"},
+                    {"name": "chainId", "type": "uint256"}, {"name": "verifyingContract", "type": "address"},
                 ],
             },
             "primaryType": "Agent",
             "message": phantom_agent,
         }
 
-    def sign_l1_action_exact(
-        self,
-        action: Dict[str, Any],
-        vault_address: Optional[str],
-        nonce: int,
-        expires_after: Optional[int],
-        is_mainnet: bool = True
-    ) -> Dict[str, Any]:
+    def sign_l1_action_exact(self, action: Dict[str, Any], vault_address: Optional[str], nonce: int, expires_after: Optional[int], is_mainnet: bool = True) -> Dict[str, Any]:
         hash_bytes = self._action_hash(action, vault_address, nonce, expires_after)
-        phantom_agent = {
-            "source": "a" if is_mainnet else "b",
-            "connectionId": "0x" + hash_bytes.hex()
-        }
+        phantom_agent = {"source": "a" if is_mainnet else "b", "connectionId": "0x" + hash_bytes.hex()}
         data = self._l1_payload(phantom_agent)
         structured_data = encode_typed_data(full_message=data)
         signed = self.account.sign_message(structured_data)
@@ -380,20 +301,10 @@ class HyperliquidExchangeClient:
             logger.error(f"Asset ID not found for {coin}")
             return False
 
-        action = {
-            "type": "updateLeverage",
-            "asset": asset_id,
-            "isCross": True,
-            "leverage": leverage
-        }
+        action = {"type": "updateLeverage", "asset": asset_id, "isCross": True, "leverage": leverage}
         nonce = int(time.time() * 1000)
         signature = self.sign_l1_action_exact(action, None, nonce, None, True)
-        payload = {
-            "action": action,
-            "nonce": nonce,
-            "signature": signature,
-            "vaultAddress": None
-        }
+        payload = {"action": action, "nonce": nonce, "signature": signature, "vaultAddress": None}
 
         result = self._post_exchange(payload)
         if result is None:
@@ -401,31 +312,16 @@ class HyperliquidExchangeClient:
         if result.get("status") == "ok":
             logger.info(f"LIVE leverage set {coin} -> {leverage}x")
             return True
-
         logger.error(f"Set leverage failed for {coin}: {result}")
         return False
 
-    def place_order(
-        self,
-        coin: str,
-        side: str,
-        size: Decimal,
-        desired_price: Decimal
-    ) -> Dict[str, Any]:
+    def place_order(self, coin: str, side: str, size: Decimal, desired_price: Decimal) -> Dict[str, Any]:
         if self.execution_mode != "live" or not self.enable_mainnet_trading:
             slip = (self.paper_slippage_bps / Decimal("10000"))
-            if side.lower() == "buy":
-                fill_price = desired_price * (Decimal("1") + slip)
-            else:
-                fill_price = desired_price * (Decimal("1") - slip)
+            fill_price = desired_price * (Decimal("1") + slip) if side.lower() == "buy" else desired_price * (Decimal("1") - slip)
             notional = abs(size * fill_price)
             logger.info(f"PAPER order {coin} {side.upper()} size={size} fill={fill_price}")
-            return {
-                "success": True,
-                "mode": "paper",
-                "filled_price": str(fill_price),
-                "notional": str(notional)
-            }
+            return {"success": True, "mode": "paper", "filled_price": str(fill_price), "notional": str(notional)}
 
         asset_id = self.get_asset_id(coin)
         if asset_id is None:
@@ -442,10 +338,7 @@ class HyperliquidExchangeClient:
 
         lower_bound = reference_price - max_deviation
         upper_bound = reference_price + max_deviation
-        if limit_price < lower_bound:
-            limit_price = lower_bound
-        if limit_price > upper_bound:
-            limit_price = upper_bound
+        limit_price = max(lower_bound, min(upper_bound, limit_price))
 
         tick_size, precision = self.get_tick_size_and_precision(asset_id)
         rounded_ticks = (limit_price / tick_size).quantize(Decimal("1"))
@@ -454,26 +347,11 @@ class HyperliquidExchangeClient:
         limit_price = limit_price.quantize(quantizer)
 
         size_str = str(size.normalize())
-
-        order_wire = {
-            "a": asset_id,
-            "b": is_buy,
-            "p": str(limit_price),
-            "s": size_str,
-            "r": False,
-            "t": {"limit": {"tif": "Gtc"}}
-        }
-
+        order_wire = {"a": asset_id, "b": is_buy, "p": str(limit_price), "s": size_str, "r": False, "t": {"limit": {"tif": "Gtc"}}}
         action = {"type": "order", "orders": [order_wire], "grouping": "na"}
         nonce = int(time.time() * 1000)
         signature = self.sign_l1_action_exact(action, None, nonce, None, True)
-
-        payload = {
-            "action": action,
-            "nonce": nonce,
-            "signature": signature,
-            "vaultAddress": None
-        }
+        payload = {"action": action, "nonce": nonce, "signature": signature, "vaultAddress": None}
 
         result = self._post_exchange(payload)
         if result is None:
@@ -490,9 +368,4 @@ class HyperliquidExchangeClient:
 
         notional = abs(size * limit_price)
         logger.info(f"LIVE order success {coin} {side.upper()} size={size_str} limit={limit_price}")
-        return {
-            "success": True,
-            "mode": "live",
-            "filled_price": str(limit_price),
-            "notional": str(notional)
-        }
+        return {"success": True, "mode": "live", "filled_price": str(limit_price), "notional": str(notional)}
