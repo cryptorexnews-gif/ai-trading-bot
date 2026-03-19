@@ -217,11 +217,18 @@ def performance():
 
 @app.route("/api/config", methods=["GET"])
 def config():
+    trading_pairs_str = os.getenv(
+        "TRADING_PAIRS",
+        "BTC,ETH,SOL,BNB,ADA,DOGE,XRP,AVAX,LINK,SUI,ARB,OP,NEAR,WIF,PEPE,INJ,TIA,SEI,RENDER,FET"
+    )
+    trading_pairs = [p.strip().upper() for p in trading_pairs_str.split(",") if p.strip()]
+
     return jsonify({
         "execution_mode": os.getenv("EXECUTION_MODE", "paper"),
         "enable_mainnet_trading": os.getenv("ENABLE_MAINNET_TRADING", "false"),
         "llm_model": os.getenv("LLM_MODEL", "anthropic/claude-opus-4.6"),
-        "trading_pairs": ["BTC", "ETH", "SOL", "BNB", "ADA"],
+        "trading_pairs": trading_pairs,
+        "trading_pairs_count": len(trading_pairs),
         "max_leverage": os.getenv("HARD_MAX_LEVERAGE", "10"),
         "max_margin_usage": os.getenv("MAX_MARGIN_USAGE", "0.8"),
         "max_drawdown_pct": os.getenv("MAX_DRAWDOWN_PCT", "0.15"),

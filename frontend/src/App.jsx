@@ -41,6 +41,8 @@ export default function App() {
   const isRunning = bot.is_running || false
   const mode = bot.execution_mode || configData?.execution_mode || 'paper'
   const maxDrawdown = parseFloat(configData?.max_drawdown_pct || '0.15')
+  const tradingPairs = configData?.trading_pairs || []
+  const tradingPairsCount = configData?.trading_pairs_count || tradingPairs.length
 
   return (
     <div className="min-h-screen bg-gray-950 text-white">
@@ -52,7 +54,7 @@ export default function App() {
             <div>
               <h1 className="text-xl font-bold">Hyperliquid Trading Bot</h1>
               <p className="text-[10px] text-gray-500">
-                Claude Opus 4.6 • SL/TP/Trailing • Multi-TF • Correlation
+                Claude Opus 4.6 • {tradingPairsCount} pairs • SL/TP/Trailing • Multi-TF • Correlation
               </p>
             </div>
           </div>
@@ -175,12 +177,17 @@ export default function App() {
 
         {/* Footer */}
         <footer className="text-center text-[10px] text-gray-600 py-4 border-t border-gray-800/50">
-          Hyperliquid Trading Bot Dashboard • {configData?.llm_model || 'claude-opus-4.6'} •
-          {' '}{(configData?.trading_pairs || []).join(', ')} •
-          {' '}SL: {((parseFloat(configData?.default_sl_pct || '0.03')) * 100).toFixed(0)}% •
-          {' '}TP: {((parseFloat(configData?.default_tp_pct || '0.05')) * 100).toFixed(0)}% •
-          {' '}Trailing: {configData?.enable_trailing_stop === 'true' ? 'ON' : 'OFF'} •
-          {' '}Adaptive: {configData?.enable_adaptive_cycle === 'true' ? 'ON' : 'OFF'}
+          <div className="mb-1">
+            Hyperliquid Trading Bot Dashboard • {configData?.llm_model || 'claude-opus-4.6'} •
+            {' '}{tradingPairsCount} pairs •
+            {' '}SL: {((parseFloat(configData?.default_sl_pct || '0.03')) * 100).toFixed(0)}% •
+            {' '}TP: {((parseFloat(configData?.default_tp_pct || '0.05')) * 100).toFixed(0)}% •
+            {' '}Trailing: {configData?.enable_trailing_stop === 'true' ? 'ON' : 'OFF'} •
+            {' '}Adaptive: {configData?.enable_adaptive_cycle === 'true' ? 'ON' : 'OFF'}
+          </div>
+          <div className="text-gray-700">
+            {tradingPairs.length > 0 && tradingPairs.join(' • ')}
+          </div>
         </footer>
       </main>
     </div>

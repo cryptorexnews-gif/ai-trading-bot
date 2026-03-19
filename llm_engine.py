@@ -147,7 +147,11 @@ class LLMEngine:
 
         all_mids_section = ""
         if all_mids:
-            top_coins = ["BTC", "ETH", "SOL", "BNB", "ADA", "DOGE", "XRP", "AVAX"]
+            top_coins = [
+                "BTC", "ETH", "SOL", "BNB", "XRP", "ADA", "DOGE", "AVAX",
+                "LINK", "SUI", "ARB", "OP", "NEAR", "WIF", "PEPE", "INJ",
+                "TIA", "SEI", "RENDER", "FET"
+            ]
             mid_lines = []
             for coin in top_coins:
                 if coin in all_mids:
@@ -235,11 +239,16 @@ POSITION MANAGEMENT:
 - Reduce position if margin usage > 60%
 
 SIZING RULES:
-- Minimum sizes: BTC 0.001, ETH 0.001, SOL 0.1, BNB 0.001, ADA 16.0
+- Minimum sizes by coin:
+  BTC: 0.001, ETH: 0.01, SOL: 0.1, BNB: 0.01, XRP: 1, ADA: 10, DOGE: 10
+  AVAX: 0.1, LINK: 0.1, NEAR: 1, SUI: 1, ARB: 1, OP: 1, SEI: 1
+  TIA: 0.1, INJ: 0.01, WIF: 1, PEPE: 100000, RENDER: 0.1, FET: 1
 - Use leverage 3-7x for high confidence trades (all timeframes aligned)
 - Use leverage 2-4x for medium confidence trades
 - Never exceed 10x leverage
 - Max 40% of balance on single asset
+- For high-volatility coins (WIF, PEPE, DOGE, SUI), prefer lower leverage (2-4x)
+- For blue chips (BTC, ETH), higher leverage is acceptable (up to 7x)
 
 CRITICAL RULES:
 - DO NOT open BUY if already SHORT on same asset (close first)
@@ -250,6 +259,7 @@ CRITICAL RULES:
 - Negative funding = shorts pay longs = bullish pressure
 - Positive funding = longs pay shorts = bearish pressure
 - If no clear edge exists, ALWAYS hold — capital preservation is priority #1
+- Be extra cautious with meme coins (WIF, PEPE, DOGE) — require higher confidence (0.80+)
 
 CONFIDENCE SCORING:
 - 0.85-1.0: All timeframes aligned + strong volume + clear RSI signal
@@ -402,7 +412,6 @@ Respond with ONLY this JSON (no markdown, no extra text):
                     time.sleep(wait_time)
                     continue
 
-                # Non-retryable error
                 logger.error(
                     f"OpenRouter non-retryable error: HTTP {response.status_code}, "
                     f"body={response.text[:500]}"
