@@ -1,11 +1,11 @@
 # Hyperliquid Trading Bot
 
-An automated cryptocurrency trading bot for the Hyperliquid exchange, powered by **Claude Opus 4** via OpenRouter for intelligent trading decisions. All market data is sourced **exclusively from Hyperliquid API** — no external data providers.
+An automated cryptocurrency trading bot for the Hyperliquid exchange, powered by **Claude Opus 4.6** via OpenRouter for intelligent trading decisions. All market data is sourced **exclusively from Hyperliquid API** — no external data providers.
 
 ## 🚀 Features
 
 ### ✅ Core Functionality
-- **AI-Powered Trading**: Claude Opus 4 (`anthropic/claude-opus-4`) via OpenRouter analyzes market data and generates executable trading decisions
+- **AI-Powered Trading**: Claude Opus 4.6 (`anthropic/claude-opus-4.6`) via OpenRouter analyzes market data and generates executable trading decisions
 - **Hyperliquid-Only Data**: All market data (candles, mid prices, funding rates, open interest) sourced directly from Hyperliquid API
 - **Technical Analysis**: EMA, MACD, RSI, ATR, Bollinger Bands calculated from Hyperliquid candle snapshots
 - **Risk Management**: Volatility-adjusted sizing, margin limits, trade cooldowns, and daily notional caps
@@ -36,7 +36,7 @@ An automated cryptocurrency trading bot for the Hyperliquid exchange, powered by
 
 - Python 3.10+
 - Valid Hyperliquid wallet with private key
-- OpenRouter API key (for Claude Opus 4 access)
+- OpenRouter API key (for Claude Opus 4.6 access)
 - Internet connection
 
 ## 🛠️ Installation
@@ -81,7 +81,7 @@ ENABLE_MAINNET_TRADING=false      # Set 'true' ONLY for live trading
 # === AI / LLM Settings ===
 ALLOW_EXTERNAL_LLM=true
 LLM_INCLUDE_PORTFOLIO_CONTEXT=true
-LLM_MODEL=anthropic/claude-opus-4
+LLM_MODEL=anthropic/claude-opus-4.6
 LLM_MAX_TOKENS=8192
 LLM_TEMPERATURE=0.2
 
@@ -127,7 +127,7 @@ LOG_JSON_FORMAT=true
    - Go to [openrouter.ai](https://openrouter.ai)
    - Sign up and create an API key
    - Add credits (~$0.01-0.05 per LLM call)
-   - The bot uses `anthropic/claude-opus-4` model
+   - The bot uses `anthropic/claude-opus-4.6` model
 
 ## 🚀 Usage
 
@@ -171,7 +171,7 @@ python hyperliquid_minimal_order.py
 2. **Portfolio**: Fetch balances and positions from Hyperliquid
 3. **Market Data**: Get candle snapshots, mid prices, and funding rates from Hyperliquid
 4. **Technical Analysis**: Calculate EMA, MACD, RSI, ATR, Bollinger Bands from Hyperliquid candles
-5. **AI Decision**: Send all data to Claude Opus 4 for analysis
+5. **AI Decision**: Send all data to Claude Opus 4.6 for analysis
 6. **Risk Check**: Validate decision against risk parameters
 7. **Execute**: Place order on Hyperliquid (or simulate in paper mode)
 8. **Log**: Record results and update state
@@ -184,7 +184,7 @@ Hyperliquid API ──→ Candle Snapshots ──→ Technical Indicators ──
                 ──→ Funding Rates ──────────────────────────────┤
                 ──→ Portfolio State ─────────────────────────────┤
                                                                  ▼
-                                                    Claude Opus 4 (OpenRouter)
+                                                    Claude Opus 4.6 (OpenRouter)
                                                                  │
                                                                  ▼
                                                     Trading Decision (JSON)

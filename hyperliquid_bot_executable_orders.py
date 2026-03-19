@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Hyperliquid Trading Bot - Executable Orders Version
-Main bot script with Claude Opus 4 powered trading decisions.
+Main bot script with Claude Opus 4.6 powered trading decisions.
 All market data sourced exclusively from Hyperliquid API.
 """
 
@@ -41,7 +41,7 @@ HYPERLIQUID_EXCHANGE_TIMEOUT = int(os.getenv("HYPERLIQUID_EXCHANGE_TIMEOUT", "30
 
 # LLM Configuration
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
-LLM_MODEL = os.getenv("LLM_MODEL", "anthropic/claude-opus-4")
+LLM_MODEL = os.getenv("LLM_MODEL", "anthropic/claude-opus-4.6")
 LLM_MAX_TOKENS = int(os.getenv("LLM_MAX_TOKENS", "8192"))
 LLM_TEMPERATURE = float(os.getenv("LLM_TEMPERATURE", "0.2"))
 
@@ -78,7 +78,7 @@ MIN_SIZE_BY_COIN = {
 
 
 class HyperliquidBot:
-    """Main trading bot class using Claude Opus 4 and Hyperliquid-only data."""
+    """Main trading bot class using Claude Opus 4.6 and Hyperliquid-only data."""
 
     def __init__(self):
         self._setup_logging()
@@ -272,7 +272,7 @@ class HyperliquidBot:
                 # Get funding data from Hyperliquid
                 funding_data = technical_fetcher.get_funding_for_coin(coin)
 
-                # Get decision from Claude Opus 4 or fallback
+                # Get decision from Claude Opus 4.6 or fallback
                 if self.llm_engine:
                     self.metrics.increment("llm_calls_total")
                     decision = self.llm_engine.get_trading_decision(
@@ -404,7 +404,7 @@ class HyperliquidBot:
 def main():
     """Entry point."""
     import argparse
-    parser = argparse.ArgumentParser(description="Hyperliquid Trading Bot - Claude Opus 4")
+    parser = argparse.ArgumentParser(description="Hyperliquid Trading Bot - Claude Opus 4.6")
     parser.add_argument("--single-cycle", action="store_true", help="Run single cycle and exit")
     args = parser.parse_args()
 
