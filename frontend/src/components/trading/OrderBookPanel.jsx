@@ -1,51 +1,11 @@
 import React, { useMemo } from 'react'
-import OrderBookRow from './OrderBookRow'
-import { fmtPrice } from './formatters'
+import { fmtPrice, fmtSize } from './formatters'
 
-/**
- * Group order book levels by tick size.
- */
-function groupLevels(levels, tickSize, side) {
-  if (!tickSize || tickSize <= 0) return levels
-
-  const grouped = {}
-  for (const level of levels) {
-    let bucket
-    if (side === 'bid') {
-      bucket = Math.floor(level.price / tickSize) * tickSize
-    } else {
-      bucket = Math.ceil(level.price / tickSize) * tickSize
-    }
-    if (!grouped[bucket]) {
-      grouped[bucket] = { price: bucket, size: 0, orders: 0 }
-    }
-    grouped[bucket].size += level.size
-    grouped[bucket].orders += (level.orders || 1)
-  }
-
-  const result = Object.values(grouped)
-  if (side === 'bid') {
-    result.sort((a, b) => b.price - a.price)
-  } else {
-    result.sort((a, b) => a.price - b.price)
-  }
-  return result
-}
-
-const DEPTH_OPTIONS = [
-  { value: 1, label: '±1%' },
-  { value: 5, label: '±5%' },
-  { value: 10, label: '±10%' },
-  { value: 25, label: '±25%' },
-  { value: 50, label: '±50%' },
-]
-
-const LEVEL_OPTIONS = [
-  { value: 10, label: '10' },
-  { value: 25, label: '25' },
-  { value: 50, label: '50' },
-  { value: 100, label: '100' },
-  { value: 0, label: 'All' },
+const SIG_FIG_OPTIONS = [
+  { value: 2, label: '2' },
+  { value: 3, label: '3' },
+  { value: 4, label: '4' },
+  { value: 5, label: '5' },
 ]
 
 export default function OrderBookPanel({
@@ -55,99 +15,65 @@ export default function OrderBookPanel({
   spreadPct,
   lastPrice,
   isPositive,
-  obLevels,
-  setObLevels,
-  tickSize,
-  setTickSize,
-  tickOptions,
-  depthPct,
-  setDepthPct,
+  nSigFigs,
+  setNSigFigs,
   loading,
-  prevBids,
-  prevAsks,
   panelHeight,
-  totalBidLevels = 0,
-  totalAskLevels = 0,
 }) {
-  // Group by tick size
-  const groupedBids = useMemo(() => groupLevels(bids, tickSize, 'bid'), [bids, tickSize])
-  const groupedAsks = useMemo(() => groupLevels(asks, tickSize, 'ask'), [asks, tickSize])
+  // Compute cumulative sizes
+  const bidsWithCum = useMemo(() => {
+    let cum = 0
+    return bids.map(b => {
+      cum += b.sz
+      return { ...b, cum }
+    })
+  }, [bids])
 
-  // 0 means "All"
-  const effectiveLevels = obLevels === 0 ? 9999 : obLevels
+  const asksWithCum = useMemo(() => {
+    let cum = 0
+    return asks.map(a => {
+      cum += a.sz
+      return { ...a, cum }
+    })
+  }, [asks])
 
-  const maxBidSize = groupedBids.length > 0 ? Math.max(...groupedBids.map(b => b.size)) : 1
-  const maxAskSize = groupedAsks.length > 0 ? Math.max(...groupedAsks.map(a => a.size)) : 1
-  const maxSize = Math.max(maxBidSize, maxAskSize)
+  // Max size for depth bar scaling (across both sides)
+  const maxSize = useMemo(() => {
+    const maxBid = bids.length > 0 ? Math.max(...bids.map(b => b.sz)) : 0
+    const maxAsk = asks.length > 0 ? Math.max(...asks.map(a => a.sz)) : 0
+    return Math.max(maxBid, maxAsk, 0.0001)
+  }, [bids, asks])
 
-  const displayBids = groupedBids.slice(0, effectiveLevels)
-  const displayAsks = groupedAsks.slice(0, effectiveLevels)
+  // Bid/ask imbalance
+  const totalBidSize = bidsWithCum.length > 0 ? bidsWithCum[bidsWithCum.length - 1].cum : 0
+  const totalAskSize = asksWithCum.length > 0 ? asksWithCum[asksWithCum.length - 1].cum : 0
+  const totalSize = totalBidSize + totalAskSize
+  const bidPct = totalSize > 0 ? Math.round((totalBidSize / totalSize) * 100) : 50
 
-  let bidCum = 0
-  const bidsWithCum = displayBids.map(b => { bidCum += b.size; return { ...b, cumulative: bidCum } })
-  let askCum = 0
-  const asksWithCum = displayAsks.map(a => { askCum += a.size; return { ...a, cumulative: askCum } })
-
-  const totalBidSize = groupedBids.reduce((s, b) => s + b.size, 0)
-  const totalAskSize = groupedAsks.reduce((s, a) => s + a.size, 0)
-  const bidPct = totalBidSize + totalAskSize > 0 ? Math.round((totalBidSize / (totalBidSize + totalAskSize)) * 100) : 50
-  const delta = bidPct - 50
-
-  // Calculate heights
-  const overhead = 160
+  // Layout: split available height between asks and bids
+  // Reserve space for header (~36px), column header (~20px), spread bar (~40px), imbalance (~44px)
+  const overhead = 140
   const availableHeight = panelHeight - overhead
-  const halfHeight = Math.max(80, Math.floor(availableHeight / 2))
+  const halfHeight = Math.max(60, Math.floor(availableHeight / 2))
 
   return (
-    <div className="w-full lg:w-[290px] border-t lg:border-t-0 lg:border-l border-gray-800 flex flex-col" style={{ height: panelHeight }}>
-      {/* Header row 1: Title + level count */}
-      <div className="flex items-center justify-between px-3 py-1 border-b border-gray-800 bg-gray-900/50">
-        <div className="flex items-center gap-1.5">
-          <span className="text-[10px] text-gray-500 uppercase tracking-wider font-semibold">Order Book</span>
-          <span className="text-[9px] text-gray-600">
-            ({totalBidLevels}b/{totalAskLevels}a)
-          </span>
-        </div>
-        {/* Depth % selector */}
-        <div className="flex gap-0.5">
-          {DEPTH_OPTIONS.map(d => (
-            <button
-              key={d.value}
-              onClick={() => setDepthPct(d.value)}
-              className={`text-[8px] px-1 py-0.5 rounded transition-colors ${
-                depthPct === d.value ? 'bg-purple-600 text-white' : 'text-gray-500 hover:text-gray-300 bg-gray-800'
-              }`}
-            >
-              {d.label}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      {/* Header row 2: Tick size + Levels */}
-      <div className="flex items-center justify-between px-3 py-1 border-b border-gray-800/70">
+    <div
+      className="w-full lg:w-[280px] border-t lg:border-t-0 lg:border-l border-gray-800 flex flex-col bg-gray-950/50"
+      style={{ height: panelHeight }}
+    >
+      {/* Header */}
+      <div className="flex items-center justify-between px-3 py-2 border-b border-gray-800">
+        <span className="text-[11px] text-gray-400 font-medium">Order Book</span>
         <div className="flex items-center gap-1">
-          <span className="text-[8px] text-gray-600 mr-0.5">Group:</span>
-          {tickOptions.map(t => (
-            <button
-              key={t}
-              onClick={() => setTickSize(t)}
-              className={`text-[8px] px-1 py-0.5 rounded transition-colors ${
-                tickSize === t ? 'bg-yellow-600 text-white' : 'text-gray-500 hover:text-gray-300 bg-gray-800'
-              }`}
-            >
-              {t === 0 ? 'Raw' : t}
-            </button>
-          ))}
-        </div>
-        <div className="flex items-center gap-1">
-          <span className="text-[8px] text-gray-600 mr-0.5">Show:</span>
-          {LEVEL_OPTIONS.map(opt => (
+          <span className="text-[9px] text-gray-600 mr-1">Precision</span>
+          {SIG_FIG_OPTIONS.map(opt => (
             <button
               key={opt.value}
-              onClick={() => setObLevels(opt.value)}
-              className={`text-[8px] px-1 py-0.5 rounded transition-colors ${
-                obLevels === opt.value ? 'bg-blue-600 text-white' : 'text-gray-500 hover:text-gray-300 bg-gray-800'
+              onClick={() => setNSigFigs(opt.value)}
+              className={`text-[10px] w-5 h-5 rounded flex items-center justify-center transition-colors ${
+                nSigFigs === opt.value
+                  ? 'bg-blue-600 text-white'
+                  : 'text-gray-500 hover:text-gray-300 bg-gray-800/80 hover:bg-gray-700'
               }`}
             >
               {opt.label}
@@ -164,79 +90,112 @@ export default function OrderBookPanel({
       </div>
 
       {loading && bids.length === 0 ? (
-        <div className="flex-1 flex items-center justify-center py-8">
-          <div className="flex flex-col gap-1 w-full px-3">
-            {[...Array(10)].map((_, i) => (
-              <div key={i} className="h-3 bg-gray-800 rounded animate-pulse" style={{ width: `${50 + Math.random() * 50}%` }} />
+        <div className="flex-1 flex items-center justify-center">
+          <div className="flex flex-col gap-1.5 w-full px-4">
+            {[...Array(12)].map((_, i) => (
+              <div key={i} className="h-[14px] bg-gray-800/60 rounded animate-pulse" style={{ width: `${40 + Math.random() * 55}%` }} />
             ))}
           </div>
         </div>
       ) : (
         <div className="flex flex-col flex-1 overflow-hidden">
-          {/* Asks (reversed — lowest ask at bottom) */}
+          {/* ─── Asks (reversed: lowest ask at bottom, near spread) ─── */}
           <div className="overflow-y-auto flex flex-col justify-end" style={{ height: halfHeight }}>
             {[...asksWithCum].reverse().map((ask, idx) => (
-              <OrderBookRow
+              <Row
                 key={`a-${idx}`}
-                price={ask.price}
-                size={ask.size}
-                cumulative={ask.cumulative}
+                price={ask.px}
+                size={ask.sz}
+                cumulative={ask.cum}
                 maxSize={maxSize}
                 side="ask"
-                prevSize={prevAsks[ask.price]}
               />
             ))}
           </div>
 
-          {/* Spread + Last Price */}
-          <div className="flex items-center justify-between px-3 py-1.5 border-y border-gray-800 bg-gray-800/20 shrink-0">
-            <span className={`text-sm font-bold font-mono ${isPositive ? 'text-green-400' : 'text-red-400'}`}>
-              {lastPrice ? `$${fmtPrice(lastPrice)}` : '—'}
-            </span>
-            <div className="flex items-center gap-2 text-[10px]">
-              <span className="text-gray-500">Spread</span>
-              <span className="text-yellow-400 font-mono">{fmtPrice(spread)}</span>
-              <span className="text-gray-600">({spreadPct.toFixed(3)}%)</span>
+          {/* ─── Spread + Last Price ─── */}
+          <div className="flex items-center justify-between px-3 py-1.5 border-y border-gray-800 bg-gray-900/60 shrink-0">
+            <div className="flex items-center gap-2">
+              <span className={`text-[13px] font-bold font-mono ${isPositive ? 'text-green-400' : 'text-red-400'}`}>
+                {lastPrice ? fmtPrice(lastPrice) : '—'}
+              </span>
+              {isPositive ? (
+                <svg width="10" height="10" viewBox="0 0 10 10" className="text-green-400">
+                  <path d="M5 1 L9 7 L1 7 Z" fill="currentColor" />
+                </svg>
+              ) : (
+                <svg width="10" height="10" viewBox="0 0 10 10" className="text-red-400">
+                  <path d="M5 9 L9 3 L1 3 Z" fill="currentColor" />
+                </svg>
+              )}
+            </div>
+            <div className="text-[10px] text-gray-500 font-mono">
+              <span className="text-gray-600">Spread </span>
+              <span className="text-yellow-400/80">{fmtPrice(spread)}</span>
+              <span className="text-gray-700 ml-1">({spreadPct.toFixed(3)}%)</span>
             </div>
           </div>
 
-          {/* Bids */}
+          {/* ─── Bids ─── */}
           <div className="overflow-y-auto" style={{ height: halfHeight }}>
             {bidsWithCum.map((bid, idx) => (
-              <OrderBookRow
+              <Row
                 key={`b-${idx}`}
-                price={bid.price}
-                size={bid.size}
-                cumulative={bid.cumulative}
+                price={bid.px}
+                size={bid.sz}
+                cumulative={bid.cum}
                 maxSize={maxSize}
                 side="bid"
-                prevSize={prevBids[bid.price]}
               />
             ))}
           </div>
 
-          {/* Bid/Ask Imbalance */}
+          {/* ─── Imbalance bar ─── */}
           <div className="px-3 py-2 border-t border-gray-800 shrink-0">
-            <div className="flex items-center justify-between text-[10px] text-gray-500 mb-1">
-              <span>Bids {bidPct}%</span>
-              <span className={`font-bold ${delta > 0 ? 'text-green-400' : delta < 0 ? 'text-red-400' : 'text-gray-400'}`}>
-                Δ {delta > 0 ? '+' : ''}{delta}%
-              </span>
-              <span>Asks {100 - bidPct}%</span>
+            <div className="flex items-center justify-between text-[10px] mb-1">
+              <span className="text-green-400/70">B {bidPct}%</span>
+              <span className="text-red-400/70">S {100 - bidPct}%</span>
             </div>
-            <div className="w-full h-1.5 bg-gray-800 rounded-full overflow-hidden flex">
+            <div className="w-full h-1 bg-gray-800 rounded-full overflow-hidden flex">
               <div
-                className="h-full bg-green-500 transition-all duration-500"
-                style={{ width: `${bidPct}%`, borderRadius: bidPct >= 100 ? '9999px' : '9999px 0 0 9999px' }}
+                className="h-full bg-green-500/80 transition-all duration-500"
+                style={{ width: `${bidPct}%` }}
               />
               <div
-                className="h-full bg-red-500 transition-all duration-500"
-                style={{ width: `${100 - bidPct}%`, borderRadius: bidPct <= 0 ? '9999px' : '0 9999px 9999px 0' }}
+                className="h-full bg-red-500/80 transition-all duration-500"
+                style={{ width: `${100 - bidPct}%` }}
               />
             </div>
           </div>
         </div>
       )}
+    </div>
+  )
+}
+
+/* ─── Single row ─── */
+function Row({ price, size, cumulative, maxSize, side }) {
+  const isBid = side === 'bid'
+  const depthPct = maxSize > 0 ? Math.min((size / maxSize) * 100, 100) : 0
+
+  return (
+    <div className="relative grid grid-cols-3 py-[1.5px] px-3 text-[11px] font-mono hover:bg-white/[0.03] transition-colors">
+      {/* Depth bar — right-aligned like Hyperliquid */}
+      <div
+        className={`absolute right-0 top-0 bottom-0 pointer-events-none transition-all duration-300 ${
+          isBid ? 'bg-green-500/[0.12]' : 'bg-red-500/[0.12]'
+        }`}
+        style={{ width: `${depthPct}%` }}
+      />
+      <span className={`relative z-10 ${isBid ? 'text-green-400' : 'text-red-400'}`}>
+        {fmtPrice(price)}
+      </span>
+      <span className="text-gray-300 text-right relative z-10">
+        {fmtSize(size)}
+      </span>
+      <span className="text-gray-500 text-right relative z-10">
+        {fmtSize(cumulative)}
+      </span>
     </div>
   )
 }
