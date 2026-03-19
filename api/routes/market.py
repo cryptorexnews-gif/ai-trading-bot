@@ -64,38 +64,70 @@ def candles():
 @market_bp.route("/api/orderbook", methods=["GET"])
 @require_api_key
 def orderbook():
-    """Get L2 order book from Hyperliquid. Returns ALL available levels."""
+    """
+    Get L2 order book from Hyperliquid with maximum depth.
+    
+    Hyperliquid l2Book returns limited levels by default.
+    Using nSigFigs=5 gives us the most granular price levels.
+    We also try nSigFigs=2 for aggregated deep levels.
+    The two are merged to give both precision near the spread
+    and depth far from it.
+    """
     coin = request.args.get("coin", "BTC").upper()
 
-    data = post_hyperliquid_info({
+    # Request 1: High precision near the spread (nSigFigs=5)
+    data_precise = post_hyperliquid_info({
         "type": "l2Book",
-        "coin": coin
+        "coin": coin,
+        "nSigFigs": 5,
     })
 
-    if data is None:
+    # Request 2: Aggregated deep levels (nSigFigs=2) for wider view
+    data_deep = post_hyperliquid_info({
+        "type": "l2Book",
+        "coin": coin,
+        "nSigFigs": 2,
+    })
+
+    if data_precise is None and data_deep is None:
         return jsonify({"bids": [], "asks": [], "coin": coin, "timestamp": time.time()})
 
-    levels = data.get("levels", [[], []])
-    bids_raw = levels[0] if len(levels) > 0 else []
-    asks_raw = levels[1] if len(levels) > 1 else []
+    # Merge levels: use precise data as base, add deep levels not already present
+    def parse_levels(raw_levels):
+        result = []
+        for level in (raw_levels or []):
+            px = float(level.get("px", 0))
+            sz = float(level.get("sz", 0))
+            n = int(level.get("n", 0))
+            if sz > 0:
+                result.append({"price": px, "size": sz, "orders": n})
+        return result
 
-    # Pass ALL levels — no artificial cap
-    bids = []
-    for b in bids_raw:
-        bids.append({
-            "price": float(b.get("px", 0)),
-            "size": float(b.get("sz", 0)),
-            "orders": int(b.get("n", 0)),
-        })
+    # Parse precise levels
+    precise_levels = data_precise.get("levels", [[], []]) if data_precise else [[], []]
+    bids_precise = parse_levels(precise_levels[0] if len(precise_levels) > 0 else [])
+    asks_precise = parse_levels(precise_levels[1] if len(precise_levels) > 1 else [])
 
-    asks = []
-    for a in asks_raw:
-        asks.append({
-            "price": float(a.get("px", 0)),
-            "size": float(a.get("sz", 0)),
-            "orders": int(a.get("n", 0)),
-        })
+    # Parse deep levels
+    deep_levels = data_deep.get("levels", [[], []]) if data_deep else [[], []]
+    bids_deep = parse_levels(deep_levels[0] if len(deep_levels) > 0 else [])
+    asks_deep = parse_levels(deep_levels[1] if len(deep_levels) > 1 else [])
 
+    # Merge: precise levels take priority, add deep levels for prices not in precise
+    def merge_levels(precise, deep, sort_desc=True):
+        prices_seen = {level["price"] for level in precise}
+        merged = list(precise)
+        for level in deep:
+            if level["price"] not in prices_seen:
+                merged.append(level)
+                prices_seen.add(level["price"])
+        merged.sort(key=lambda x: x["price"], reverse=sort_desc)
+        return merged
+
+    bids = merge_levels(bids_precise, bids_deep, sort_desc=True)
+    asks = merge_levels(asks_precise, asks_deep, sort_desc=False)
+
+    # Calculate spread
     spread = 0
     spread_pct = 0
     if bids and asks:
