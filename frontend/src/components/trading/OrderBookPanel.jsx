@@ -1,6 +1,37 @@
-import React from 'react'
+import React, { useMemo } from 'react'
 import OrderBookRow from './OrderBookRow'
 import { fmtPrice } from './formatters'
+
+/**
+ * Group order book levels by tick size.
+ * E.g. tick=10 groups prices into buckets of 10 ($87,410, $87,420, etc.)
+ */
+function groupLevels(levels, tickSize, side) {
+  if (!tickSize || tickSize <= 0) return levels
+
+  const grouped = {}
+  for (const level of levels) {
+    let bucket
+    if (side === 'bid') {
+      bucket = Math.floor(level.price / tickSize) * tickSize
+    } else {
+      bucket = Math.ceil(level.price / tickSize) * tickSize
+    }
+    if (!grouped[bucket]) {
+      grouped[bucket] = { price: bucket, size: 0, orders: 0 }
+    }
+    grouped[bucket].size += level.size
+    grouped[bucket].orders += (level.orders || 1)
+  }
+
+  const result = Object.values(grouped)
+  if (side === 'bid') {
+    result.sort((a, b) => b.price - a.price)
+  } else {
+    result.sort((a, b) => a.price - b.price)
+  }
+  return result
+}
 
 export default function OrderBookPanel({
   bids,
@@ -11,44 +42,76 @@ export default function OrderBookPanel({
   isPositive,
   obLevels,
   setObLevels,
+  tickSize,
+  setTickSize,
+  tickOptions,
   loading,
   prevBids,
   prevAsks,
+  panelHeight,
 }) {
-  const maxBidSize = bids.length > 0 ? Math.max(...bids.map(b => b.size)) : 1
-  const maxAskSize = asks.length > 0 ? Math.max(...asks.map(a => a.size)) : 1
+  // Group by tick size
+  const groupedBids = useMemo(() => groupLevels(bids, tickSize, 'bid'), [bids, tickSize])
+  const groupedAsks = useMemo(() => groupLevels(asks, tickSize, 'ask'), [asks, tickSize])
+
+  const maxBidSize = groupedBids.length > 0 ? Math.max(...groupedBids.map(b => b.size)) : 1
+  const maxAskSize = groupedAsks.length > 0 ? Math.max(...groupedAsks.map(a => a.size)) : 1
   const maxSize = Math.max(maxBidSize, maxAskSize)
 
-  const displayBids = bids.slice(0, obLevels)
-  const displayAsks = asks.slice(0, obLevels)
+  const displayBids = groupedBids.slice(0, obLevels)
+  const displayAsks = groupedAsks.slice(0, obLevels)
 
   let bidCum = 0
   const bidsWithCum = displayBids.map(b => { bidCum += b.size; return { ...b, cumulative: bidCum } })
   let askCum = 0
   const asksWithCum = displayAsks.map(a => { askCum += a.size; return { ...a, cumulative: askCum } })
 
-  const totalBidSize = bids.reduce((s, b) => s + b.size, 0)
-  const totalAskSize = asks.reduce((s, a) => s + a.size, 0)
+  const totalBidSize = groupedBids.reduce((s, b) => s + b.size, 0)
+  const totalAskSize = groupedAsks.reduce((s, a) => s + a.size, 0)
   const bidPct = totalBidSize + totalAskSize > 0 ? Math.round((totalBidSize / (totalBidSize + totalAskSize)) * 100) : 50
   const delta = bidPct - 50
 
+  // Calculate heights for asks/bids sections to fill the panel evenly
+  // Header (~30px) + col headers (~20px) + spread (~32px) + imbalance (~44px) = ~126px overhead
+  const overhead = 126
+  const availableHeight = panelHeight - overhead
+  const halfHeight = Math.max(80, Math.floor(availableHeight / 2))
+
   return (
-    <div className="w-full lg:w-[290px] border-t lg:border-t-0 lg:border-l border-gray-800 flex flex-col">
+    <div className="w-full lg:w-[290px] border-t lg:border-t-0 lg:border-l border-gray-800 flex flex-col" style={{ height: panelHeight }}>
       {/* Header */}
       <div className="flex items-center justify-between px-3 py-1.5 border-b border-gray-800 bg-gray-900/50">
         <span className="text-[10px] text-gray-500 uppercase tracking-wider font-semibold">Order Book</span>
-        <div className="flex gap-1">
-          {[10, 15, 25].map(n => (
-            <button
-              key={n}
-              onClick={() => setObLevels(n)}
-              className={`text-[9px] px-1.5 py-0.5 rounded ${
-                obLevels === n ? 'bg-blue-600 text-white' : 'text-gray-500 hover:text-gray-300 bg-gray-800'
-              }`}
-            >
-              {n}
-            </button>
-          ))}
+        <div className="flex items-center gap-2">
+          {/* Tick size selector */}
+          <div className="flex gap-0.5">
+            {tickOptions.map(t => (
+              <button
+                key={t}
+                onClick={() => setTickSize(t)}
+                className={`text-[9px] px-1.5 py-0.5 rounded ${
+                  tickSize === t ? 'bg-yellow-600 text-white' : 'text-gray-500 hover:text-gray-300 bg-gray-800'
+                }`}
+              >
+                {t === 0 ? 'Raw' : t}
+              </button>
+            ))}
+          </div>
+          <div className="w-px h-3 bg-gray-700" />
+          {/* Levels selector */}
+          <div className="flex gap-0.5">
+            {[10, 15, 25].map(n => (
+              <button
+                key={n}
+                onClick={() => setObLevels(n)}
+                className={`text-[9px] px-1.5 py-0.5 rounded ${
+                  obLevels === n ? 'bg-blue-600 text-white' : 'text-gray-500 hover:text-gray-300 bg-gray-800'
+                }`}
+              >
+                {n}
+              </button>
+            ))}
+          </div>
         </div>
       </div>
 
@@ -70,7 +133,7 @@ export default function OrderBookPanel({
       ) : (
         <div className="flex flex-col flex-1 overflow-hidden">
           {/* Asks (reversed — lowest ask at bottom) */}
-          <div className="flex-1 overflow-y-auto flex flex-col justify-end" style={{ maxHeight: `${obLevels * 18 + 10}px` }}>
+          <div className="overflow-y-auto flex flex-col justify-end" style={{ height: halfHeight }}>
             {[...asksWithCum].reverse().map((ask, idx) => (
               <OrderBookRow
                 key={`a-${idx}`}
@@ -85,7 +148,7 @@ export default function OrderBookPanel({
           </div>
 
           {/* Spread + Last Price */}
-          <div className="flex items-center justify-between px-3 py-1.5 border-y border-gray-800 bg-gray-800/20">
+          <div className="flex items-center justify-between px-3 py-1.5 border-y border-gray-800 bg-gray-800/20 shrink-0">
             <span className={`text-sm font-bold font-mono ${isPositive ? 'text-green-400' : 'text-red-400'}`}>
               {lastPrice ? `$${fmtPrice(lastPrice)}` : '—'}
             </span>
@@ -97,7 +160,7 @@ export default function OrderBookPanel({
           </div>
 
           {/* Bids */}
-          <div className="flex-1 overflow-y-auto" style={{ maxHeight: `${obLevels * 18 + 10}px` }}>
+          <div className="overflow-y-auto" style={{ height: halfHeight }}>
             {bidsWithCum.map((bid, idx) => (
               <OrderBookRow
                 key={`b-${idx}`}
@@ -112,7 +175,7 @@ export default function OrderBookPanel({
           </div>
 
           {/* Bid/Ask Imbalance */}
-          <div className="px-3 py-2 border-t border-gray-800">
+          <div className="px-3 py-2 border-t border-gray-800 shrink-0">
             <div className="flex items-center justify-between text-[10px] text-gray-500 mb-1">
               <span>Bids {bidPct}%</span>
               <span className={`font-bold ${delta > 0 ? 'text-green-400' : delta < 0 ? 'text-red-400' : 'text-gray-400'}`}>

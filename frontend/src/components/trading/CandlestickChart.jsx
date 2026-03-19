@@ -1,13 +1,13 @@
 import React, { useEffect, useRef } from 'react'
 import { createChart, ColorType, CrosshairMode, LineStyle, CandlestickSeries, HistogramSeries } from 'lightweight-charts'
 
-export default function CandlestickChart({ candles, height = 460 }) {
+export default function CandlestickChart({ candles, height = 500 }) {
   const chartContainerRef = useRef(null)
   const chartRef = useRef(null)
   const candleSeriesRef = useRef(null)
   const volumeSeriesRef = useRef(null)
 
-  // Create chart once
+  // Create chart once, recreate if height changes
   useEffect(() => {
     if (!chartContainerRef.current) return
 
@@ -40,7 +40,6 @@ export default function CandlestickChart({ candles, height = 460 }) {
       handleScroll: { vertTouchDrag: false },
     })
 
-    // v5 API: use addSeries with type parameter
     const candleSeries = chart.addSeries(CandlestickSeries, {
       upColor: '#10b981',
       downColor: '#ef4444',

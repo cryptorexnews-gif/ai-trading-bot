@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react'
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { getHeaders } from './trading/formatters'
 import ChartToolbar from './trading/ChartToolbar'
 import StatsBar from './trading/StatsBar'
@@ -6,6 +6,9 @@ import CandlestickChart from './trading/CandlestickChart'
 import OrderBookPanel from './trading/OrderBookPanel'
 
 const DEFAULT_COINS = ['BTC', 'ETH', 'SOL', 'BNB', 'XRP', 'ADA', 'DOGE', 'AVAX', 'LINK', 'SUI']
+
+// Shared height for chart and order book
+const PANEL_HEIGHT = 520
 
 export default function TradingView({ tradingPairs }) {
   const coins = tradingPairs && tradingPairs.length > 0 ? tradingPairs : DEFAULT_COINS
@@ -21,9 +24,27 @@ export default function TradingView({ tradingPairs }) {
   const [lastPrice, setLastPrice] = useState(null)
   const [stats24h, setStats24h] = useState(null)
   const [obLevels, setObLevels] = useState(15)
+  const [tickSize, setTickSize] = useState(0)
   const mountedRef = useRef(true)
   const prevBidsRef = useRef({})
   const prevAsksRef = useRef({})
+
+  // Compute tick size options based on current price
+  const tickOptions = useMemo(() => {
+    if (!lastPrice || lastPrice <= 0) return [0, 1, 10, 100]
+    if (lastPrice >= 10000) return [0, 1, 10, 50, 100]
+    if (lastPrice >= 1000) return [0, 1, 5, 10, 50]
+    if (lastPrice >= 100) return [0, 0.5, 1, 5, 10]
+    if (lastPrice >= 10) return [0, 0.1, 0.5, 1, 5]
+    if (lastPrice >= 1) return [0, 0.01, 0.1, 0.5, 1]
+    if (lastPrice >= 0.01) return [0, 0.001, 0.01, 0.1]
+    return [0, 0.0001, 0.001, 0.01]
+  }, [lastPrice])
+
+  // Reset tick size when coin changes
+  useEffect(() => {
+    setTickSize(0)
+  }, [selectedCoin])
 
   // ─── Fetch candles ─────────────────────────────────────────────────────
   const fetchCandles = useCallback(async () => {
@@ -107,10 +128,10 @@ export default function TradingView({ tradingPairs }) {
       <StatsBar stats24h={stats24h} />
 
       <div className="flex flex-col lg:flex-row">
-        {/* Chart */}
+        {/* Chart — same height as order book */}
         <div className="flex-1 min-w-0">
           {chartLoading && candles.length === 0 ? (
-            <div className="flex items-center justify-center h-[460px] text-gray-500">
+            <div className="flex items-center justify-center text-gray-500" style={{ height: PANEL_HEIGHT }}>
               <div className="text-center">
                 <div className="w-full h-[300px] mx-auto flex flex-col gap-2 p-6">
                   {[...Array(8)].map((_, i) => (
@@ -121,7 +142,7 @@ export default function TradingView({ tradingPairs }) {
               </div>
             </div>
           ) : candles.length === 0 ? (
-            <div className="flex items-center justify-center h-[460px] text-gray-500">
+            <div className="flex items-center justify-center text-gray-500" style={{ height: PANEL_HEIGHT }}>
               <div className="text-center">
                 <div className="text-3xl mb-2">⚠️</div>
                 <p className="text-sm">No chart data</p>
@@ -129,11 +150,11 @@ export default function TradingView({ tradingPairs }) {
               </div>
             </div>
           ) : (
-            <CandlestickChart candles={candles} height={460} />
+            <CandlestickChart candles={candles} height={PANEL_HEIGHT} />
           )}
         </div>
 
-        {/* Order Book */}
+        {/* Order Book — same height as chart */}
         <OrderBookPanel
           bids={bids}
           asks={asks}
@@ -143,9 +164,13 @@ export default function TradingView({ tradingPairs }) {
           isPositive={isPositive}
           obLevels={obLevels}
           setObLevels={setObLevels}
+          tickSize={tickSize}
+          setTickSize={setTickSize}
+          tickOptions={tickOptions}
           loading={obLoading}
           prevBids={prevBidsRef.current}
           prevAsks={prevAsksRef.current}
+          panelHeight={PANEL_HEIGHT}
         />
       </div>
     </div>
