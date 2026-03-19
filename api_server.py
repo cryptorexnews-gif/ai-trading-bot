@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
 API Server for Hyperliquid Trading Bot Dashboard.
-Lightweight Flask server that exposes bot state, metrics, and controls.
-Runs alongside the main bot process.
 """
 
+import csv
+import io
 import json
 import logging
 import os
@@ -12,34 +12,26 @@ import time
 from decimal import Decimal
 from typing import Any, Dict
 
-from flask import Flask, jsonify, request
+from flask import Flask, Response, jsonify, request
 from flask_cors import CORS
 
 from state_store import StateStore
 from utils.circuit_breaker import get_all_circuit_states
+from utils.rate_limiter import get_all_rate_limiter_stats
 
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 CORS(app)
 
-# Shared state paths (same as main bot)
 STATE_PATH = "state/bot_state.json"
 METRICS_PATH = "state/bot_metrics.json"
 LIVE_STATUS_PATH = "state/bot_live_status.json"
+MANAGED_POSITIONS_PATH = "state/managed_positions.json"
 
 state_store = StateStore(STATE_PATH, METRICS_PATH)
 
 
-class DecimalEncoder(json.JSONEncoder):
-    """JSON encoder that handles Decimal types."""
-    def default(self, obj):
-        if isinstance(obj, Decimal):
-            return float(obj)
-        return super().default(obj)
-
-
-# Use the modern Flask JSON provider approach
 from flask.json.provider import DefaultJSONProvider
 
 class CustomJSONProvider(DefaultJSONProvider):
@@ -53,7 +45,6 @@ app.json = CustomJSONProvider(app)
 
 
 def _read_json_file(path: str) -> Dict[str, Any]:
-    """Safely read a JSON file."""
     if not os.path.exists(path):
         return {}
     try:
@@ -65,13 +56,11 @@ def _read_json_file(path: str) -> Dict[str, Any]:
 
 @app.route("/api/health", methods=["GET"])
 def health():
-    """Health check endpoint."""
     return jsonify({"status": "ok", "timestamp": time.time()})
 
 
 @app.route("/api/status", methods=["GET"])
 def bot_status():
-    """Get current bot status including live data."""
     live_status = _read_json_file(LIVE_STATUS_PATH)
     state = state_store.load_state()
     metrics = state_store.load_metrics()
@@ -85,13 +74,13 @@ def bot_status():
         },
         "metrics": metrics,
         "circuit_breakers": get_all_circuit_states(),
+        "rate_limiters": get_all_rate_limiter_stats(),
         "timestamp": time.time()
     })
 
 
 @app.route("/api/portfolio", methods=["GET"])
 def portfolio():
-    """Get current portfolio state."""
     live_status = _read_json_file(LIVE_STATUS_PATH)
     return jsonify({
         "portfolio": live_status.get("portfolio", {}),
@@ -101,7 +90,6 @@ def portfolio():
 
 @app.route("/api/positions", methods=["GET"])
 def positions():
-    """Get current open positions."""
     live_status = _read_json_file(LIVE_STATUS_PATH)
     portfolio_data = live_status.get("portfolio", {})
     return jsonify({
@@ -110,9 +98,52 @@ def positions():
     })
 
 
+@app.route("/api/managed-positions", methods=["GET"])
+def managed_positions():
+    """Get managed positions with SL/TP/trailing stop info."""
+    data = _read_json_file(MANAGED_POSITIONS_PATH)
+    positions_list = []
+    for coin, pos_data in data.items():
+        sl = pos_data.get("stop_loss", {})
+        tp = pos_data.get("take_profit", {})
+        ts = pos_data.get("trailing_stop", {})
+
+        entry_price = Decimal(str(pos_data.get("entry_price", "0")))
+        is_long = pos_data.get("is_long", True)
+        sl_pct = Decimal(str(sl.get("percentage", "0.03")))
+        tp_pct = Decimal(str(tp.get("percentage", "0.05")))
+
+        if is_long:
+            sl_price = entry_price * (Decimal("1") - sl_pct)
+            tp_price = entry_price * (Decimal("1") + tp_pct)
+        else:
+            sl_price = entry_price * (Decimal("1") + sl_pct)
+            tp_price = entry_price * (Decimal("1") - tp_pct)
+
+        positions_list.append({
+            "coin": coin,
+            "side": "LONG" if is_long else "SHORT",
+            "size": pos_data.get("size", "0"),
+            "entry_price": str(entry_price),
+            "stop_loss_price": str(sl_price),
+            "stop_loss_pct": str(sl_pct),
+            "take_profit_price": str(tp_price),
+            "take_profit_pct": str(tp_pct),
+            "trailing_enabled": ts.get("enabled", False),
+            "trailing_callback": ts.get("callback_rate", "0.02"),
+            "highest_tracked": ts.get("highest_price"),
+            "lowest_tracked": ts.get("lowest_price"),
+            "opened_at": pos_data.get("opened_at", 0),
+        })
+
+    return jsonify({
+        "managed_positions": positions_list,
+        "timestamp": time.time()
+    })
+
+
 @app.route("/api/trades", methods=["GET"])
 def trades():
-    """Get trade history with optional limit."""
     limit = request.args.get("limit", 50, type=int)
     state = state_store.load_state()
     history = state.get("trade_history", [])
@@ -124,9 +155,43 @@ def trades():
     })
 
 
+@app.route("/api/trades/export", methods=["GET"])
+def export_trades():
+    """Export trade history as CSV."""
+    state = state_store.load_state()
+    history = state.get("trade_history", [])
+
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow([
+        "timestamp", "datetime", "coin", "action", "size", "price",
+        "notional", "leverage", "confidence", "success", "mode",
+        "trigger", "order_status", "reasoning"
+    ])
+
+    for trade in history:
+        ts = trade.get("timestamp", 0)
+        dt = time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime(ts)) if ts else ""
+        writer.writerow([
+            ts, dt, trade.get("coin", ""),
+            trade.get("action", ""), trade.get("size", ""),
+            trade.get("price", ""), trade.get("notional", ""),
+            trade.get("leverage", ""), trade.get("confidence", ""),
+            trade.get("success", ""), trade.get("mode", ""),
+            trade.get("trigger", ""), trade.get("order_status", ""),
+            trade.get("reasoning", "")[:200],
+        ])
+
+    output.seek(0)
+    return Response(
+        output.getvalue(),
+        mimetype="text/csv",
+        headers={"Content-Disposition": "attachment; filename=trade_history.csv"}
+    )
+
+
 @app.route("/api/performance", methods=["GET"])
 def performance():
-    """Get performance summary."""
     state = state_store.load_state()
     summary = state_store.get_performance_summary(state)
 
@@ -138,7 +203,8 @@ def performance():
             "notional": trade.get("notional", "0"),
             "action": trade.get("action", ""),
             "coin": trade.get("coin", ""),
-            "success": trade.get("success", False)
+            "success": trade.get("success", False),
+            "trigger": trade.get("trigger", "ai"),
         })
 
     return jsonify({
@@ -151,7 +217,6 @@ def performance():
 
 @app.route("/api/config", methods=["GET"])
 def config():
-    """Get current bot configuration (non-sensitive)."""
     return jsonify({
         "execution_mode": os.getenv("EXECUTION_MODE", "paper"),
         "enable_mainnet_trading": os.getenv("ENABLE_MAINNET_TRADING", "false"),
@@ -163,13 +228,18 @@ def config():
         "trade_cooldown_sec": os.getenv("TRADE_COOLDOWN_SEC", "300"),
         "daily_notional_limit": os.getenv("DAILY_NOTIONAL_LIMIT_USD", "1000"),
         "safe_fallback_mode": os.getenv("SAFE_FALLBACK_MODE", "de_risk"),
+        "default_sl_pct": os.getenv("DEFAULT_SL_PCT", "0.03"),
+        "default_tp_pct": os.getenv("DEFAULT_TP_PCT", "0.05"),
+        "enable_trailing_stop": os.getenv("ENABLE_TRAILING_STOP", "true"),
+        "trailing_callback": os.getenv("DEFAULT_TRAILING_CALLBACK", "0.02"),
+        "enable_adaptive_cycle": os.getenv("ENABLE_ADAPTIVE_CYCLE", "true"),
+        "correlation_threshold": os.getenv("CORRELATION_THRESHOLD", "0.7"),
         "timestamp": time.time()
     })
 
 
 @app.route("/api/logs", methods=["GET"])
 def logs():
-    """Get recent log entries."""
     limit = request.args.get("limit", 100, type=int)
     log_file = os.getenv("LOG_FILE", "logs/hyperliquid_bot.log")
 
@@ -202,7 +272,6 @@ def logs():
 
 
 def run_api_server(host: str = "0.0.0.0", port: int = 5000, debug: bool = False):
-    """Start the API server."""
     logger.info(f"Starting API server on {host}:{port}")
     app.run(host=host, port=port, debug=debug, use_reloader=False)
 

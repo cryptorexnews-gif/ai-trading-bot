@@ -3,6 +3,8 @@
 Hyperliquid Trading Bot - Executable Orders Version
 Main bot script with Claude Opus 4.6 powered trading decisions.
 All market data sourced exclusively from Hyperliquid API.
+Features: SL/TP/Trailing Stop, Order Verification, Correlation Engine,
+          Notifications, Adaptive Cycle Timing, Multi-Timeframe Analysis.
 """
 
 import logging
@@ -16,15 +18,20 @@ from typing import Any, Dict, List, Optional
 from dotenv import load_dotenv
 
 from bot_live_writer import write_live_status
+from correlation_engine import CorrelationEngine
 from exchange_client import HyperliquidExchangeClient
 from execution_engine import ExecutionEngine
 from llm_engine import LLMEngine
 from models import MarketData, PortfolioState
+from notifier import Notifier
+from order_verifier import OrderVerifier
+from position_manager import PositionManager
 from risk_manager import RiskManager
 from state_store import StateStore
 from technical_analyzer_simple import technical_fetcher
 from utils.logging_config import setup_logging
 from utils.metrics import MetricsCollector
+from utils.rate_limiter import get_rate_limiter
 from utils.validation import validate_configuration
 
 load_dotenv()
@@ -62,6 +69,22 @@ META_CACHE_TTL_SEC = int(os.getenv("META_CACHE_TTL_SEC", "300"))
 MAX_MARKET_DATA_AGE_SEC = int(os.getenv("MAX_MARKET_DATA_AGE_SEC", "300"))
 PAPER_SLIPPAGE_BPS = Decimal(os.getenv("PAPER_SLIPPAGE_BPS", "50"))
 
+# SL/TP/Trailing Configuration
+DEFAULT_SL_PCT = Decimal(os.getenv("DEFAULT_SL_PCT", "0.03"))
+DEFAULT_TP_PCT = Decimal(os.getenv("DEFAULT_TP_PCT", "0.05"))
+DEFAULT_TRAILING_CALLBACK = Decimal(os.getenv("DEFAULT_TRAILING_CALLBACK", "0.02"))
+ENABLE_TRAILING_STOP = os.getenv("ENABLE_TRAILING_STOP", "true").lower() == "true"
+TRAILING_ACTIVATION_PCT = Decimal(os.getenv("TRAILING_ACTIVATION_PCT", "0.02"))
+
+# Adaptive Cycle
+ENABLE_ADAPTIVE_CYCLE = os.getenv("ENABLE_ADAPTIVE_CYCLE", "true").lower() == "true"
+MIN_CYCLE_SEC = int(os.getenv("MIN_CYCLE_SEC", "20"))
+MAX_CYCLE_SEC = int(os.getenv("MAX_CYCLE_SEC", "120"))
+DEFAULT_CYCLE_SEC = int(os.getenv("DEFAULT_CYCLE_SEC", "60"))
+
+# Correlation
+CORRELATION_THRESHOLD = Decimal(os.getenv("CORRELATION_THRESHOLD", "0.7"))
+
 # Logging
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
 LOG_FILE = os.getenv("LOG_FILE", "logs/hyperliquid_bot.log")
@@ -81,13 +104,14 @@ MIN_SIZE_BY_COIN = {
 
 
 class HyperliquidBot:
-    """Main trading bot class using Claude Opus 4.6 and Hyperliquid-only data."""
+    """Main trading bot with SL/TP/Trailing, Order Verification, Correlation, Notifications."""
 
     def __init__(self):
         self._shutdown_requested = False
         self._cycle_count = 0
         self._last_cycle_duration = 0.0
         self._last_portfolio_state = None
+        self._next_cycle_sec = DEFAULT_CYCLE_SEC
         self._setup_logging()
         self._validate_config()
         self._init_components()
@@ -95,18 +119,15 @@ class HyperliquidBot:
         self._mask_wallet = lambda addr: f"{addr[:6]}...{addr[-4:]}" if addr and len(addr) >= 10 else "unknown"
 
     def _setup_signal_handlers(self):
-        """Setup graceful shutdown on SIGINT/SIGTERM."""
         signal.signal(signal.SIGINT, self._handle_shutdown)
         signal.signal(signal.SIGTERM, self._handle_shutdown)
 
     def _handle_shutdown(self, signum, frame):
-        """Handle shutdown signal gracefully."""
         sig_name = signal.Signals(signum).name
         logging.info(f"Received {sig_name}, initiating graceful shutdown...")
         self._shutdown_requested = True
 
     def _validate_config(self):
-        """Validate configuration at startup."""
         config = {
             "EXECUTION_MODE": EXECUTION_MODE,
             "ENABLE_MAINNET_TRADING": str(ENABLE_MAINNET_TRADING).lower(),
@@ -130,17 +151,10 @@ class HyperliquidBot:
         validate_configuration(config)
 
     def _setup_logging(self):
-        """Setup logging configuration."""
         os.makedirs(os.path.dirname(LOG_FILE), exist_ok=True)
-        setup_logging(
-            log_level=LOG_LEVEL,
-            json_format=LOG_JSON_FORMAT,
-            log_file=LOG_FILE,
-            console_output=True
-        )
+        setup_logging(log_level=LOG_LEVEL, json_format=LOG_JSON_FORMAT, log_file=LOG_FILE, console_output=True)
 
     def _init_components(self):
-        """Initialize bot components."""
         self.exchange_client = HyperliquidExchangeClient(
             base_url=HYPERLIQUID_BASE_URL,
             private_key=HYPERLIQUID_PRIVATE_KEY,
@@ -163,7 +177,7 @@ class HyperliquidBot:
             logging.info(f"LLM Engine initialized with model: {LLM_MODEL}")
         else:
             self.llm_engine = None
-            logging.warning("LLM Engine disabled: ALLOW_EXTERNAL_LLM=false or OPENROUTER_API_KEY missing")
+            logging.warning("LLM Engine disabled")
 
         self.risk_manager = RiskManager(
             min_size_by_coin=MIN_SIZE_BY_COIN,
@@ -181,8 +195,21 @@ class HyperliquidBot:
         self.metrics = MetricsCollector()
         self.wallet_address = HYPERLIQUID_WALLET_ADDRESS
 
+        # New components
+        self.position_manager = PositionManager(
+            default_sl_pct=DEFAULT_SL_PCT,
+            default_tp_pct=DEFAULT_TP_PCT,
+            default_trailing_callback=DEFAULT_TRAILING_CALLBACK,
+            enable_trailing_stop=ENABLE_TRAILING_STOP,
+            trailing_activation_pct=TRAILING_ACTIVATION_PCT,
+        )
+        self.order_verifier = OrderVerifier(self.exchange_client)
+        self.correlation_engine = CorrelationEngine(correlation_threshold=CORRELATION_THRESHOLD)
+        self.notifier = Notifier()
+        self.hl_rate_limiter = get_rate_limiter("hyperliquid_info", max_tokens=20, tokens_per_second=2.0)
+
     def _get_portfolio_state(self) -> PortfolioState:
-        """Fetch current portfolio state from Hyperliquid."""
+        self.hl_rate_limiter.acquire()
         user_state = self.exchange_client.get_user_state(self.wallet_address)
         if not user_state:
             logging.warning("Could not fetch user state from Hyperliquid")
@@ -215,30 +242,23 @@ class HyperliquidBot:
         return PortfolioState(total_balance, available_balance, margin_usage, positions)
 
     def _get_market_data_and_technicals(self, coin: str):
-        """
-        Fetch market data and technical indicators for a coin in a single call.
-        Returns (MarketData, tech_data_dict) or (None, None) on failure.
-        """
+        self.hl_rate_limiter.acquire()
         tech_data = technical_fetcher.get_technical_indicators(coin)
         if not tech_data:
             logging.warning(f"No technical data available for {coin}")
             return None, None
-
-        funding_rate = tech_data.get("funding_rate", Decimal("0"))
 
         market_data = MarketData(
             coin=coin,
             last_price=tech_data["current_price"],
             change_24h=tech_data["change_24h"],
             volume_24h=tech_data["volume_24h"],
-            funding_rate=funding_rate,
+            funding_rate=tech_data.get("funding_rate", Decimal("0")),
             timestamp=time.time()
         )
-
         return market_data, tech_data
 
     def _get_fallback_decision(self) -> Dict[str, Any]:
-        """Fallback decision when LLM is disabled or fails."""
         return {
             "action": "hold",
             "size": Decimal("0"),
@@ -248,19 +268,19 @@ class HyperliquidBot:
         }
 
     def _get_daily_notional_used(self, state: Dict[str, Any]) -> Decimal:
-        """Get today's notional usage, resetting if it's a new day."""
         today_key = self.state_store.day_key(time.time())
         daily_by_day = state.get("daily_notional_by_day", {})
         return Decimal(str(daily_by_day.get(today_key, "0")))
 
     def _handle_emergency_derisk(self, portfolio_state: PortfolioState) -> bool:
-        """Close the worst-performing position if margin is critically high."""
         worst_coin = self.risk_manager.get_emergency_close_coin(portfolio_state)
         if not worst_coin:
             logging.warning("Emergency de-risk triggered but no positions to close")
             return False
 
-        logging.warning(f"EMERGENCY DE-RISK: Closing {worst_coin} (margin usage critical)")
+        logging.warning(f"EMERGENCY DE-RISK: Closing {worst_coin}")
+        self.notifier.notify_emergency_derisk(worst_coin, "margin_usage_critical")
+
         pos = portfolio_state.positions[worst_coin]
         pos_size = Decimal(str(pos["size"]))
         side = "sell" if pos_size > 0 else "buy"
@@ -271,14 +291,100 @@ class HyperliquidBot:
 
         result = self.exchange_client.place_order(worst_coin, side, close_size, price)
         if result.get("success"):
+            self.position_manager.remove_position(worst_coin)
             logging.warning(f"Emergency close of {worst_coin} succeeded")
             return True
         else:
             logging.error(f"Emergency close of {worst_coin} FAILED: {result}")
             return False
 
+    def _process_sl_tp_trailing(self, portfolio_state: PortfolioState) -> int:
+        """Check and execute SL/TP/Trailing stop orders. Returns count of triggered closes."""
+        # Get current prices
+        mids = technical_fetcher.get_all_mids()
+        if not mids:
+            return 0
+
+        current_prices = {}
+        for coin in portfolio_state.positions:
+            if coin in mids:
+                current_prices[coin] = Decimal(str(mids[coin]))
+
+        # Sync managed positions with exchange
+        self.position_manager.sync_with_exchange(portfolio_state.positions)
+
+        # Check for triggers
+        actions = self.position_manager.check_all_positions(current_prices)
+        triggered = 0
+
+        for action in actions:
+            coin = action["coin"]
+            trigger = action["trigger"]
+            size = action["size"]
+            is_long = action["is_long"]
+            current_price = action["current_price"]
+            trigger_price = action["trigger_price"]
+            entry_price = action["entry_price"]
+
+            logging.warning(
+                f"{trigger.upper()} triggered for {coin}: "
+                f"entry=${entry_price} current=${current_price} trigger=${trigger_price}"
+            )
+
+            # Send notification
+            if trigger == "stop_loss":
+                self.notifier.notify_stop_loss(coin, entry_price, trigger_price, current_price)
+            elif trigger == "take_profit":
+                self.notifier.notify_take_profit(coin, entry_price, trigger_price, current_price)
+            elif trigger == "trailing_stop":
+                self.notifier.notify_trailing_stop(coin, entry_price, trigger_price, current_price)
+
+            # Execute close
+            close_side = "sell" if is_long else "buy"
+            result = self.exchange_client.place_order(coin, close_side, size, current_price)
+
+            if result.get("success"):
+                self.position_manager.remove_position(coin)
+                triggered += 1
+                logging.info(f"{trigger} close of {coin} succeeded")
+
+                # Record trade
+                self.notifier.notify_trade({
+                    "coin": coin,
+                    "action": "close_position",
+                    "size": str(size),
+                    "price": str(current_price),
+                    "confidence": 1.0,
+                    "mode": EXECUTION_MODE,
+                    "success": True,
+                    "trigger": trigger,
+                    "reasoning": action["reasoning"],
+                })
+            else:
+                logging.error(f"{trigger} close of {coin} FAILED: {result}")
+                self.notifier.notify_error(f"{trigger} close of {coin} failed")
+
+        return triggered
+
+    def _calculate_adaptive_cycle(self) -> int:
+        """Calculate next cycle duration based on market volatility."""
+        if not ENABLE_ADAPTIVE_CYCLE:
+            return DEFAULT_CYCLE_SEC
+
+        # Use BTC as the volatility reference
+        vol_signal = technical_fetcher.get_volatility_signal("BTC")
+        suggested = vol_signal.get("suggested_cycle_sec", DEFAULT_CYCLE_SEC)
+        clamped = max(MIN_CYCLE_SEC, min(MAX_CYCLE_SEC, suggested))
+
+        if clamped != self._next_cycle_sec:
+            logging.info(
+                f"Adaptive cycle: {self._next_cycle_sec}s -> {clamped}s "
+                f"(volatility={vol_signal.get('volatility_level', 'unknown')})"
+            )
+
+        return clamped
+
     def _log_performance_summary(self, state: Dict[str, Any]):
-        """Log a performance summary at the end of each cycle."""
         summary = self.state_store.get_performance_summary(state)
         if summary["total_trades"] > 0:
             logging.info(
@@ -290,9 +396,7 @@ class HyperliquidBot:
             )
 
     def _persist_metrics(self):
-        """Save current metrics to disk."""
         metrics_data = self.metrics.get_all_metrics()
-        # Convert Decimals for JSON serialization
         serializable = {}
         for key, value in metrics_data.items():
             if isinstance(value, Decimal):
@@ -304,7 +408,6 @@ class HyperliquidBot:
         self.state_store.save_metrics(serializable)
 
     def _run_trading_cycle(self) -> bool:
-        """Run a single trading cycle."""
         cycle_start = time.time()
         self._cycle_count += 1
         success = True
@@ -313,7 +416,6 @@ class HyperliquidBot:
             logging.info("=" * 60)
             logging.info(f"Starting trading cycle #{self._cycle_count}")
 
-            # Fetch portfolio state from Hyperliquid
             portfolio_state = self._get_portfolio_state()
             self._last_portfolio_state = portfolio_state
 
@@ -325,14 +427,10 @@ class HyperliquidBot:
                 f"unrealized_pnl=${portfolio_state.get_total_unrealized_pnl()}"
             )
 
-            # Write live status for API server
             write_live_status(
-                is_running=True,
-                execution_mode=EXECUTION_MODE,
-                cycle_count=self._cycle_count,
-                last_cycle_duration=self._last_cycle_duration,
-                portfolio=portfolio_state,
-                current_coin="scanning..."
+                is_running=True, execution_mode=EXECUTION_MODE,
+                cycle_count=self._cycle_count, last_cycle_duration=self._last_cycle_duration,
+                portfolio=portfolio_state, current_coin="scanning..."
             )
 
             if portfolio_state.total_balance <= 0:
@@ -344,17 +442,28 @@ class HyperliquidBot:
             peak = Decimal(str(state.get("peak_portfolio_value", "0")))
             consecutive_losses = state.get("consecutive_losses", 0)
 
-            # Emergency de-risk check
+            # === PHASE 1: SL/TP/Trailing Stop Check ===
+            sl_tp_triggered = self._process_sl_tp_trailing(portfolio_state)
+            if sl_tp_triggered > 0:
+                logging.info(f"SL/TP/Trailing triggered {sl_tp_triggered} closes, refreshing portfolio")
+                portfolio_state = self._get_portfolio_state()
+                self._last_portfolio_state = portfolio_state
+
+            # === PHASE 2: Emergency de-risk ===
             if self.risk_manager.check_emergency_derisk(portfolio_state):
                 logging.warning("EMERGENCY: Margin usage critical, attempting de-risk")
                 self._handle_emergency_derisk(portfolio_state)
                 portfolio_state = self._get_portfolio_state()
                 self._last_portfolio_state = portfolio_state
 
-            # Get all mid prices from Hyperliquid for market overview
-            all_mids = technical_fetcher.get_all_mids()
+            # === PHASE 3: Correlation analysis ===
+            correlations = self.correlation_engine.calculate_correlations(TRADING_PAIRS, "1h", 50)
+            corr_summary = self.correlation_engine.get_correlation_summary(correlations)
+            if corr_summary["high_correlation_pairs"]:
+                logging.info(f"High correlation pairs: {corr_summary['high_correlation_pairs'][:3]}")
 
-            # Get recent trades for LLM context
+            # Get all mid prices and recent trades
+            all_mids = technical_fetcher.get_all_mids()
             recent_trades = self.state_store.get_recent_trades(state, count=5)
 
             trades_executed = 0
@@ -363,40 +472,45 @@ class HyperliquidBot:
                 if self._shutdown_requested:
                     logging.info("Shutdown requested, stopping coin analysis")
                     break
-
                 if trades_executed >= MAX_TRADES_PER_CYCLE:
                     logging.info(f"Max trades per cycle ({MAX_TRADES_PER_CYCLE}) reached")
                     break
 
                 logging.info(f"--- Analyzing {coin} ---")
-
-                # Update live status with current coin
                 write_live_status(
-                    is_running=True,
-                    execution_mode=EXECUTION_MODE,
-                    cycle_count=self._cycle_count,
-                    last_cycle_duration=self._last_cycle_duration,
-                    portfolio=portfolio_state,
-                    current_coin=coin
+                    is_running=True, execution_mode=EXECUTION_MODE,
+                    cycle_count=self._cycle_count, last_cycle_duration=self._last_cycle_duration,
+                    portfolio=portfolio_state, current_coin=coin
                 )
 
-                # Get market data AND technical indicators in one call
                 market_data, tech_data = self._get_market_data_and_technicals(coin)
                 if not market_data:
                     logging.warning(f"Skipping {coin}: no market data")
                     continue
 
+                # Log multi-timeframe alignment
+                trends_aligned = tech_data.get("trends_aligned", False)
+                intraday_trend = tech_data.get("intraday_trend", "unknown")
+                hourly_ctx = tech_data.get("hourly_context", {})
+                hourly_trend = hourly_ctx.get("trend", "unknown")
+
                 logging.info(
                     f"{coin}: price=${market_data.last_price}, "
-                    f"24h_change={float(market_data.change_24h) * 100:.2f}%, "
                     f"RSI14={float(tech_data.get('current_rsi_14', 50)):.1f}, "
-                    f"funding={float(market_data.funding_rate):.6f}%"
+                    f"trends={'ALIGNED' if trends_aligned else 'DIVERGENT'} "
+                    f"(5m={intraday_trend}, 1h={hourly_trend})"
                 )
 
-                # Funding data already in tech_data, extract for LLM
                 funding_data = technical_fetcher.get_funding_for_coin(coin)
 
-                # Get decision from Claude Opus 4.6 or fallback
+                # === Correlation check ===
+                corr_ok, corr_reason = self.correlation_engine.check_correlation_risk(
+                    coin, "buy", portfolio_state.positions, correlations
+                )
+                if not corr_ok:
+                    logging.info(f"{coin} correlation risk: {corr_reason}")
+
+                # Get decision from LLM
                 if self.llm_engine:
                     self.metrics.increment("llm_calls_total")
                     decision = self.llm_engine.get_trading_decision(
@@ -422,7 +536,13 @@ class HyperliquidBot:
                     f"confidence={decision['confidence']}"
                 )
 
-                # Risk check (may adjust size in-place for volatility)
+                # === Correlation risk gate ===
+                if not corr_ok and decision["action"] in ["buy", "sell", "increase_position"]:
+                    logging.info(f"{coin} blocked by correlation risk: {corr_reason}")
+                    self.metrics.increment("risk_rejections_total")
+                    continue
+
+                # Risk check
                 volatility = Decimal("0")
                 if tech_data and tech_data.get("intraday_atr", Decimal("0")) > 0 and market_data.last_price > 0:
                     volatility = tech_data["intraday_atr"] / market_data.last_price
@@ -438,12 +558,31 @@ class HyperliquidBot:
                     self.metrics.increment("risk_rejections_total")
                     continue
 
-                # Execute (decision['size'] may have been adjusted by risk manager)
+                # === Snapshot before order (for fill verification) ===
+                snapshot = None
+                if EXECUTION_MODE == "live" and ENABLE_MAINNET_TRADING:
+                    snapshot = self.order_verifier.snapshot_position(self.wallet_address, coin)
+
+                # Execute
                 result = self.execution_engine.execute(
                     coin, decision, market_data, portfolio_state.positions
                 )
 
-                # Record trade in history
+                # === Verify fill (live mode only) ===
+                fill_status = "unknown"
+                if snapshot and result["success"] and decision["action"] in ["buy", "sell", "increase_position"]:
+                    expected_side = "buy" if decision["action"] in ["buy", "increase_position"] else "sell"
+                    verification = self.order_verifier.verify_fill(
+                        self.wallet_address, coin, expected_side,
+                        Decimal(str(decision["size"])), snapshot
+                    )
+                    fill_status = verification.get("fill_status", "unknown")
+                    if fill_status == "not_filled":
+                        logging.warning(f"{coin} order NOT FILLED — marking as failed")
+                        result["success"] = False
+                        result["reason"] = "order_not_filled"
+
+                # Record trade
                 trade_record = {
                     "timestamp": time.time(),
                     "coin": coin,
@@ -455,7 +594,9 @@ class HyperliquidBot:
                     "confidence": decision["confidence"],
                     "reasoning": decision.get("reasoning", "")[:200],
                     "success": result["success"],
-                    "mode": EXECUTION_MODE
+                    "mode": EXECUTION_MODE,
+                    "trigger": "ai",
+                    "order_status": fill_status,
                 }
                 self.state_store.add_trade_record(state, trade_record)
 
@@ -467,9 +608,22 @@ class HyperliquidBot:
                         state.setdefault("last_trade_timestamp_by_coin", {})[coin] = time.time()
                         self.metrics.increment("trades_executed_total")
                         state["consecutive_losses"] = 0
-                        logging.info(
-                            f"{coin} executed: reason={result['reason']}, notional=${notional}"
-                        )
+
+                        # Register with position manager for SL/TP tracking
+                        if decision["action"] in ["buy", "sell", "increase_position"]:
+                            is_long = decision["action"] in ["buy", "increase_position"]
+                            self.position_manager.register_position(
+                                coin=coin,
+                                size=Decimal(str(decision["size"])),
+                                entry_price=market_data.last_price,
+                                is_long=is_long,
+                                leverage=decision["leverage"],
+                            )
+
+                        # Notify
+                        self.notifier.notify_trade(trade_record)
+
+                        logging.info(f"{coin} executed: reason={result['reason']}, notional=${notional}")
                     else:
                         self.metrics.increment("holds_total")
                         logging.info(f"{coin}: hold (no trade)")
@@ -478,14 +632,13 @@ class HyperliquidBot:
                     state["consecutive_losses"] = state.get("consecutive_losses", 0) + 1
                     logging.warning(f"{coin} execution failed: {result.get('reason', 'unknown')}")
 
-            # Update state with proper daily tracking
+            # Update state
             state["daily_notional_by_day"] = self.state_store.add_daily_notional(
                 state.get("daily_notional_by_day", {}),
                 time.time(),
                 daily_notional_used - self._get_daily_notional_used(state)
             )
 
-            # Update peak portfolio value
             if portfolio_state.total_balance > peak:
                 state["peak_portfolio_value"] = str(portfolio_state.total_balance)
                 self.metrics.set_gauge("peak_portfolio_value", portfolio_state.total_balance)
@@ -497,44 +650,36 @@ class HyperliquidBot:
             self._last_cycle_duration = cycle_duration
             self.metrics.record_histogram("cycle_duration_seconds", cycle_duration)
             self.metrics.increment("cycles_total")
-
-            # Persist metrics to disk
             self._persist_metrics()
-
-            # Log performance summary
             self._log_performance_summary(state)
 
-            # Update live status after cycle
+            # Adaptive cycle timing
+            self._next_cycle_sec = self._calculate_adaptive_cycle()
+
             write_live_status(
-                is_running=True,
-                execution_mode=EXECUTION_MODE,
-                cycle_count=self._cycle_count,
-                last_cycle_duration=cycle_duration,
-                portfolio=portfolio_state,
-                current_coin="idle"
+                is_running=True, execution_mode=EXECUTION_MODE,
+                cycle_count=self._cycle_count, last_cycle_duration=cycle_duration,
+                portfolio=portfolio_state, current_coin="idle"
             )
 
             logging.info(
                 f"Cycle #{self._cycle_count} complete: {trades_executed} trades, "
-                f"duration={cycle_duration:.1f}s, "
-                f"daily_notional=${daily_notional_used}"
+                f"duration={cycle_duration:.1f}s, next_cycle={self._next_cycle_sec}s"
             )
 
         except Exception as e:
-            logging.error(f"Cycle failed with exception: {type(e).__name__}: {e}", exc_info=True)
+            logging.error(f"Cycle failed: {type(e).__name__}: {e}", exc_info=True)
             success = False
             self.metrics.increment("cycles_failed")
+            self.notifier.notify_error(f"Cycle failed: {type(e).__name__}: {str(e)[:200]}")
 
             write_live_status(
-                is_running=True,
-                execution_mode=EXECUTION_MODE,
-                cycle_count=self._cycle_count,
-                last_cycle_duration=self._last_cycle_duration,
+                is_running=True, execution_mode=EXECUTION_MODE,
+                cycle_count=self._cycle_count, last_cycle_duration=self._last_cycle_duration,
                 portfolio=self._last_portfolio_state,
                 error=f"{type(e).__name__}: {str(e)[:200]}"
             )
 
-            # Track consecutive failures in state
             state = self.state_store.load_state()
             state["consecutive_failed_cycles"] = state.get("consecutive_failed_cycles", 0) + 1
             self.state_store.save_state(state)
@@ -542,7 +687,6 @@ class HyperliquidBot:
         return success
 
     def run(self, single_cycle: bool = False):
-        """Main run loop."""
         logging.info("=" * 60)
         logging.info("HYPERLIQUID TRADING BOT STARTING")
         logging.info("=" * 60)
@@ -550,35 +694,29 @@ class HyperliquidBot:
         logging.info(f"Execution mode: {EXECUTION_MODE}")
         logging.info(f"Mainnet trading: {ENABLE_MAINNET_TRADING}")
         logging.info(f"LLM model: {LLM_MODEL}")
-        logging.info(f"LLM enabled: {self.llm_engine is not None}")
         logging.info(f"Trading pairs: {TRADING_PAIRS}")
-        logging.info(f"Fallback mode: {SAFE_FALLBACK_MODE}")
-        logging.info(f"Max drawdown: {float(MAX_DRAWDOWN_PCT) * 100:.0f}%")
-        logging.info(f"Data source: Hyperliquid API only")
+        logging.info(f"SL: {float(DEFAULT_SL_PCT)*100}% | TP: {float(DEFAULT_TP_PCT)*100}% | Trailing: {ENABLE_TRAILING_STOP}")
+        logging.info(f"Adaptive cycle: {ENABLE_ADAPTIVE_CYCLE} | Correlation threshold: {CORRELATION_THRESHOLD}")
+        logging.info(f"Notifications: TG={self.notifier.telegram_enabled} Discord={self.notifier.discord_enabled}")
         logging.info("=" * 60)
 
-        # Write initial status
+        self.notifier.notify_bot_started(EXECUTION_MODE, TRADING_PAIRS)
+
         write_live_status(
-            is_running=True,
-            execution_mode=EXECUTION_MODE,
-            cycle_count=0,
-            last_cycle_duration=0.0,
-            current_coin="starting..."
+            is_running=True, execution_mode=EXECUTION_MODE,
+            cycle_count=0, last_cycle_duration=0.0, current_coin="starting..."
         )
 
-        # Verify Hyperliquid connectivity at startup
         meta = self.exchange_client.get_meta(force_refresh=True)
         if meta:
             logging.info(f"Hyperliquid connected: {len(meta.get('universe', []))} assets available")
         else:
             logging.error("FAILED to connect to Hyperliquid API at startup!")
+            self.notifier.notify_error("Failed to connect to Hyperliquid API at startup")
             if not single_cycle:
-                logging.error("Aborting: cannot start without Hyperliquid connectivity")
                 write_live_status(
-                    is_running=False,
-                    execution_mode=EXECUTION_MODE,
-                    cycle_count=0,
-                    last_cycle_duration=0.0,
+                    is_running=False, execution_mode=EXECUTION_MODE,
+                    cycle_count=0, last_cycle_duration=0.0,
                     error="Failed to connect to Hyperliquid API"
                 )
                 return
@@ -590,20 +728,20 @@ class HyperliquidBot:
                 consecutive_failures = 0
             else:
                 consecutive_failures += 1
-                logging.warning(
-                    f"Consecutive failures: {consecutive_failures}/{MAX_CONSECUTIVE_FAILED_CYCLES}"
-                )
+                logging.warning(f"Consecutive failures: {consecutive_failures}/{MAX_CONSECUTIVE_FAILED_CYCLES}")
                 if consecutive_failures >= MAX_CONSECUTIVE_FAILED_CYCLES:
                     logging.error("Too many consecutive failures, shutting down")
+                    self.notifier.notify_error(f"Bot shutting down: {consecutive_failures} consecutive failures")
                     break
 
             if single_cycle:
                 logging.info("Single cycle mode: exiting")
                 break
 
-            # Interruptible sleep
-            logging.info("Waiting 60 seconds before next cycle...")
-            for _ in range(60):
+            # Interruptible adaptive sleep
+            wait_sec = self._next_cycle_sec
+            logging.info(f"Waiting {wait_sec} seconds before next cycle...")
+            for _ in range(wait_sec):
                 if self._shutdown_requested:
                     break
                 time.sleep(1)
@@ -615,20 +753,17 @@ class HyperliquidBot:
         self._log_performance_summary(state)
         self.state_store.save_state(state)
         self._persist_metrics()
+        self.notifier.notify_bot_stopped("graceful_shutdown")
         write_live_status(
-            is_running=False,
-            execution_mode=EXECUTION_MODE,
-            cycle_count=self._cycle_count,
-            last_cycle_duration=self._last_cycle_duration,
-            portfolio=self._last_portfolio_state,
-            current_coin="stopped"
+            is_running=False, execution_mode=EXECUTION_MODE,
+            cycle_count=self._cycle_count, last_cycle_duration=self._last_cycle_duration,
+            portfolio=self._last_portfolio_state, current_coin="stopped"
         )
         logging.info("State saved. Goodbye.")
         logging.info("=" * 60)
 
 
 def main():
-    """Entry point."""
     import argparse
     parser = argparse.ArgumentParser(description="Hyperliquid Trading Bot - Claude Opus 4.6")
     parser.add_argument("--single-cycle", action="store_true", help="Run single cycle and exit")

@@ -7,12 +7,14 @@ import { useApi } from './hooks/useApi'
 import StatusBadge from './components/StatusBadge'
 import StatCard from './components/StatCard'
 import PositionsTable from './components/PositionsTable'
+import ManagedPositions from './components/ManagedPositions'
 import TradeHistory from './components/TradeHistory'
 import EquityChart from './components/EquityChart'
 import CircuitBreakerStatus from './components/CircuitBreakerStatus'
 import LogViewer from './components/LogViewer'
 import DrawdownBar from './components/DrawdownBar'
 import ConnectionStatus from './components/ConnectionStatus'
+import ExportButton from './components/ExportButton'
 
 export default function App() {
   const { data: statusData, error: statusError, lastUpdated: statusUpdated } = useApi('/status', 5000)
@@ -21,6 +23,7 @@ export default function App() {
   const { data: perfData } = useApi('/performance', 10000)
   const { data: logsData } = useApi('/logs?limit=50', 8000)
   const { data: configData } = useApi('/config', 30000)
+  const { data: managedData } = useApi('/managed-positions', 5000)
 
   const bot = statusData?.bot || {}
   const portfolio = bot.portfolio || portfolioData?.portfolio || {}
@@ -32,6 +35,7 @@ export default function App() {
   const perfSummary = perfData?.summary || {}
   const equityCurve = perfData?.equity_curve || []
   const logs = logsData?.logs || []
+  const managedPositions = managedData?.managed_positions || []
 
   const isConnected = !statusError
   const isRunning = bot.is_running || false
@@ -48,7 +52,7 @@ export default function App() {
             <div>
               <h1 className="text-xl font-bold">Hyperliquid Trading Bot</h1>
               <p className="text-[10px] text-gray-500">
-                Claude Opus 4.6 • Hyperliquid-only data
+                Claude Opus 4.6 • SL/TP/Trailing • Multi-TF • Correlation
               </p>
             </div>
           </div>
@@ -65,7 +69,6 @@ export default function App() {
       </header>
 
       <main className="max-w-7xl mx-auto px-4 sm:px-6 py-6 space-y-5">
-        {/* Connection Status */}
         <ConnectionStatus isConnected={isConnected} lastUpdated={statusUpdated} />
 
         {/* Stats Grid */}
@@ -152,8 +155,17 @@ export default function App() {
           <PositionsTable positions={positions} />
         </div>
 
-        {/* Trade History */}
-        <TradeHistory trades={trades} />
+        {/* Managed Positions (SL/TP/Trailing) */}
+        <ManagedPositions positions={managedPositions} />
+
+        {/* Trade History with Export */}
+        <div>
+          <div className="flex items-center justify-between mb-2">
+            <div />
+            <ExportButton />
+          </div>
+          <TradeHistory trades={trades} />
+        </div>
 
         {/* Bottom Row */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
@@ -165,9 +177,10 @@ export default function App() {
         <footer className="text-center text-[10px] text-gray-600 py-4 border-t border-gray-800/50">
           Hyperliquid Trading Bot Dashboard • {configData?.llm_model || 'claude-opus-4.6'} •
           {' '}{(configData?.trading_pairs || []).join(', ')} •
-          {' '}Max Lev: {configData?.max_leverage || '10'}x •
-          {' '}Cooldown: {configData?.trade_cooldown_sec || '300'}s •
-          {' '}Daily Limit: ${configData?.daily_notional_limit || '1000'}
+          {' '}SL: {((parseFloat(configData?.default_sl_pct || '0.03')) * 100).toFixed(0)}% •
+          {' '}TP: {((parseFloat(configData?.default_tp_pct || '0.05')) * 100).toFixed(0)}% •
+          {' '}Trailing: {configData?.enable_trailing_stop === 'true' ? 'ON' : 'OFF'} •
+          {' '}Adaptive: {configData?.enable_adaptive_cycle === 'true' ? 'ON' : 'OFF'}
         </footer>
       </main>
     </div>
