@@ -65,12 +65,10 @@ class HyperliquidTradingBotExecutable:
         self,
         wallet_address: str,
         private_key: str,
-        deepseek_api_key: str,
         trading_pairs: Optional[List[str]] = None
     ):
         self.wallet_address = wallet_address
         self.private_key = private_key
-        self.deepseek_api_key = deepseek_api_key
         self.base_url = "https://api.hyperliquid.xyz"
         self.trading_pairs = trading_pairs or ["BTC", "ETH", "SOL", "BNB", "ADA"]
         self.shutdown_handler = GracefulShutdown()
@@ -104,10 +102,10 @@ class HyperliquidTradingBotExecutable:
             paper_slippage_bps=self.paper_slippage_bps
         )
         
-        # Initialize LLM engine
+        # Initialize LLM engine with OpenRouter API key
         self.llm_engine = LLMEngine(
             session=self.exchange_client.session,
-            deepseek_api_key=self.deepseek_api_key,
+            api_key=self.openrouter_api_key,
             allow_external_llm=self.allow_external_llm,
             include_portfolio_context=self.include_portfolio_in_llm_prompt,
             fallback_mode=self.safe_fallback_mode,
@@ -145,6 +143,7 @@ class HyperliquidTradingBotExecutable:
         logger.info(f"Execution mode: {self.execution_mode}")
         logger.info(f"Trading pairs: {self.trading_pairs}")
         logger.info(f"Fallback mode: {self.safe_fallback_mode}")
+        logger.info(f"LLM: Claude Opus 4.6 via OpenRouter")
         logger.info(f"Health monitor: {len(self.health_monitor._checks)} checks configured")
 
     def _load_config(self):
@@ -171,6 +170,9 @@ class HyperliquidTradingBotExecutable:
         self.state_file_path = os.getenv("STATE_FILE_PATH", "logs/agent_state.json")
         self.metrics_file_path = os.getenv("METRICS_FILE_PATH", "logs/agent_metrics.json")
         self.cycle_interval = int(os.getenv("CYCLE_INTERVAL_SEC", "300"))
+        
+        # OpenRouter API key for Claude
+        self.openrouter_api_key = os.getenv("OPENROUTER_API_KEY", "")
         
         self.min_size_by_coin: Dict[str, Decimal] = {
             "BTC": Decimal("0.001"),
@@ -281,8 +283,8 @@ class HyperliquidTradingBotExecutable:
                 return False
         
         # Check LLM configuration
-        if self.allow_external_llm and not self.deepseek_api_key:
-            logger.error("Startup check failed: ALLOW_EXTERNAL_LLM=true but DEEPSEEK_API_KEY missing")
+        if self.allow_external_llm and not self.openrouter_api_key:
+            logger.error("Startup check failed: ALLOW_EXTERNAL_LLM=true but OPENROUTER_API_KEY missing")
             return False
         
         # Check execution mode
@@ -728,7 +730,6 @@ def main():
     
     wallet_address = os.getenv("HYPERLIQUID_WALLET_ADDRESS")
     private_key = os.getenv("HYPERLIQUID_PRIVATE_KEY")
-    deepseek_api_key = os.getenv("DEEPSEEK_API_KEY", "")
     
     if not wallet_address or not private_key:
         logger.error("Missing required environment variables: HYPERLIQUID_WALLET_ADDRESS / HYPERLIQUID_PRIVATE_KEY")
@@ -738,7 +739,6 @@ def main():
         bot = HyperliquidTradingBotExecutable(
             wallet_address=wallet_address,
             private_key=private_key,
-            deepseek_api_key=deepseek_api_key,
             trading_pairs=["BTC", "ETH", "SOL", "BNB", "ADA"]
         )
         

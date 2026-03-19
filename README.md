@@ -2,7 +2,7 @@
 
 ## 🎯 Overview
 
-This is an **enterprise-grade, production-ready** autonomous trading bot that operates on Hyperliquid using AI (DeepSeek) to generate executable trading orders. The bot features comprehensive risk management, persistent state, structured observability, and robust error handling designed for 24/7 operation.
+This is an **enterprise-grade, production-ready** autonomous trading bot that operates on Hyperliquid using AI (Claude Opus 4.6 via OpenRouter) to generate executable trading orders. The bot features comprehensive risk management, persistent state, structured observability, and robust error handling designed for 24/7 operation.
 
 ## ✨ Key Features
 
@@ -42,7 +42,7 @@ hyperliquid/
 ├── hyperliquid_bot_executable_orders.py  # Main bot orchestrator
 ├── exchange_client.py                   # Hyperliquid API client with signing
 ├── execution_engine.py                  # Action → execution mapping
-├── llm_engine.py                        # DeepSeek integration with fallback
+├── llm_engine.py                        # Claude via OpenRouter integration with fallback
 ├── risk_manager.py                      # Risk checks and limits
 ├── state_store.py                       # Persistent state/metrics storage
 ├── technical_analyzer_simple.py         # Market data & technical indicators
@@ -98,8 +98,8 @@ Create a `.env` file in the project root:
 HYPERLIQUID_WALLET_ADDRESS=0xYourWalletAddress
 HYPERLIQUID_PRIVATE_KEY=0xYourPrivateKey
 
-# Optional: DeepSeek API for AI-generated orders (if ALLOW_EXTERNAL_LLM=true)
-DEEPSEEK_API_KEY=sk-your-deepseek-api-key
+# OpenRouter API key for Claude Opus 4.6
+OPENROUTER_API_KEY=sk-or-v1-YourOpenRouterApiKey
 
 # Execution mode: "paper" (simulated) or "live" (real trading)
 EXECUTION_MODE=paper
@@ -107,7 +107,7 @@ EXECUTION_MODE=paper
 # Enable live trading (only after thorough testing!)
 ENABLE_MAINNET_TRADING=false
 
-# Use external LLM (DeepSeek) or deterministic fallback
+# Use external LLM (Claude via OpenRouter) or deterministic fallback
 ALLOW_EXTERNAL_LLM=false
 
 # Include portfolio context in LLM prompt (requires ALLOW_EXTERNAL_LLM=true)
@@ -299,8 +299,8 @@ python close_sol_position.py  # Example for SOL
 
 ### API Errors
 1. Check circuit breaker status in health snapshot
-2. Verify Hyperliquid API reachability
-3. Check rate limits (not currently enforced, but consider adding)
+2. Verify OpenRouter API reachability
+3. Check rate limits (OpenRouter has rate limits based on your plan)
 4. Review network connectivity
 
 ### Stale Market Data

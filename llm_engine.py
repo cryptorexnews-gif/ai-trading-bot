@@ -11,7 +11,7 @@ class LLMEngine:
     def __init__(
         self,
         session: requests.Session,
-        deepseek_api_key: str,
+        api_key: str,
         allow_external_llm: bool,
         include_portfolio_context: bool,
         fallback_mode: str,
@@ -20,7 +20,7 @@ class LLMEngine:
         hard_max_leverage: Decimal
     ):
         self.session = session
-        self.deepseek_api_key = deepseek_api_key
+        self.api_key = api_key
         self.allow_external_llm = allow_external_llm
         self.include_portfolio_context = include_portfolio_context
         self.fallback_mode = fallback_mode
@@ -167,33 +167,58 @@ class LLMEngine:
             return self._fallback_orders(portfolio_state)
 
         headers = {
-            "Authorization": f"Bearer {self.deepseek_api_key}",
-            "Content-Type": "application/json"
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+            "HTTP-Referer": "https://hyperliquid-bot.local",  # Optional: for OpenRouter analytics
+            "X-Title": "Hyperliquid Trading Bot"  # Optional: for OpenRouter analytics
         }
+        
         payload = {
-            "model": "deepseek-chat",
+            "model": "anthropic/claude-3-opus-20240229",  # OpenRouter model identifier
             "messages": [
-                {"role": "system", "content": "Return valid JSON only. No markdown."},
-                {"role": "user", "content": self._build_prompt(market_data, portfolio_state)}
+                {
+                    "role": "user",
+                    "content": self._build_prompt(market_data, portfolio_state)
+                }
             ],
+            "max_tokens": 1024,
             "temperature": 0.2,
-            "max_tokens": 1400
+            "stream": False
         }
 
         response = self.session.post(
-            "https://api.deepseek.com/chat/completions",
+            "https://openrouter.ai/api/v1/chat/completions",
             headers=headers,
             json=payload,
             timeout=30
         )
 
         if response.status_code != 200:
+            logger.error(f"OpenRouter API error: status={response.status_code}, response={response.text[:200]}")
             return self._fallback_orders(portfolio_state)
 
-        result = response.json()
-        text = result.get("choices", [{}])[0].get("message", {}).get("content", "")
+        try:
+            result = response.json()
+        except json.JSONDecodeError as e:
+            logger.error(f"Failed to parse OpenRouter response: {e}")
+            return self._fallback_orders(portfolio_state)
+
+        # Extract text from response - OpenRouter follows OpenAI format
+        choices = result.get("choices", [])
+        if not choices:
+            logger.error("No choices in OpenRouter response")
+            return self._fallback_orders(portfolio_state)
+        
+        message = choices[0].get("message", {})
+        text = message.get("content", "")
+        
+        if not text:
+            logger.error("Empty content in OpenRouter response")
+            return self._fallback_orders(portfolio_state)
+
         parsed = self._extract_json_payload(text)
         if parsed is None:
+            logger.warning("Failed to extract JSON from LLM response, using fallback")
             return self._fallback_orders(portfolio_state)
 
         sanitized = self._sanitize_orders(parsed)
