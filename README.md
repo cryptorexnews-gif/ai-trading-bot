@@ -1,208 +1,227 @@
-# Bot Trading Hyperliquid
+# 🤖 Hyperliquid AI Trading Bot
 
-Un bot di trading automatizzato per l'exchange Hyperliquid, alimentato da **Claude Opus 4.6** via OpenRouter per decisioni di trading intelligenti. Tutti i dati di mercato sono **sorgenti esclusivamente dall'API Hyperliquid** — nessuna fonte dati esterna.
+Bot di trading automatizzato per **Hyperliquid**, alimentato da **Claude Opus 4.6** via OpenRouter. Tutti i dati di mercato provengono esclusivamente dall'API Hyperliquid.
 
-## 🚀 Caratteristiche
+---
 
-### ✅ Funzionalità Core
-- **Trading Potenziato AI**: Claude Opus 4.6 (`anthropic/claude-opus-4.6`) via OpenRouter analizza dati di mercato e genera decisioni di trading eseguibili
-- **Dati Solo Hyperliquid**: Tutti i dati di mercato (candele, prezzi mid, tassi funding, interesse aperto) sorgenti direttamente dall'API Hyperliquid
-- **Analisi Tecnica**: EMA, MACD, RSI (Wilder's), ATR, Bande di Bollinger, VWAP calcolati da snapshot candele Hyperliquid
-- **Multi-Timeframe**: Analisi su 5m (intraday), 1h (medium), 4h (long-term) con rilevamento allineamento trend
-- **Gestione Rischio**: Dimensionamento basato su volatilità, limiti margine, cooldown trade, limiti notionale giornaliero, protezione drawdown massimo
-- **Esecuzione Sicura**: Ordini firmati EIP-712 via `eth_account` per mainnet Hyperliquid
-- **Modalità Paper Trading**: Test sicuri con esecuzioni simulate e slippage
-- **Circuit Breaker**: Gestione fallimenti automatica per endpoint API
-- **Rate Limiter**: Token bucket per API Hyperliquid e OpenRouter
-- **Health Monitor**: Controlli salute periodici (exchange, disco, stato)
-- **Dashboard in Tempo Reale**: Frontend React con portfolio live, posizioni, storia trade, e log
-- **Logging Strutturato**: Log in formato JSON per monitoraggio e debug
-- **Metriche Prometheus**: Endpoint `/metrics` per integrazione Grafana
+## 🚀 Quick Start — Avvio Rapido
 
-### 📊 Dashboard
-Il bot include una **dashboard web in tempo reale** costruita con React + Tailwind CSS:
-- 💰 Saldo portfolio live e PnL
-- 📈 **Vera equity curve** (valore portfolio nel tempo, non solo trade)
-- 📊 Posizioni aperte con prezzi entrata e PnL non realizzato
-- 🛡️ **Gestione rischio visuale**: SL/TP/Trailing/Break-Even per ogni posizione
-- 📋 Storia trade completa con ragionamento AI e filtri
-- 🔄 Stato circuit breaker
-- 📝 Visualizzatore log in tempo reale con filtri livello
-- 📉 Barra drawdown con limiti visuali
-- ⬇️ Export CSV storia trade
-- 💥 ErrorBoundary per crash recovery
+### Prerequisiti
 
-### 🛡️ Gestione Posizioni
-| Feature | Descrizione |
-|---------|-------------|
-| **Stop-Loss** | 3% predefinito, configurabile per posizione |
-| **Take-Profit** | 5% predefinito, configurabile per posizione |
-| **Trailing Stop** | 2% callback, attivazione dopo +2% profitto |
-| **Break-Even** | Sposta SL a entry+0.1% dopo +1.5% profitto |
-| **Emergency De-Risk** | Chiude posizione peggiore se margine > 88% |
+- **Python 3.10+** — [Download](https://www.python.org/downloads/)
+- **Node.js 18+** — [Download](https://nodejs.org/) (solo per la dashboard)
+- **Wallet Hyperliquid** con fondi depositati (per live trading)
+- **API Key OpenRouter** — [Registrati](https://openrouter.ai/) (per Claude Opus 4.6)
 
-### 📊 Asset Supportati
-| Asset | Dimensione Minima | Valore Appross. |
-|-------|-------------------|-----------------|
-| BTC   | 0.001             | ~$111           |
-| ETH   | 0.01              | ~$40            |
-| SOL   | 0.1               | ~$19            |
-| BNB   | 0.01              | ~$7             |
-| ADA   | 10.0              | ~$6.50          |
-| + 15 altri | Dinamico     | Calcolato       |
+### Step 1: Clona e installa
 
-### 🛡️ Caratteristiche Sicurezza
-- **Protezione Drawdown Massimo**: Ferma aperture nuove posizioni se drawdown supera 15%
-- **De-Risk di Emergenza**: Chiude automaticamente posizione peggiore se uso margine > 88%
-- **Rilevamento Conflitto Posizione**: Previene apertura direzione opposta su stesso asset
-- **Limite Concentrazione Per-Asset**: Max 40% del saldo su singolo asset
-- **Correlazione Asset**: Previene apertura posizioni correlate nella stessa direzione
-- **Fallback Sicuro**: Hold/de-risk automatico quando AI non disponibile
-- **Circuit Breaker**: Previene cascate fallimenti da outage API
-- **Rate Limiter**: Token bucket per prevenire throttling API
-- **Shutdown Graceful**: Handler SIGINT/SIGTERM salvano stato prima dell'uscita
-- **Validazione Config**: Controlla variabili critiche all'avvio
-
-## 📋 Requisiti
-
-- Python 3.10+
-- Node.js 18+ (per dashboard)
-- Wallet Hyperliquid valido con chiave privata
-- Chiave API OpenRouter (per accesso Claude Opus 4.6)
-
-## 🛠️ Installazione
-
-1. **Clona il repository**:
-   ```bash
-   git clone <repository-url>
-   cd hyperliquid-trading-bot
-   ```
-
-2. **Installa dipendenze Python**:
-   ```bash
-   python -m venv venv
-   source venv/bin/activate
-   pip install -r requirements.txt
-   ```
-
-3. **Installa dipendenze Dashboard**:
-   ```bash
-   cd frontend
-   npm install
-   cd ..
-   ```
-
-4. **Configura ambiente**:
-   ```bash
-   cp .env.example .env
-   # Modifica .env con le tue chiavi API e impostazioni
-   ```
-
-## 🚀 Uso
-
-### Avvia il Bot
 ```bash
-# Ciclo singolo test
-python hyperliquid_bot_executable_orders.py --single-cycle
+# Clona il repository
+git clone <repository-url>
+cd hyperliquid-ai-trading-bot
 
-# Trading continuo
+# Crea ambiente virtuale Python
+python -m venv venv
+
+# Attiva l'ambiente (Windows PowerShell)
+.\venv\Scripts\Activate.ps1
+
+# Attiva l'ambiente (Windows CMD)
+venv\Scripts\activate.bat
+
+# Attiva l'ambiente (Linux/Mac)
+source venv/bin/activate
+
+# Installa dipendenze Python
+pip install -r requirements.txt
+```
+
+### Step 2: Configura il file `.env`
+
+Copia il template e compila i tuoi dati:
+
+```bash
+cp .env.example .env
+```
+
+Apri `.env` con un editor e compila **3 valori obbligatori**:
+
+```bash
+# OBBLIGATORIO: La tua chiave privata Hyperliquid
+HYPERLIQUID_PRIVATE_KEY=la_tua_chiave_privata_qui
+
+# OBBLIGATORIO: Il tuo indirizzo wallet (deve corrispondere alla chiave privata)
+HYPERLIQUID_WALLET_ADDRESS=0xIlTuoIndirizzoWallet
+
+# OBBLIGATORIO: API key OpenRouter per Claude Opus 4.6
+OPENROUTER_API_KEY=la_tua_api_key_openrouter
+
+# OPZIONALE: Scegli le monete da monitorare (default: 20 coin)
+TRADING_PAIRS=BTC,ETH,SOL,BNB,XRP
+
+# OPZIONALE: Ciclo di trading (default: 60 secondi)
+DEFAULT_CYCLE_SEC=900
+ENABLE_ADAPTIVE_CYCLE=false
+```
+
+### Step 3: Test rapido (Paper Mode)
+
+```bash
+# Esegui un singolo ciclo di test (nessun ordine reale)
+python hyperliquid_bot_executable_orders.py --single-cycle
+```
+
+Se vedi `"Cycle #1 complete"` nel log, il bot funziona! ✅
+
+### Step 4: Avvia il bot in continuo
+
+```bash
+# Trading continuo in paper mode (simulato)
 python hyperliquid_bot_executable_orders.py
 ```
 
-### Avvia la Dashboard
+Per fermare: premi `Ctrl+C` (shutdown graceful).
+
+### Step 5: Avvia la Dashboard (opzionale)
+
+Apri **3 terminali separati**:
+
 ```bash
-# Terminale 1: Avvia server API
+# Terminale 1: Bot di trading
+python hyperliquid_bot_executable_orders.py
+
+# Terminale 2: Server API per la dashboard
 python api_server.py
 
-# Terminale 2: Avvia frontend
+# Terminale 3: Frontend React
 cd frontend
+npm install
 npm run dev
 ```
 
-Poi apri **http://localhost:3000** nel browser.
+Apri **http://localhost:3000** nel browser 🎉
 
-### Prometheus Metrics
-Metriche disponibili su `http://localhost:5000/metrics` in formato testo Prometheus.
+---
 
-## ⚙️ Configurazione
+## ⚠️ Passare al Live Trading
 
-### Variabili Ambiente (.env)
+> **ATTENZIONE**: Il live trading usa soldi veri. Testa sempre in paper mode prima!
+
+Per abilitare il trading reale, modifica `.env`:
 
 ```bash
-# === RICHIESTE ===
-HYPERLIQUID_PRIVATE_KEY=la_tua_private_key_qui
-HYPERLIQUID_WALLET_ADDRESS=il_tuo_wallet_address_qui
-OPENROUTER_API_KEY=la_tua_api_key_openrouter_qui
-
-# === Modalità Esecuzione ===
-EXECUTION_MODE=paper
-ENABLE_MAINNET_TRADING=false
-
-# === Impostazioni AI / LLM ===
-LLM_MODEL=anthropic/claude-opus-4.6
-LLM_MAX_TOKENS=8192
-LLM_TEMPERATURE=0.15
-
-# === Gestione Rischio ===
-MAX_ORDER_MARGIN_PCT=0.1
-HARD_MAX_LEVERAGE=10
-MAX_MARGIN_USAGE=0.8
-MAX_DRAWDOWN_PCT=0.15
-TRADE_COOLDOWN_SEC=300
-DAILY_NOTIONAL_LIMIT_USD=1000
-
-# === Stop-Loss / Take-Profit / Trailing / Break-Even ===
-DEFAULT_SL_PCT=0.03
-DEFAULT_TP_PCT=0.05
-ENABLE_TRAILING_STOP=true
-DEFAULT_TRAILING_CALLBACK=0.02
-BREAK_EVEN_ACTIVATION_PCT=0.015
-BREAK_EVEN_OFFSET_PCT=0.001
-
-# === Ciclo Adattivo ===
-ENABLE_ADAPTIVE_CYCLE=true
-DEFAULT_CYCLE_SEC=60
-
-# === Server API ===
-API_SERVER_PORT=5000
+EXECUTION_MODE=live
+ENABLE_MAINNET_TRADING=true
 ```
 
-## 🔄 Architettura
+Il bot verificherà automaticamente che il wallet address corrisponda alla chiave privata all'avvio.
+
+---
+
+## 📊 Caratteristiche
+
+| Feature | Descrizione |
+|---------|-------------|
+| **AI Trading** | Claude Opus 4.6 analizza indicatori tecnici multi-timeframe |
+| **20 Coin** | BTC, ETH, SOL, BNB, ADA, DOGE, XRP, AVAX, LINK, SUI, ARB, OP, NEAR, WIF, PEPE, INJ, TIA, SEI, RENDER, FET |
+| **Stop-Loss** | 3% predefinito, configurabile |
+| **Take-Profit** | 5% predefinito, configurabile |
+| **Trailing Stop** | 2% callback, attivazione dopo +2% profitto |
+| **Break-Even** | Sposta SL a entry+0.1% dopo +1.5% profitto |
+| **Correlazione** | Previene posizioni correlate nella stessa direzione |
+| **Emergency De-Risk** | Chiude posizione peggiore se margine > 88% |
+| **Dashboard** | Chart real-time, order book, posizioni, trade history |
+| **Telegram** | Notifiche per trade, SL/TP, errori |
+| **Prometheus** | Metriche su `/metrics` per Grafana |
+
+---
+
+## 🏗️ Architettura
 
 ```
 ┌─────────────────────────────────────────────────────────┐
 │                    Dashboard React                       │
-│  (Portfolio, Equity Curve, Posizioni, Trade, Log, BE)   │
+│  (TradingView Chart + Order Book, Positions, Trades)    │
 └──────────────────────┬──────────────────────────────────┘
                        │ HTTP (polling ogni 5s)
 ┌──────────────────────▼──────────────────────────────────┐
-│              Server API Flask + Prometheus                │
-│  /api/status  /api/portfolio  /api/trades  /metrics      │
+│              API Server (Flask Blueprints)                │
+│  api/routes: health, bot, trading, market, logs, metrics │
 └──────────────────────┬──────────────────────────────────┘
                        │ Legge file JSON condivisi
 ┌──────────────────────▼──────────────────────────────────┐
-│              Processo Bot Trading Principale             │
+│              Bot Process                                 │
 │                                                           │
-│  ┌─────────┐  ┌──────────┐  ┌────────────┐              │
-│  │Exchange  │  │ LLM      │  │ Risk       │              │
-│  │Client    │  │ Engine   │  │ Manager    │              │
-│  │(HL API)  │  │(Claude)  │  │            │              │
-│  └────┬─────┘  └────┬─────┘  └─────┬──────┘              │
-│       │              │              │                     │
-│  ┌────▼──────────────▼──────────────▼──────┐             │
-│  │         Execution Engine                 │             │
-│  └────────────────┬────────────────────────┘             │
-│                   │                                       │
-│  ┌────────────────▼────────────────────────┐             │
-│  │  Position Manager (SL/TP/Trail/BE)      │             │
-│  └────────────────┬────────────────────────┘             │
-│                   │                                       │
-│  ┌────────────────▼────────────────────────┐             │
-│  │  State Store + Equity Snapshots          │             │
-│  └──────────────────────────────────────────┘             │
+│  BotConfig ──→ HyperliquidBot ──→ CycleOrchestrator     │
+│                                                           │
+│  Fasi per ciclo:                                          │
+│    1. Health check                                        │
+│    2. Portfolio snapshot (PortfolioService)               │
+│    3. SL/TP/Trailing/Break-even (PositionManager)        │
+│    4. Emergency de-risk (RiskManager)                    │
+│    5. Correlazione asset (CorrelationEngine)             │
+│    6. Per-coin: technicals → LLM → risk → execute       │
+│    7. Persistenza stato (StateStore)                     │
 └──────────────────────────────────────────────────────────┘
 ```
 
+---
+
+## 💰 Costi Stimati
+
+| Componente | Costo |
+|-----------|-------|
+| **OpenRouter (Claude Opus 4.6)** | ~$0.50-2/giorno con 5 coin e ciclo 15min |
+| **Hyperliquid** | Nessun costo API, solo commissioni trading |
+| **Server** | Qualsiasi VPS da $5/mese o il tuo PC |
+
+---
+
+## 🔒 Sicurezza
+
+- La chiave privata non viene mai salvata come attributo — solo l'oggetto `Account` derivato
+- API key OpenRouter solo negli header della sessione HTTP
+- Dashboard protetta con `DASHBOARD_API_KEY` (opzionale)
+- File di stato con permessi `0o600` (solo proprietario)
+- Log sanitizzati prima di essere serviti alla dashboard
+- Wallet address validato contro la chiave privata all'avvio
+
+---
+
+## 📋 Variabili d'Ambiente Principali
+
+| Variabile | Default | Descrizione |
+|-----------|---------|-------------|
+| `EXECUTION_MODE` | `paper` | `paper` o `live` |
+| `TRADING_PAIRS` | 20 coin | Coin separate da virgola |
+| `DEFAULT_CYCLE_SEC` | `60` | Secondi tra cicli |
+| `ENABLE_ADAPTIVE_CYCLE` | `true` | Ciclo adattivo alla volatilità |
+| `DEFAULT_SL_PCT` | `0.03` | Stop-loss 3% |
+| `DEFAULT_TP_PCT` | `0.05` | Take-profit 5% |
+| `HARD_MAX_LEVERAGE` | `10` | Leverage massimo |
+| `MAX_DRAWDOWN_PCT` | `0.15` | Drawdown massimo 15% |
+| `DAILY_NOTIONAL_LIMIT_USD` | `1000` | Limite notionale giornaliero |
+
+Vedi `.env.example` per la lista completa.
+
+---
+
+## 🧪 Test
+
+```bash
+# Esegui tutti i test
+python -m pytest tests/ -v
+
+# Oppure singolarmente
+python tests/test_models.py
+python tests/test_risk_manager.py
+python tests/test_technical_indicators.py
+python tests/test_decimals.py
+python tests/test_state_store.py
+```
+
+---
+
 ## ⚠️ Disclaimer
 
-Questo software è fornito come-è senza garanzia. Il trading di criptovalute è altamente rischioso e può risultare in perdita totale di fondi. Testa sempre accuratamente in modalità paper e non rischiare mai più di quanto puoi permetterti di perdere.
+Questo software è fornito come-è senza garanzia. Il trading di criptovalute è altamente rischioso e può risultare in perdita totale di fondi. Testa sempre in paper mode e non rischiare mai più di quanto puoi permetterti di perdere.
