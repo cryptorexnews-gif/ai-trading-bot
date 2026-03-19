@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Hyperliquid Trading Bot con Órdenes Ejecutables
-Versión endurecida de seguridad: validación estricta, logs sanitizados y guardas de ejecución.
+Versión enterprise autónoma: guardas de riesgo, circuit breakers, logs sanitizados y operación sin intervención humana.
 """
 
 import os
@@ -20,12 +20,13 @@ from eth_account.messages import encode_typed_data
 from Crypto.Hash import keccak
 
 load_dotenv()
+os.makedirs("logs", exist_ok=True)
 
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     handlers=[
-        logging.FileHandler('logs/hyperliquid_bot_executable.log'),
+        logging.FileHandler("logs/hyperliquid_bot_executable.log"),
         logging.StreamHandler()
     ]
 )
@@ -82,9 +83,9 @@ class HyperliquidTradingBotExecutable:
         self.base_url = "https://api.hyperliquid.xyz"
         self.trading_pairs = trading_pairs or ["BTC", "ETH", "SOL", "BNB", "ADA"]
 
-        self.position_size = Decimal('0.15')
-        self.max_margin_usage = Decimal('0.95')
-        self.min_balance = Decimal('0.01')
+        self.position_size = Decimal("0.15")
+        self.max_margin_usage = Decimal("0.95")
+        self.min_balance = Decimal("0.01")
 
         self.max_order_margin_pct = Decimal(os.getenv("MAX_ORDER_MARGIN_PCT", "0.10"))
         self.hard_max_leverage = Decimal(os.getenv("HARD_MAX_LEVERAGE", "10"))
@@ -94,6 +95,13 @@ class HyperliquidTradingBotExecutable:
         self.enable_mainnet_trading = os.getenv("ENABLE_MAINNET_TRADING", "false").lower() == "true"
         self.allow_external_llm = os.getenv("ALLOW_EXTERNAL_LLM", "false").lower() == "true"
         self.include_portfolio_in_llm_prompt = os.getenv("LLM_INCLUDE_PORTFOLIO_CONTEXT", "false").lower() == "true"
+
+        self.max_trades_per_cycle = int(os.getenv("MAX_TRADES_PER_CYCLE", "2"))
+        self.max_consecutive_failed_cycles = int(os.getenv("MAX_CONSECUTIVE_FAILED_CYCLES", "3"))
+        self.max_drawdown_pct = Decimal(os.getenv("MAX_DRAWDOWN_PCT", "0.20"))
+        self.max_market_data_age_sec = int(os.getenv("MAX_MARKET_DATA_AGE_SEC", "120"))
+        self.health_file_path = os.getenv("HEALTH_FILE_PATH", "logs/agent_health.json")
+        self.meta_cache_ttl_sec = int(os.getenv("META_CACHE_TTL_SEC", "60"))
 
         self.allowed_actions = {action.value for action in TradingAction}
         self.min_size_by_coin: Dict[str, Decimal] = {
@@ -105,12 +113,21 @@ class HyperliquidTradingBotExecutable:
         }
 
         self.is_running = False
+        self.is_emergency_stopped = False
         self.last_analysis: Dict[str, Any] = {}
+        self.consecutive_failed_cycles = 0
+        self.peak_portfolio_value = Decimal("0")
+        self.last_cycle_timestamp = 0.0
+
+        self.session = requests.Session()
+        self._meta_cache: Optional[Dict[str, Any]] = None
+        self._meta_cache_at = 0.0
 
         derived_account = Account.from_key(self.private_key)
         if derived_account.address.lower() != self.wallet_address.lower():
             logger.error("Wallet address does not match private key derived address")
             raise ValueError("HYPERLIQUID_WALLET_ADDRESS does not match HYPERLIQUID_PRIVATE_KEY")
+
         logger.info(f"Bot initialized for wallet {self._mask_wallet(self.wallet_address)}")
         logger.info(f"Trading pairs: {self.trading_pairs}")
 
@@ -135,6 +152,38 @@ class HyperliquidTradingBotExecutable:
     def _log_http_error(self, context: str, status_code: int) -> None:
         logger.error(f"{context} failed with status={status_code} (response body redacted)")
 
+    def _post_info(self, payload: Dict[str, Any], timeout: int = 15) -> Optional[Any]:
+        response = self.session.post(f"{self.base_url}/info", json=payload, timeout=timeout)
+        if response.status_code != 200:
+            self._log_http_error(f"/info type={payload.get('type', 'unknown')}", response.status_code)
+            return None
+        return response.json()
+
+    def _post_exchange(self, payload: Dict[str, Any], timeout: int = 15) -> Optional[Any]:
+        response = self.session.post(
+            f"{self.base_url}/exchange",
+            json=payload,
+            headers={"Content-Type": "application/json"},
+            timeout=timeout
+        )
+        if response.status_code != 200:
+            self._log_http_error("/exchange", response.status_code)
+            return None
+        return response.json()
+
+    def _get_meta(self, force_refresh: bool = False) -> Optional[Dict[str, Any]]:
+        now = time.time()
+        if not force_refresh and self._meta_cache and (now - self._meta_cache_at) < self.meta_cache_ttl_sec:
+            return self._meta_cache
+
+        meta = self._post_info({"type": "meta"}, timeout=15)
+        if meta is None:
+            return None
+
+        self._meta_cache = meta
+        self._meta_cache_at = now
+        return meta
+
     def get_all_market_data(self) -> Dict[str, MarketData]:
         market_data: Dict[str, MarketData] = {}
 
@@ -151,12 +200,12 @@ class HyperliquidTradingBotExecutable:
                 continue
 
             indicators = technical_fetcher.get_technical_indicators(coin)
-            if indicators and self._safe_decimal(indicators.get('current_price', 0)) > Decimal("0"):
+            if indicators and self._safe_decimal(indicators.get("current_price", 0)) > Decimal("0"):
                 market_data[coin] = MarketData(
                     coin=coin,
-                    last_price=self._safe_decimal(indicators.get('current_price', 0)),
-                    change_24h=self._safe_decimal(indicators.get('change_24h', 0)),
-                    volume_24h=self._safe_decimal(indicators.get('volume_24h', 0)),
+                    last_price=self._safe_decimal(indicators.get("current_price", 0)),
+                    change_24h=self._safe_decimal(indicators.get("change_24h", 0)),
+                    volume_24h=self._safe_decimal(indicators.get("volume_24h", 0)),
                     funding_rate=Decimal("0.0001"),
                     timestamp=time.time()
                 )
@@ -173,15 +222,25 @@ class HyperliquidTradingBotExecutable:
 
         return market_data
 
+    def _market_data_is_fresh(self, data: Dict[str, MarketData]) -> bool:
+        now = time.time()
+        for coin, item in data.items():
+            if item.last_price <= 0:
+                logger.warning(f"Market data invalid for {coin}: price <= 0")
+                return False
+            age = now - item.timestamp
+            if age > self.max_market_data_age_sec:
+                logger.warning(f"Market data stale for {coin}: age={age:.1f}s > {self.max_market_data_age_sec}s")
+                return False
+        return True
+
     def get_portfolio_state(self) -> PortfolioState:
         payload = {"type": "clearinghouseState", "user": self.wallet_address}
-        response = requests.post(f"{self.base_url}/info", json=payload, timeout=15)
+        data = self._post_info(payload, timeout=15)
 
-        if response.status_code != 200:
-            self._log_http_error("Portfolio state request", response.status_code)
+        if data is None:
             return PortfolioState(Decimal("0"), Decimal("0"), Decimal("0"), {})
 
-        data = response.json()
         margin_summary = data.get("marginSummary", {})
         total_balance = self._safe_decimal(margin_summary.get("accountValue", 0))
         available_balance = self._safe_decimal(data.get("withdrawable", 0))
@@ -230,6 +289,31 @@ class HyperliquidTradingBotExecutable:
             margin_usage=margin_usage,
             positions=positions
         )
+
+    def _update_drawdown_guard(self, portfolio_state: PortfolioState) -> bool:
+        equity = portfolio_state.total_balance
+        if equity <= 0:
+            logger.error("Emergency stop: portfolio equity <= 0")
+            self.is_emergency_stopped = True
+            return False
+
+        if equity > self.peak_portfolio_value:
+            self.peak_portfolio_value = equity
+            return True
+
+        if self.peak_portfolio_value <= 0:
+            self.peak_portfolio_value = equity
+            return True
+
+        drawdown = (self.peak_portfolio_value - equity) / self.peak_portfolio_value
+        if drawdown >= self.max_drawdown_pct:
+            self.is_emergency_stopped = True
+            logger.error(
+                f"Emergency stop: drawdown {drawdown*100:.2f}% >= limit {self.max_drawdown_pct*100:.2f}%"
+            )
+            return False
+
+        return True
 
     def _build_sanitized_prompt(
         self,
@@ -392,7 +476,7 @@ class HyperliquidTradingBotExecutable:
             "max_tokens": 1400
         }
 
-        response = requests.post(
+        response = self.session.post(
             "https://api.deepseek.com/chat/completions",
             headers=headers,
             json=payload,
@@ -473,9 +557,13 @@ class HyperliquidTradingBotExecutable:
 
         return True
 
-    def execute_executable_order(self, coin: str, order: Dict[str, Any], market_data: MarketData) -> bool:
-        portfolio_state = self.get_portfolio_state()
-
+    def execute_executable_order(
+        self,
+        coin: str,
+        order: Dict[str, Any],
+        market_data: MarketData,
+        portfolio_state: PortfolioState
+    ) -> bool:
         action = order.get("action", "").strip().lower()
         size = self._safe_decimal(order.get("size", 0))
         leverage = int(order.get("leverage", 1))
@@ -526,10 +614,62 @@ class HyperliquidTradingBotExecutable:
         logger.warning(f"No execution path matched for {coin} action={action}")
         return False
 
+    def _write_health_snapshot(
+        self,
+        portfolio_state: PortfolioState,
+        trades_executed: List[str],
+        hold_decisions: List[str],
+        failed_checks: List[str]
+    ) -> None:
+        snapshot = {
+            "timestamp": int(time.time()),
+            "is_running": self.is_running,
+            "is_emergency_stopped": self.is_emergency_stopped,
+            "consecutive_failed_cycles": self.consecutive_failed_cycles,
+            "peak_portfolio_value": str(self.peak_portfolio_value),
+            "portfolio": {
+                "total_balance": str(portfolio_state.total_balance),
+                "available_balance": str(portfolio_state.available_balance),
+                "margin_usage": str(portfolio_state.margin_usage),
+                "open_positions": len(portfolio_state.positions)
+            },
+            "cycle": {
+                "executed_trades": trades_executed,
+                "hold_decisions": hold_decisions,
+                "failed_checks": failed_checks
+            }
+        }
+        with open(self.health_file_path, "w", encoding="utf-8") as file_obj:
+            json.dump(snapshot, file_obj, ensure_ascii=False, indent=2)
+
     def run_trading_cycle(self):
+        if self.is_emergency_stopped:
+            logger.error("Emergency stopped: trading cycle skipped.")
+            return
+
         logger.info("Starting trading cycle")
+        self.last_cycle_timestamp = time.time()
+
         portfolio_state = self.get_portfolio_state()
+        if not self._update_drawdown_guard(portfolio_state):
+            self.is_running = False
+            self._write_health_snapshot(portfolio_state, [], [], ["emergency_stop: drawdown/equity"])
+            return
+
         all_market_data = self.get_all_market_data()
+        if not self._market_data_is_fresh(all_market_data):
+            self.consecutive_failed_cycles += 1
+            logger.error(
+                f"Cycle failed due to invalid/stale market data. "
+                f"consecutive_failed_cycles={self.consecutive_failed_cycles}"
+            )
+            if self.consecutive_failed_cycles >= self.max_consecutive_failed_cycles:
+                self.is_emergency_stopped = True
+                self.is_running = False
+                logger.error("Emergency stop: too many consecutive failed cycles")
+            self._write_health_snapshot(portfolio_state, [], [], ["market_data_invalid_or_stale"])
+            return
+
         executable_orders = self.get_executable_orders_from_llm(all_market_data, portfolio_state)
 
         trades_executed: List[str] = []
@@ -539,6 +679,7 @@ class HyperliquidTradingBotExecutable:
         for coin in self.trading_pairs:
             order = executable_orders.get(coin, {})
             market_data = all_market_data.get(coin)
+
             if not market_data or market_data.last_price <= 0:
                 failed_checks.append(f"{coin}: no market data")
                 continue
@@ -552,44 +693,70 @@ class HyperliquidTradingBotExecutable:
                 hold_decisions.append(coin)
                 continue
 
-            success = self.execute_executable_order(coin, order, market_data)
+            if len(trades_executed) >= self.max_trades_per_cycle:
+                failed_checks.append(f"{coin}: max_trades_per_cycle reached")
+                continue
+
+            success = self.execute_executable_order(coin, order, market_data, portfolio_state)
             if success:
                 trades_executed.append(f"{coin}:{action}")
             else:
                 failed_checks.append(f"{coin}: execution failed")
 
-        self._print_cycle_summary(portfolio_state, trades_executed, hold_decisions, failed_checks)
+        catastrophic_cycle_failure = len(trades_executed) == 0 and len(failed_checks) >= len(self.trading_pairs)
+        if catastrophic_cycle_failure:
+            self.consecutive_failed_cycles += 1
+        else:
+            self.consecutive_failed_cycles = 0
+
+        if self.consecutive_failed_cycles >= self.max_consecutive_failed_cycles:
+            self.is_emergency_stopped = True
+            self.is_running = False
+            logger.error("Emergency stop: maximum consecutive failed cycles reached")
+
+        self._log_cycle_summary(portfolio_state, trades_executed, hold_decisions, failed_checks)
+        self._write_health_snapshot(portfolio_state, trades_executed, hold_decisions, failed_checks)
 
     def start(self, cycle_interval: int = 300):
         self.is_running = True
         logger.info(f"Starting bot (interval={cycle_interval}s)")
 
-        while self.is_running:
+        while self.is_running and not self.is_emergency_stopped:
+            cycle_start = time.time()
             self.run_trading_cycle()
-            logger.info(f"Sleeping {cycle_interval}s before next cycle")
-            time.sleep(cycle_interval)
 
-    def _print_cycle_summary(
+            elapsed = int(time.time() - cycle_start)
+            sleep_seconds = max(cycle_interval - elapsed, 1)
+            logger.info(f"Sleeping {sleep_seconds}s before next cycle")
+            time.sleep(sleep_seconds)
+
+        logger.warning("Bot stopped (normal stop or emergency stop).")
+
+    def _log_cycle_summary(
         self,
         portfolio_state: PortfolioState,
         trades_executed: List[str],
         hold_decisions: List[str],
         failed_checks: List[str]
     ):
-        print("\n" + "=" * 80)
-        print("CYCLE SUMMARY - Executable Orders Strategy")
-        print("=" * 80)
-        print(
-            f"Portfolio value ${portfolio_state.total_balance:.2f} | "
-            f"Available ${portfolio_state.available_balance:.2f} | "
-            f"Margin {portfolio_state.margin_usage*100:.1f}%"
+        logger.info(
+            f"CYCLE SUMMARY | portfolio=${portfolio_state.total_balance:.2f} "
+            f"available=${portfolio_state.available_balance:.2f} "
+            f"margin={portfolio_state.margin_usage*100:.1f}% "
+            f"executed={trades_executed if trades_executed else ['none']} "
+            f"holds={hold_decisions if hold_decisions else ['none']} "
+            f"failed={failed_checks if failed_checks else ['none']} "
+            f"consecutive_failed={self.consecutive_failed_cycles}"
         )
-        print(f"Executed trades: {', '.join(trades_executed) if trades_executed else 'none'}")
-        print(f"Hold decisions: {', '.join(hold_decisions) if hold_decisions else 'none'}")
-        print(f"Skipped/failed: {', '.join(failed_checks) if failed_checks else 'none'}")
-        print("=" * 80 + "\n")
 
-    def sign_l1_action_exact(self, action: Dict[str, Any], vault_address: Optional[str], nonce: int, expires_after: Optional[int], is_mainnet: bool = True) -> Dict[str, Any]:
+    def sign_l1_action_exact(
+        self,
+        action: Dict[str, Any],
+        vault_address: Optional[str],
+        nonce: int,
+        expires_after: Optional[int],
+        is_mainnet: bool = True
+    ) -> Dict[str, Any]:
         def address_to_bytes(address: str) -> bytes:
             return bytes.fromhex(address[2:].lower())
 
@@ -659,11 +826,9 @@ class HyperliquidTradingBotExecutable:
         is_buy = side.lower() == "buy"
 
         reference_price = price
-        meta_payload = {"type": "meta"}
-        meta_resp = requests.post(f"{self.base_url}/info", json=meta_payload, timeout=15)
-        if meta_resp.status_code == 200:
-            data = meta_resp.json()
-            for asset in data.get("universe", []):
+        meta_data = self._get_meta(force_refresh=False)
+        if meta_data is not None:
+            for asset in meta_data.get("universe", []):
                 if asset.get("name") == coin and asset.get("markPx") is not None:
                     reference_price = self._safe_decimal(asset.get("markPx"))
                     break
@@ -673,6 +838,7 @@ class HyperliquidTradingBotExecutable:
             limit_price = min(price, reference_price + (max_deviation * Decimal("0.5")))
         else:
             limit_price = max(price, reference_price - (max_deviation * Decimal("0.5")))
+
         lower_bound = reference_price - max_deviation
         upper_bound = reference_price + max_deviation
         if limit_price < lower_bound:
@@ -727,19 +893,10 @@ class HyperliquidTradingBotExecutable:
         }
 
         logger.info(f"Sending order: {coin} {side.upper()} size={size_str} limit={limit_price}")
-
-        response = requests.post(
-            f"{self.base_url}/exchange",
-            json=payload,
-            headers={"Content-Type": "application/json"},
-            timeout=15
-        )
-
-        if response.status_code != 200:
-            self._log_http_error("Order request", response.status_code)
+        result = self._post_exchange(payload, timeout=15)
+        if result is None:
             return False
 
-        result = response.json()
         if result.get("status") != "ok":
             logger.error("Order rejected by exchange (details redacted)")
             return False
@@ -795,17 +952,10 @@ class HyperliquidTradingBotExecutable:
             "vaultAddress": None
         }
 
-        response = requests.post(
-            f"{self.base_url}/exchange",
-            json=payload,
-            headers={"Content-Type": "application/json"},
-            timeout=15
-        )
-        if response.status_code != 200:
-            self._log_http_error("Leverage update request", response.status_code)
+        result = self._post_exchange(payload, timeout=15)
+        if result is None:
             return False
 
-        result = response.json()
         if result.get("status") == "ok":
             logger.info(f"Leverage set for {coin}: {leverage}x")
             return True
@@ -814,35 +964,31 @@ class HyperliquidTradingBotExecutable:
         return False
 
     def _get_asset_id(self, coin: str) -> Optional[int]:
-        payload = {"type": "meta"}
-        response = requests.post(f"{self.base_url}/info", json=payload, timeout=15)
-        if response.status_code != 200:
-            logger.error(f"Failed to get meta for asset IDs: status={response.status_code}")
+        meta = self._get_meta(force_refresh=False)
+        if meta is None:
             return None
 
-        data = response.json()
-        for index, asset in enumerate(data.get("universe", [])):
+        for index, asset in enumerate(meta.get("universe", [])):
             if asset.get("name") == coin:
                 return index
         return None
 
     def _get_tick_size_and_precision(self, asset_id: int) -> Tuple[Decimal, int]:
-        payload = {"type": "allMids"}
-        response = requests.post(f"{self.base_url}/info", json=payload, timeout=15)
-        if response.status_code == 200:
-            market_data = response.json()
-            meta_resp = requests.post(f"{self.base_url}/info", json={"type": "meta"}, timeout=15)
-            if meta_resp.status_code == 200:
-                universe = meta_resp.json().get("universe", [])
-                if 0 <= asset_id < len(universe):
-                    coin = universe[asset_id].get("name", "")
-                    raw_price = str(market_data.get(coin, "0"))
-                    if "." in raw_price:
-                        decimals = len(raw_price.rstrip("0").split(".")[1]) if raw_price.rstrip("0").split(".")[1] else 0
-                    else:
-                        decimals = 0
-                    tick_size = Decimal("1").scaleb(-decimals) if decimals > 0 else Decimal("1")
-                    return tick_size, decimals
+        market_data = self._post_info({"type": "allMids"}, timeout=15)
+        meta = self._get_meta(force_refresh=False)
+
+        if market_data is not None and meta is not None:
+            universe = meta.get("universe", [])
+            if 0 <= asset_id < len(universe):
+                coin = universe[asset_id].get("name", "")
+                raw_price = str(market_data.get(coin, "0"))
+                if "." in raw_price:
+                    right_side = raw_price.rstrip("0").split(".")[1]
+                    decimals = len(right_side) if right_side else 0
+                else:
+                    decimals = 0
+                tick_size = Decimal("1").scaleb(-decimals) if decimals > 0 else Decimal("1")
+                return tick_size, decimals
 
         default_tick_sizes: Dict[int, Tuple[Decimal, int]] = {
             0: (Decimal("0.1"), 1),       # BTC
@@ -854,13 +1000,11 @@ class HyperliquidTradingBotExecutable:
         return default_tick_sizes.get(asset_id, (Decimal("0.01"), 2))
 
     def _get_max_leverage(self, coin: str) -> int:
-        payload = {"type": "meta"}
-        response = requests.post(f"{self.base_url}/info", json=payload, timeout=15)
-        if response.status_code != 200:
+        meta = self._get_meta(force_refresh=False)
+        if meta is None:
             return 10
 
-        data = response.json()
-        for asset in data.get("universe", []):
+        for asset in meta.get("universe", []):
             if asset.get("name") == coin:
                 return int(asset.get("maxLeverage", 10))
         return 10
@@ -875,10 +1019,15 @@ def main():
 
     wallet_address = os.getenv("HYPERLIQUID_WALLET_ADDRESS")
     private_key = os.getenv("HYPERLIQUID_PRIVATE_KEY")
-    deepseek_api_key = os.getenv("DEEPSEEK_API_KEY")
+    deepseek_api_key = os.getenv("DEEPSEEK_API_KEY", "")
+    allow_external_llm = os.getenv("ALLOW_EXTERNAL_LLM", "false").lower() == "true"
 
-    if not all([wallet_address, private_key, deepseek_api_key]):
-        logger.error("Missing required environment variables")
+    if not wallet_address or not private_key:
+        logger.error("Missing required environment variables: HYPERLIQUID_WALLET_ADDRESS / HYPERLIQUID_PRIVATE_KEY")
+        return
+
+    if allow_external_llm and not deepseek_api_key:
+        logger.error("ALLOW_EXTERNAL_LLM=true but DEEPSEEK_API_KEY is missing")
         return
 
     bot = HyperliquidTradingBotExecutable(
