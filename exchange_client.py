@@ -9,6 +9,16 @@ from Crypto.Hash import keccak
 from eth_account import Account
 from eth_account.messages import encode_typed_data
 
+from utils.circuit_breaker import get_or_create_circuit_breaker, CircuitBreakerOpenError
+from utils.decimals import (
+    to_decimal as utils_to_decimal,
+    quantize_price,
+    quantize_with_precision,
+    calculate_margin,
+    add_percentage,
+    subtract_percentage
+)
+from utils.retry import retry_http, DEFAULT_RETRY_CONFIG
 
 logger = logging.getLogger(__name__)
 
@@ -34,35 +44,74 @@ class HyperliquidExchangeClient:
         self.account = Account.from_key(self.private_key)
         self._meta_cache: Optional[Dict[str, Any]] = None
         self._meta_cache_at = 0.0
+        
+        # Circuit breakers for different endpoints
+        self._info_cb = get_or_create_circuit_breaker(
+            "hyperliquid_info",
+            failure_threshold=5,
+            recovery_timeout=30.0
+        )
+        self._exchange_cb = get_or_create_circuit_breaker(
+            "hyperliquid_exchange",
+            failure_threshold=3,
+            recovery_timeout=60.0
+        )
 
     def _safe_decimal(self, value: Any, default: Decimal = Decimal("0")) -> Decimal:
-        return Decimal(str(value)) if value is not None else default
+        """Use centralized decimal conversion."""
+        return utils_to_decimal(value, default)
 
-    def _post_info(self, payload: Dict[str, Any], timeout: int = 15) -> Optional[Any]:
-        response = self.session.post(f"{self.base_url}/info", json=payload, timeout=timeout)
-        if response.status_code != 200:
-            logger.error(f"/info type={payload.get('type', 'unknown')} failed status={response.status_code}")
+    def _post_info_with_retry(self, payload: Dict[str, Any], timeout: int = 15) -> Optional[Any]:
+        """POST to /info with retry and circuit breaker."""
+        def _do_post():
+            response = self.session.post(
+                f"{self.base_url}/info",
+                json=payload,
+                timeout=timeout
+            )
+            if response.status_code != 200:
+                logger.error(f"/info type={payload.get('type', 'unknown')} failed status={response.status_code}")
+                response.raise_for_status()  # Will trigger retry
+            return response.json()
+        
+        try:
+            return self._info_cb.call(_do_post)
+        except CircuitBreakerOpenError:
+            logger.error("Circuit breaker OPEN for /info endpoint")
             return None
-        return response.json()
+        except Exception as e:
+            logger.error(f"Error in _post_info_with_retry: {type(e).__name__}: {str(e)}")
+            return None
 
-    def _post_exchange(self, payload: Dict[str, Any], timeout: int = 15) -> Optional[Any]:
-        response = self.session.post(
-            f"{self.base_url}/exchange",
-            json=payload,
-            headers={"Content-Type": "application/json"},
-            timeout=timeout
-        )
-        if response.status_code != 200:
-            logger.error(f"/exchange failed status={response.status_code}")
+    def _post_exchange_with_retry(self, payload: Dict[str, Any], timeout: int = 15) -> Optional[Any]:
+        """POST to /exchange with retry and circuit breaker."""
+        def _do_post():
+            response = self.session.post(
+                f"{self.base_url}/exchange",
+                json=payload,
+                headers={"Content-Type": "application/json"},
+                timeout=timeout
+            )
+            if response.status_code != 200:
+                logger.error(f"/exchange failed status={response.status_code}")
+                response.raise_for_status()
+            return response.json()
+        
+        try:
+            return self._exchange_cb.call(_do_post)
+        except CircuitBreakerOpenError:
+            logger.error("Circuit breaker OPEN for /exchange endpoint")
             return None
-        return response.json()
+        except Exception as e:
+            logger.error(f"Error in _post_exchange_with_retry: {type(e).__name__}: {str(e)}")
+            return None
 
     def get_meta(self, force_refresh: bool = False) -> Optional[Dict[str, Any]]:
         now = time.time()
         if not force_refresh and self._meta_cache and (now - self._meta_cache_at) < self.meta_cache_ttl_sec:
             return self._meta_cache
 
-        meta = self._post_info({"type": "meta"}, timeout=15)
+        meta = self._post_info_with_retry({"type": "meta"}, timeout=15)
         if meta is None:
             return None
 
@@ -71,7 +120,7 @@ class HyperliquidExchangeClient:
         return meta
 
     def get_user_state(self, user: str) -> Optional[Dict[str, Any]]:
-        return self._post_info({"type": "clearinghouseState", "user": user}, timeout=15)
+        return self._post_info_with_retry({"type": "clearinghouseState", "user": user}, timeout=15)
 
     def get_asset_id(self, coin: str) -> Optional[int]:
         meta = self.get_meta(force_refresh=False)
@@ -101,7 +150,7 @@ class HyperliquidExchangeClient:
         return fallback_price
 
     def get_tick_size_and_precision(self, asset_id: int) -> Tuple[Decimal, int]:
-        mids = self._post_info({"type": "allMids"}, timeout=15)
+        mids = self._post_info_with_retry({"type": "allMids"}, timeout=15)
         meta = self.get_meta(force_refresh=False)
 
         if mids is not None and meta is not None:
@@ -220,14 +269,14 @@ class HyperliquidExchangeClient:
             "vaultAddress": None
         }
 
-        result = self._post_exchange(payload, timeout=15)
+        result = self._post_exchange_with_retry(payload, timeout=15)
         if result is None:
             return False
         if result.get("status") == "ok":
             logger.info(f"LIVE leverage set {coin} -> {leverage}x")
             return True
 
-        logger.error(f"Failed to set leverage for {coin}")
+        logger.error(f"Failed to set leverage for {coin}: {result}")
         return False
 
     def place_order(
@@ -300,7 +349,7 @@ class HyperliquidExchangeClient:
             "vaultAddress": None
         }
 
-        result = self._post_exchange(payload, timeout=15)
+        result = self._post_exchange_with_retry(payload, timeout=15)
         if result is None:
             return {"success": False, "mode": "live", "reason": "http_error", "notional": "0"}
         if result.get("status") != "ok":

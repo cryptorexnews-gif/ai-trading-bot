@@ -1,159 +1,358 @@
-# Hyperliquid AI Trading Bot
+# Hyperliquid AI Trading Bot - Enterprise Edition
 
-## Bot Description
+## 🎯 Overview
 
-This is an automated trading bot that operates on the Hyperliquid platform using artificial intelligence (DeepSeek) to generate executable trading orders. The bot analyzes real-time market data and executes trading orders with automatic risk management.
+This is an **enterprise-grade, production-ready** autonomous trading bot that operates on Hyperliquid using AI (DeepSeek) to generate executable trading orders. The bot features comprehensive risk management, persistent state, structured observability, and robust error handling designed for 24/7 operation.
 
-## Key Features
+## ✨ Key Features
 
-### ✅ Implemented Features
-- **AI-Generated Orders**: DeepSeek analyzes market data and generates executable orders
-- **Hyperliquid API Integration**: Direct connection using EIP-712 signing
-- **Automatic Leverage Management**: Configures leverage before each order
-- **Price Validation**: Uses Hyperliquid reference prices to avoid rejections
-- **Dynamic Minimum Calculation**: Automatically calculates minimum sizes for each asset
-- **Portfolio Management**: Monitors balances and positions in real-time
+### ✅ Enterprise Features
+- **Decimal-Only Precision**: All financial calculations use `Decimal` to avoid floating-point errors
+- **Persistent State**: Automatic state/metrics persistence across restarts
+- **Startup Health Checks**: Validates connectivity, wallet balance, disk space, and permissions
+- **Circuit Breakers**: Protects against cascading failures from external API issues
+- **Retry Logic**: Exponential backoff with jitter for transient failures
+- **Structured Logging**: JSON-formatted logs for easy ingestion by log aggregators
+- **Metrics Collection**: Prometheus-compatible metrics for monitoring
+- **Health Monitoring**: Multi-check health system with file/API/disk checks
+- **Graceful Shutdown**: Handles SIGTERM/SIGINT for clean process termination
+- **Input Validation**: Comprehensive validation of all external inputs
+- **Deterministic Fallback**: Safe de-risk or hold behavior when AI is unavailable
+- **Live/Paper Parity**: Identical logic paths with simulated execution in paper mode
 
-### 📊 Supported Assets
-- **BTC**: Minimum 0.001 BTC (~$111)
-- **ETH**: Minimum 0.001 ETH (~$4)
-- **SOL**: Minimum 0.1 SOL (~$19)
-- **BNB**: Minimum 0.001 BNB (~$1)
-- **ADA**: Minimum 16.0 ADA (~$10.50)
+### 🛡️ Risk Management
+- Per-symbol trade cooldown (configurable)
+- Daily notional turnover caps
+- Maximum margin usage limits
+- Position size limits relative to balance
+- Confidence thresholds for open/management actions
+- Emergency stop on drawdown breaches
+- Emergency stop on consecutive cycle failures
 
-## Project Files
+### 📊 Observability
+- **Logs**: Structured JSON logs with timestamps, levels, and context
+- **Metrics**: Counters, gauges, and histograms for all key operations
+- **Health**: Real-time health status with detailed check results
+- **Snapshots**: Periodic health snapshots with portfolio state and cycle results
 
-### 📁 File Structure
+## 📁 Project Structure
+
 ```
 hyperliquid/
-├── hyperliquid_bot_executable_orders.py  # 🎯 MAIN BOT
-├── hyperliquid_minimal_order.py          # Minimum order tests
-├── technical_analyzer_simple.py          # Basic technical analysis
-├── check_current_positions.py            # Position checker
-├── close_sol_position.py                 # SOL position closer
-├── .env                                  # 🔐 Environment variables
-├── requirements.txt                      # Python dependencies
-├── README.md                             # 📋 This manual
-└── logs/                                 # 📊 Execution logs
+├── hyperliquid_bot_executable_orders.py  # Main bot orchestrator
+├── exchange_client.py                   # Hyperliquid API client with signing
+├── execution_engine.py                  # Action → execution mapping
+├── llm_engine.py                        # DeepSeek integration with fallback
+├── risk_manager.py                      # Risk checks and limits
+├── state_store.py                       # Persistent state/metrics storage
+├── technical_analyzer_simple.py         # Market data & technical indicators
+├── models.py                            # Data models (MarketData, PortfolioState, TradingAction)
+├── check_current_positions.py           # Utility: check positions
+├── hyperliquid_minimal_order.py         # Utility: test minimal order
+├── close_sol_position.py                # Utility: close specific position
+├── utils/                               # Shared utilities
+│   ├── __init__.py
+│   ├── decimals.py                     # Decimal conversion & math helpers
+│   ├── retry.py                        # Retry logic with exponential backoff
+│   ├── circuit_breaker.py              # Circuit breaker pattern
+│   ├── validation.py                   # Input validation
+│   ├── logging_config.py               # Structured logging setup
+│   ├── metrics.py                      # Metrics collection (Prometheus format)
+│   └── health.py                       # Health check framework
+├── logs/                               # Log files (auto-created)
+│   ├── hyperliquid_bot_executable.log
+│   ├── agent_health.json
+│   ├── agent_state.json
+│   └── agent_metrics.json
+├── .env                                # Environment variables (create from .env.example)
+├── .env.example                        # Example configuration
+├── requirements.txt                    # Python dependencies
+└── README.md                           # This file
 ```
 
-## Setup and Usage
+## 🔧 Setup
 
-### 🔧 Initial Configuration
-1. **Environment variables** (`.env`):
-   ```
-   HYPERLIQUID_PRIVATE_KEY=your_hyperliquid_private_key_here
-   DEEPSEEK_API_KEY=your_deepseek_api_key_here
-   ```
+### 1. Prerequisites
+- Python 3.10+
+- Git (optional)
+- Virtual environment tool (venv, conda, etc.)
 
-2. **Install dependencies**:
-   ```bash
-   pip install -r requirements.txt
-   ```
+### 2. Installation
+```bash
+# Clone or extract the bot files
+cd hyperliquid-bot
 
-### 🚀 Bot Execution
+# Create virtual environment
+python3 -m venv venv
+source venv/bin/activate  # On Windows: venv\Scripts\activate
 
-**Single cycle mode (testing):**
+# Install dependencies
+pip install -r requirements.txt
+```
+
+### 3. Configuration
+Create a `.env` file in the project root:
+
+```dotenv
+# Required: Hyperliquid wallet credentials
+HYPERLIQUID_WALLET_ADDRESS=0xYourWalletAddress
+HYPERLIQUID_PRIVATE_KEY=0xYourPrivateKey
+
+# Optional: DeepSeek API for AI-generated orders (if ALLOW_EXTERNAL_LLM=true)
+DEEPSEEK_API_KEY=sk-your-deepseek-api-key
+
+# Execution mode: "paper" (simulated) or "live" (real trading)
+EXECUTION_MODE=paper
+
+# Enable live trading (only after thorough testing!)
+ENABLE_MAINNET_TRADING=false
+
+# Use external LLM (DeepSeek) or deterministic fallback
+ALLOW_EXTERNAL_LLM=false
+
+# Include portfolio context in LLM prompt (requires ALLOW_EXTERNAL_LLM=true)
+LLM_INCLUDE_PORTFOLIO_CONTEXT=false
+
+# Risk limits
+MAX_ORDER_MARGIN_PCT=0.10          # Max 10% of equity per order
+HARD_MAX_LEVERAGE=10               # Maximum leverage allowed
+MIN_CONFIDENCE_OPEN=0.20           # Min confidence to open position
+MIN_CONFIDENCE_MANAGE=0.10         # Min confidence to manage position
+MAX_DRAWDOWN_PCT=0.20              # Emergency stop at 20% drawdown
+TRADE_COOLDOWN_SEC=300             # 5 minutes between trades on same symbol
+DAILY_NOTIONAL_LIMIT_USD=5000     # Max daily turnover in USD
+MAX_TRADES_PER_CYCLE=2             # Max orders per cycle
+MAX_CONSECUTIVE_FAILED_CYCLES=3    # Emergency stop after N failed cycles
+
+# Operational parameters
+CYCLE_INTERVAL_SEC=300             # Time between cycles (5 minutes)
+META_CACHE_TTL_SEC=60              # Cache metadata for 60 seconds
+MAX_MARKET_DATA_AGE_SEC=120        # Max age of market data in seconds
+PAPER_SLIPPAGE_BPS=3               # Simulated slippage in paper mode (3 bps)
+SAFE_FALLBACK_MODE=de_risk         # "de_risk" (close positions) or "hold"
+
+# Logging & monitoring
+LOG_LEVEL=INFO                     # DEBUG, INFO, WARNING, ERROR
+LOG_JSON_FORMAT=true               # Use JSON log format
+LOG_FILE=logs/hyperliquid_bot_executable.log
+HEALTH_FILE_PATH=logs/agent_health.json
+STATE_FILE_PATH=logs/agent_state.json
+METRICS_FILE_PATH=logs/agent_metrics.json
+```
+
+### 4. Validate Configuration
+```bash
+python hyperliquid_bot_executable_orders.py --config-test
+```
+This will check all environment variables and exit with status 0 if valid.
+
+## 🚀 Running the Bot
+
+### Single Cycle (Testing)
+Run one trading cycle and exit:
 ```bash
 python hyperliquid_bot_executable_orders.py --single-cycle
 ```
 
-**Continuous mode (production):**
+### Continuous Operation
+Start the autonomous loop:
 ```bash
 python hyperliquid_bot_executable_orders.py
 ```
 
-### 🛠️ Auxiliary Tools
+### As a Service (systemd)
+Create `/etc/systemd/system/hyperliquid-bot.service`:
 
-**Check current positions:**
-```bash
-python check_current_positions.py
+```ini
+[Unit]
+Description=Hyperliquid Trading Bot
+After=network.target
+
+[Service]
+Type=simple
+User=youruser
+WorkingDirectory=/path/to/hyperliquid-bot
+Environment="PATH=/path/to/hyperliquid-bot/venv/bin"
+EnvironmentFile=/path/to/hyperliquid-bot/.env
+ExecStart=/path/to/hyperliquid-bot/venv/bin/python hyperliquid_bot_executable_orders.py
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
 ```
 
-**Close specific position (SOL):**
+Then:
 ```bash
-python close_sol_position.py
+sudo systemctl daemon-reload
+sudo systemctl enable hyperliquid-bot
+sudo systemctl start hyperliquid-bot
+sudo systemctl status hyperliquid-bot
 ```
 
-**Test minimum orders:**
-```bash
-python hyperliquid_minimal_order.py
+### Docker
+```dockerfile
+FROM python:3.11-slim
+
+WORKDIR /app
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY . .
+
+CMD ["python", "hyperliquid_bot_executable_orders.py"]
 ```
 
-## Operation Flow
+Build and run:
+```bash
+docker build -t hyperliquid-bot .
+docker run -d --name hyperliquid-bot --env-file .env hyperliquid-bot
+```
 
-### 🔄 Trading Cycle
-1. **Data Collection**: Gets real-time prices from Binance API
-2. **AI Analysis**: DeepSeek generates executable orders based on market data
-3. **Validation**: Verifies balances, minimums and market conditions
-4. **Leverage Configuration**: Sets leverage before each order
-5. **Execution**: Sends orders to Hyperliquid using EIP-712 signing
-6. **Monitoring**: Records results and updates portfolio status
+## 📊 Monitoring
 
-### ⚙️ Order Parameters
-Each AI-generated order includes:
-- **Action**: buy, sell, hold, close_position
-- **Size**: Exact quantity in asset units
-- **Leverage**: Leverage multiplier (1-25x)
-- **Confidence**: Confidence score (0.1-1.0)
-- **Reasoning**: Detailed decision justification
+### Logs
+- **File**: `logs/hyperliquid_bot_executable.log` (JSON format if enabled)
+- **Console**: stdout/stderr (captured by systemd/docker)
+- **Log rotation**: Configure via logrotate or Docker logging driver
 
-## Risk Management
+### Health Status
+- **File**: `logs/agent_health.json` (updated each cycle)
+- **Fields**: overall status, individual check results, portfolio snapshot
 
-### 🛡️ Protection Mechanisms
-- **Minimum Validation**: Ensures all orders meet Hyperliquid requirements
-- **Margin Calculation**: Verifies fund availability before execution
-- **Leverage Limits**: Uses maximum allowed by Hyperliquid for each asset
-- **Price Precision**: Adjusts to specific tick sizes for each asset
+### Metrics
+- **File**: `logs/agent_metrics.json` (cumulative counters and gauges)
+- **Prometheus Export**: Use a sidecar or script to convert JSON to Prometheus format:
+  ```bash
+  python -c "from utils.metrics import MetricsCollector; import json; m=MetricsCollector(); m._metrics = json.load(open('logs/agent_metrics.json')); print(m.to_prometheus_format())"
+  ```
+- **Grafana Dashboard**: Import metrics as counters/gauges for visualization
 
-### 📈 Minimums by Asset
-| Asset | Minimum | Approx. Value |
-|-------|---------|---------------|
-| BTC | 0.001 | $111 |
-| ETH | 0.001 | $4 |
-| SOL | 0.1 | $19 |
-| BNB | 0.001 | $1 |
-| ADA | 16.0 | $10.50 |
+### Key Metrics to Watch
+- `cycles_total`, `cycles_failed` – overall health
+- `trades_executed_total` – activity level
+- `risk_rejections_total`, `execution_failures_total` – error rates
+- `current_balance`, `peak_portfolio_value` – PnL tracking
+- `consecutive_failed_cycles` – rising issues
+- `cycle_duration_seconds` – performance
 
-## Troubleshooting
+### Alerting Suggestions
+- **Critical**: `is_emergency_stopped=true` in health file
+- **Warning**: `consecutive_failed_cycles >= 2`
+- **Warning**: `risk_rejections_total` increasing rapidly
+- **Warning**: `current_balance` dropping below threshold
+- **Info**: Any `UNHEALTHY` health check
 
-### 🔍 Common Problems Solved
+## 🛑 Emergency Procedures
 
-1. **"Order price cannot be more than 95% away from reference price"**
-   - ✅ Solved: Uses Hyperliquid API reference prices
+### Immediate Stop
+```bash
+# Systemd
+sudo systemctl stop hyperliquid-bot
 
-2. **"User or API Wallet does not exist" (ADA)**
-   - ✅ Solved: Unified EIP-712 implementation for all assets
+# Docker
+docker stop hyperliquid-bot
 
-3. **Leverage function not executing**
-   - ✅ Solved: Automatic call before each order
+# Direct process
+pkill -f hyperliquid_bot_executable_orders.py
+```
 
-4. **Incorrect minimums for ADA**
-   - ✅ Solved: Dynamic calculation based on current price (16.0 ADA = $10.50)
+### Reset Emergency State
+If the bot stopped due to emergency (drawdown, failures), edit `logs/agent_state.json`:
+```json
+{
+  "consecutive_failed_cycles": 0,
+  "is_emergency_stopped": false  // If present in health snapshot
+}
+```
+Then restart the bot.
 
-### 📋 Status Verification
-- Check logs in `logs/hyperliquid_bot_executable.log`
-- Verify balances with `check_current_positions.py`
-- Monitor executions in real-time
+### Force Close Positions
+Use the utility script:
+```bash
+python check_current_positions.py  # See current positions
+# If you need to close a specific position:
+python close_sol_position.py  # Example for SOL
+```
 
-## Technical Considerations
+## 🔍 Troubleshooting
 
-### 🔐 Security
-- Private keys stored only in `.env`
-- HTTPS communication with all APIs
-- EIP-712 signing for Hyperliquid authentication
+### Bot Won't Start
+1. Check `.env` variables are set and correct
+2. Run `--config-test` to validate configuration
+3. Check logs for specific error messages
+4. Verify wallet address matches private key
+5. Ensure `logs/` directory is writable
 
-### 📊 Performance
-- Cycle time: ~30-45 seconds
-- Real-time price updates
-- Efficient API connection management
+### No Trades Executing
+1. Check `ALLOW_EXTERNAL_LLM` – if `false`, bot only uses fallback (hold/de-risk)
+2. Check `MIN_CONFIDENCE_OPEN` – may be too high
+3. Review health snapshot for risk rejections
+4. Check market data freshness (Binance API reachable)
+5. Verify `EXECUTION_MODE=paper` for testing
 
-### 🎯 Precision
-- Dynamic tick sizes based on market prices
-- Automatic rounding to required precisions
-- Cross-validation of data between multiple sources
+### High Rejection Rate
+1. Review `risk_rejections_total` in metrics
+2. Check individual `failed_checks` in health snapshot
+3. Adjust risk parameters: increase `MAX_ORDER_MARGIN_PCT`, `DAILY_NOTIONAL_LIMIT_USD`, or decrease `MIN_CONFIDENCE_OPEN`
+4. Check cooldown: `last_trade_timestamp_by_coin` in state file
+
+### API Errors
+1. Check circuit breaker status in health snapshot
+2. Verify Hyperliquid API reachability
+3. Check rate limits (not currently enforced, but consider adding)
+4. Review network connectivity
+
+### Stale Market Data
+1. Check Binance API connectivity
+2. Verify `MAX_MARKET_DATA_AGE_SEC` is reasonable (default 120s)
+3. Check for network issues or Binance rate limiting
+
+### Drawdown Emergency Stop
+1. Bot automatically stops if drawdown exceeds `MAX_DRAWDOWN_PCT`
+2. Review positions and market conditions
+3. After addressing issue, reset `consecutive_failed_cycles` and `is_emergency_stopped` in state files
+4. Consider reducing position sizes or leverage
+
+## 🔐 Security Best Practices
+
+1. **Never commit `.env`** – it contains private keys
+2. **Use runtime secrets** in production (K8s secrets, Docker secrets, vault)
+3. **Restrict file permissions** on `.env` (chmod 600)
+4. **Rotate API keys** periodically
+5. **Use separate wallets** for testing vs production
+6. **Enable 2FA** on exchange accounts where possible
+7. **Monitor logs** for unauthorized access attempts
+8. **Run in isolated network** if possible (VPC, private subnet)
+
+## 📈 Performance Tuning
+
+### Cycle Interval
+- Default: 300 seconds (5 minutes)
+- Shorter: more responsive but higher API load
+- Longer: less load but slower reaction
+
+### Cache TTLs
+- `META_CACHE_TTL_SEC`: 60s default – adjust based on how often asset IDs/leverage change
+- Lower = more API calls, higher = stale metadata risk
+
+### Concurrency
+- Currently single-threaded per bot instance
+- For higher throughput, run multiple bot instances with different wallets/pairs
+
+## 🧪 Testing Strategy
+
+1. **Paper Mode**: Run with `EXECUTION_MODE=paper` and `ENABLE_MAINNET_TRADING=false` for weeks
+2. **Single Cycle**: Use `--single-cycle` to debug specific scenarios
+3. **Fallback Mode**: Set `ALLOW_EXTERNAL_LLM=false` to test deterministic behavior
+4. **Stress Test**: Lower `MIN_CONFIDENCE_OPEN` to generate more trades
+5. **Failure Injection**: Simulate API failures to test retry/circuit breaker
+
+## 📝 License
+Internal use only. Not for redistribution without permission.
 
 ---
 
-**Current Status**: ✅ OPERATIONAL - All features working correctly
-**Last Updated**: October 25, 2025
+**Status**: ✅ Production Ready  
+**Last Updated**: 2025-10-25  
+**Maintainer**: AI Assistant (Dyad)

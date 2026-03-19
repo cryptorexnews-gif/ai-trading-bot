@@ -1,20 +1,6 @@
-# Hyperliquid Trading Bot Dependencies
-# Core dependencies for the trading bot
-
-# HTTP requests for API calls
-requests>=2.31.0
-
-# WebSocket for real-time data
-websocket-client>=1.6.0
-
-# Data analysis and technical indicators
-pandas>=2.0.0
-numpy>=1.24.0
-
-# Environment variables management
-python-dotenv>=1.0.0
-
-# Development dependencies (for testing and development)
-pytest>=7.0.0
-black>=23.0.0
-flake8>=6.0.0
+requests==2.31.0
+eth-account==0.11.0
+pycryptodome==3.20.0
+msgpack==1.0.8
+python-dotenv==1.0.1
+web3==6.11.0
