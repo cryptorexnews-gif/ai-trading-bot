@@ -10,6 +10,8 @@ import PositionsTable from './components/PositionsTable'
 import ManagedPositions from './components/ManagedPositions'
 import TradeHistory from './components/TradeHistory'
 import EquityChart from './components/EquityChart'
+import PriceChart from './components/PriceChart'
+import OrderBook from './components/OrderBook'
 import CircuitBreakerStatus from './components/CircuitBreakerStatus'
 import LogViewer from './components/LogViewer'
 import DrawdownBar from './components/DrawdownBar'
@@ -152,7 +154,17 @@ export default function App() {
           </div>
         )}
 
-        {/* Charts & Positions */}
+        {/* Price Chart & Order Book */}
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
+          <div className="lg:col-span-2">
+            <PriceChart tradingPairs={tradingPairs} />
+          </div>
+          <div>
+            <OrderBook tradingPairs={tradingPairs} />
+          </div>
+        </div>
+
+        {/* Equity & Positions */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
           <EquityChart equityCurve={equityCurve} equitySnapshots={equitySnapshots} />
           <PositionsTable positions={positions} />

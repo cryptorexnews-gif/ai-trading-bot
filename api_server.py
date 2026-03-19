@@ -15,6 +15,7 @@ from decimal import Decimal
 from functools import wraps
 from typing import Any, Dict
 
+import requests
 from flask import Flask, Response, jsonify, request
 from flask_cors import CORS
 
@@ -27,11 +28,9 @@ logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 
-# Security Fix #3: Restrict CORS to specific origins instead of allowing all
 CORS_ORIGINS = os.getenv("CORS_ALLOWED_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000").split(",")
 CORS(app, origins=[o.strip() for o in CORS_ORIGINS if o.strip()])
 
-# Security Fix #3: API key authentication
 API_AUTH_KEY = os.getenv("DASHBOARD_API_KEY", "")
 
 STATE_PATH = "state/bot_state.json"
@@ -39,19 +38,18 @@ METRICS_PATH = "state/bot_metrics.json"
 LIVE_STATUS_PATH = "state/bot_live_status.json"
 MANAGED_POSITIONS_PATH = "state/managed_positions.json"
 
+HYPERLIQUID_BASE_URL = os.getenv("HYPERLIQUID_BASE_URL", "https://api.hyperliquid.xyz")
+
 state_store = StateStore(STATE_PATH, METRICS_PATH)
 
-# Metrics collector for Prometheus export
 _metrics_collector = MetricsCollector()
 
-# Security Fix #2: Explicit blocklist of secret env var patterns
 _SECRET_ENV_PATTERNS = {
     "KEY", "TOKEN", "SECRET", "PASSWORD", "PRIVATE", "CREDENTIAL", "AUTH"
 }
 
 
 def _is_secret_env_var(name: str) -> bool:
-    """Check if an environment variable name looks like a secret."""
     name_upper = name.upper()
     for pattern in _SECRET_ENV_PATTERNS:
         if pattern in name_upper:
@@ -59,33 +57,24 @@ def _is_secret_env_var(name: str) -> bool:
     return False
 
 
-# Security Fix #5: Log sanitization patterns
 _SENSITIVE_PATTERNS = [
-    # Ethereum private keys (64 hex chars)
     (re.compile(r'(0x)?[0-9a-fA-F]{64}'), '[REDACTED_KEY]'),
-    # Bearer tokens
     (re.compile(r'Bearer\s+[A-Za-z0-9\-._~+/]+=*', re.IGNORECASE), 'Bearer [REDACTED]'),
-    # API keys (common patterns: sk-..., or long alphanumeric strings after "key"/"token")
     (re.compile(r'(sk-[A-Za-z0-9]{20,})'), '[REDACTED_API_KEY]'),
-    # Telegram bot tokens (numeric:alphanumeric)
     (re.compile(r'\d{8,}:[A-Za-z0-9_-]{30,}'), '[REDACTED_BOT_TOKEN]'),
 ]
 
 
 def _sanitize_log_message(message: str) -> str:
-    """Redact sensitive patterns from log messages."""
     for pattern, replacement in _SENSITIVE_PATTERNS:
         message = pattern.sub(replacement, message)
     return message
 
 
 def _require_api_key(f):
-    """Decorator to require API key authentication on endpoints."""
     @wraps(f)
     def decorated(*args, **kwargs):
         if not API_AUTH_KEY:
-            # If no API key is configured, allow access (development mode)
-            # but log a warning on first request
             return f(*args, **kwargs)
         provided_key = request.headers.get("X-API-Key", "")
         if not provided_key or provided_key != API_AUTH_KEY:
@@ -116,9 +105,23 @@ def _read_json_file(path: str) -> Dict[str, Any]:
         return {}
 
 
+def _post_hyperliquid_info(payload: dict, timeout: int = 15) -> Any:
+    """POST to Hyperliquid /info endpoint."""
+    try:
+        response = requests.post(
+            f"{HYPERLIQUID_BASE_URL}/info",
+            json=payload,
+            timeout=timeout
+        )
+        if response.status_code == 200:
+            return response.json()
+        return None
+    except Exception:
+        return None
+
+
 @app.route("/api/health", methods=["GET"])
 def health():
-    """Health check — no auth required for load balancer probes."""
     return jsonify({"status": "ok", "timestamp": time.time()})
 
 
@@ -167,7 +170,6 @@ def positions():
 @app.route("/api/managed-positions", methods=["GET"])
 @_require_api_key
 def managed_positions():
-    """Ottieni posizioni gestite con info SL/TP/trailing stop/break-even."""
     data = _read_json_file(MANAGED_POSITIONS_PATH)
     positions_list = []
     for coin, pos_data in data.items():
@@ -234,7 +236,6 @@ def trades():
 @app.route("/api/trades/export", methods=["GET"])
 @_require_api_key
 def export_trades():
-    """Esporta storia trade come CSV."""
     state = state_store.load_state()
     history = state.get("trade_history", [])
 
@@ -273,7 +274,6 @@ def performance():
     state = state_store.load_state()
     summary = state_store.get_performance_summary(state)
 
-    # Trade-based activity points (legacy)
     history = state.get("trade_history", [])
     equity_points = []
     for trade in history:
@@ -286,7 +286,6 @@ def performance():
             "trigger": trade.get("trigger", "ai"),
         })
 
-    # Real equity snapshots (portfolio value over time)
     equity_snapshots = state_store.get_equity_snapshots(state, limit=200)
 
     return jsonify({
@@ -301,14 +300,12 @@ def performance():
 @app.route("/api/config", methods=["GET"])
 @_require_api_key
 def config():
-    """Return bot configuration. Security: Never returns secret env vars."""
     trading_pairs_str = os.getenv(
         "TRADING_PAIRS",
         "BTC,ETH,SOL,BNB,ADA,DOGE,XRP,AVAX,LINK,SUI,ARB,OP,NEAR,WIF,PEPE,INJ,TIA,SEI,RENDER,FET"
     )
     trading_pairs = [p.strip().upper() for p in trading_pairs_str.split(",") if p.strip()]
 
-    # Security Fix #2: Only return non-secret configuration values
     return jsonify({
         "execution_mode": os.getenv("EXECUTION_MODE", "paper"),
         "enable_mainnet_trading": os.getenv("ENABLE_MAINNET_TRADING", "false"),
@@ -332,12 +329,112 @@ def config():
     })
 
 
+@app.route("/api/candles", methods=["GET"])
+@_require_api_key
+def candles():
+    """Get candlestick data from Hyperliquid for price chart."""
+    coin = request.args.get("coin", "BTC").upper()
+    interval = request.args.get("interval", "15m")
+    limit = request.args.get("limit", 100, type=int)
+    limit = min(limit, 500)
+
+    interval_ms_map = {
+        "1m": 60_000, "5m": 300_000, "15m": 900_000,
+        "1h": 3_600_000, "4h": 14_400_000, "1d": 86_400_000
+    }
+    interval_ms = interval_ms_map.get(interval, 900_000)
+    now_ms = int(time.time() * 1000)
+    start_ms = now_ms - (interval_ms * limit)
+
+    data = _post_hyperliquid_info({
+        "type": "candleSnapshot",
+        "req": {
+            "coin": coin,
+            "interval": interval,
+            "startTime": start_ms,
+            "endTime": now_ms
+        }
+    })
+
+    if data is None or not isinstance(data, list):
+        return jsonify({"candles": [], "coin": coin, "interval": interval, "timestamp": time.time()})
+
+    candles_list = []
+    for c in data:
+        candles_list.append({
+            "time": c.get("t", 0),
+            "open": float(c.get("o", 0)),
+            "high": float(c.get("h", 0)),
+            "low": float(c.get("l", 0)),
+            "close": float(c.get("c", 0)),
+            "volume": float(c.get("v", 0)),
+        })
+
+    return jsonify({
+        "candles": candles_list,
+        "coin": coin,
+        "interval": interval,
+        "timestamp": time.time()
+    })
+
+
+@app.route("/api/orderbook", methods=["GET"])
+@_require_api_key
+def orderbook():
+    """Get L2 order book from Hyperliquid."""
+    coin = request.args.get("coin", "BTC").upper()
+
+    data = _post_hyperliquid_info({
+        "type": "l2Book",
+        "coin": coin
+    })
+
+    if data is None:
+        return jsonify({"bids": [], "asks": [], "coin": coin, "timestamp": time.time()})
+
+    levels = data.get("levels", [[], []])
+    bids_raw = levels[0] if len(levels) > 0 else []
+    asks_raw = levels[1] if len(levels) > 1 else []
+
+    # Parse and limit to top 15 levels
+    bids = []
+    for b in bids_raw[:15]:
+        px = float(b.get("px", 0))
+        sz = float(b.get("sz", 0))
+        n = int(b.get("n", 0))
+        bids.append({"price": px, "size": sz, "orders": n})
+
+    asks = []
+    for a in asks_raw[:15]:
+        px = float(a.get("px", 0))
+        sz = float(a.get("sz", 0))
+        n = int(a.get("n", 0))
+        asks.append({"price": px, "size": sz, "orders": n})
+
+    # Calculate spread
+    spread = 0
+    spread_pct = 0
+    if bids and asks:
+        best_bid = bids[0]["price"]
+        best_ask = asks[0]["price"]
+        spread = best_ask - best_bid
+        mid = (best_ask + best_bid) / 2
+        spread_pct = (spread / mid * 100) if mid > 0 else 0
+
+    return jsonify({
+        "bids": bids,
+        "asks": asks,
+        "coin": coin,
+        "spread": round(spread, 6),
+        "spread_pct": round(spread_pct, 4),
+        "timestamp": time.time()
+    })
+
+
 @app.route("/api/logs", methods=["GET"])
 @_require_api_key
 def logs():
-    """Return recent logs with sensitive data sanitized."""
     limit = request.args.get("limit", 100, type=int)
-    # Cap limit to prevent excessive reads
     limit = min(limit, 200)
     log_file = os.getenv("LOG_FILE", "logs/hyperliquid_bot.log")
 
@@ -356,15 +453,12 @@ def logs():
                 continue
             try:
                 entry = json.loads(line)
-                # Security Fix #5: Sanitize log messages
                 if "message" in entry:
                     entry["message"] = _sanitize_log_message(str(entry["message"]))
-                # Remove exception details that might contain secrets
                 if "exception" in entry:
                     entry["exception"] = _sanitize_log_message(str(entry["exception"]))
                 log_entries.append(entry)
             except json.JSONDecodeError:
-                # Sanitize plain text log lines too
                 log_entries.append({"message": _sanitize_log_message(line), "level": "INFO"})
 
         return jsonify({
@@ -379,12 +473,10 @@ def logs():
 @app.route("/metrics", methods=["GET"])
 @_require_api_key
 def prometheus_metrics():
-    """Endpoint Prometheus per metriche in formato testo."""
     metrics_data = state_store.load_metrics()
 
     lines = []
 
-    # Counters
     counters = [
         ("bot_cycles_total", "Total trading cycles", metrics_data.get("cycles_total", 0)),
         ("bot_cycles_failed_total", "Total failed cycles", metrics_data.get("cycles_failed", 0)),
@@ -399,7 +491,6 @@ def prometheus_metrics():
         lines.append(f"# TYPE {name} counter")
         lines.append(f"{name} {value}")
 
-    # Gauges from live status
     live_status = _read_json_file(LIVE_STATUS_PATH)
     portfolio_data = live_status.get("portfolio", {})
 
@@ -424,7 +515,6 @@ def prometheus_metrics():
         lines.append(f"# TYPE {name} gauge")
         lines.append(f"{name} {float(value)}")
 
-    # Circuit breaker states
     cb_states = get_all_circuit_states()
     for cb_name, cb_state in cb_states.items():
         state_val = {"closed": 0, "open": 1, "half_open": 2}.get(cb_state.get("state", "closed"), 0)
@@ -441,7 +531,6 @@ def prometheus_metrics():
 
 
 def run_api_server(host: str = "127.0.0.1", port: int = 5000, debug: bool = False):
-    """Start the API server. Security Fix #3: Binds to 127.0.0.1 by default."""
     if not API_AUTH_KEY:
         logger.warning(
             "SECURITY WARNING: DASHBOARD_API_KEY not set — API endpoints are unauthenticated. "
