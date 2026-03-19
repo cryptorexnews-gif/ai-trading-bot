@@ -5,9 +5,30 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import requests
 
+from utils.decimals import safe_decimal, decimal_sqrt
+
 logger = logging.getLogger(__name__)
 
 HYPERLIQUID_BASE_URL = "https://api.hyperliquid.xyz"
+
+
+def _create_data_session() -> requests.Session:
+    """Create a requests session with connection pooling for data fetching."""
+    session = requests.Session()
+    session.headers.update({"Content-Type": "application/json"})
+    adapter = requests.adapters.HTTPAdapter(
+        pool_connections=10,
+        pool_maxsize=10,
+        max_retries=requests.adapters.Retry(
+            total=2,
+            backoff_factor=0.3,
+            status_forcelist=[502, 503, 504],
+            allowed_methods=["POST"],
+        ),
+    )
+    session.mount("https://", adapter)
+    session.mount("http://", adapter)
+    return session
 
 
 class HyperliquidDataFetcher:
@@ -21,8 +42,7 @@ class HyperliquidDataFetcher:
 
     def __init__(self, base_url: str = HYPERLIQUID_BASE_URL):
         self.base_url = base_url
-        self.session = requests.Session()
-        self.session.headers.update({"Content-Type": "application/json"})
+        self.session = _create_data_session()
         self._meta_cache: Optional[Dict[str, Any]] = None
         self._meta_cache_at: float = 0.0
         self._meta_cache_ttl: float = 120.0
@@ -31,9 +51,7 @@ class HyperliquidDataFetcher:
         self._mids_cache_ttl: float = 15.0
 
     def _d(self, value: Any) -> Decimal:
-        if value is None:
-            return Decimal("0")
-        return Decimal(str(value))
+        return safe_decimal(value)
 
     def _post_info(self, payload: Dict[str, Any], timeout: int = 15) -> Optional[Any]:
         try:
@@ -157,26 +175,49 @@ class HyperliquidDataFetcher:
         return macd_line, signal_line, histogram
 
     def calculate_rsi(self, prices: List[Decimal], period: int = 14) -> List[Decimal]:
+        """
+        Calculate RSI using Wilder's smoothing method (standard).
+        Uses exponential moving average of gains/losses with factor 1/period.
+        """
         if len(prices) <= period:
             return [Decimal("50")] * len(prices)
+
+        # Calculate price changes
+        changes: List[Decimal] = []
+        for i in range(1, len(prices)):
+            changes.append(prices[i] - prices[i - 1])
+
+        # Separate gains and losses
+        gains = [max(c, Decimal("0")) for c in changes]
+        losses = [abs(min(c, Decimal("0"))) for c in changes]
+
+        # Initial average gain/loss using SMA for first period
+        avg_gain = sum(gains[:period]) / Decimal(str(period))
+        avg_loss = sum(losses[:period]) / Decimal(str(period))
+
         rsi_values: List[Decimal] = [Decimal("50")] * period
-        for i in range(period, len(prices)):
-            gains: List[Decimal] = []
-            losses: List[Decimal] = []
-            for j in range(i - period + 1, i + 1):
-                change = prices[j] - prices[j - 1] if j > 0 else Decimal("0")
-                if change > 0:
-                    gains.append(change)
-                else:
-                    losses.append(abs(change))
-            avg_gain = sum(gains) / Decimal(str(period)) if gains else Decimal("0")
-            avg_loss = sum(losses) / Decimal(str(period)) if losses else Decimal("0")
+
+        # First RSI value
+        if avg_loss == 0:
+            rsi_values.append(Decimal("100"))
+        else:
+            rs = avg_gain / avg_loss
+            rsi_values.append(Decimal("100") - (Decimal("100") / (Decimal("1") + rs)))
+
+        # Subsequent values using Wilder's smoothing: avg = (prev_avg * (period-1) + current) / period
+        period_d = Decimal(str(period))
+        period_minus_1 = Decimal(str(period - 1))
+
+        for i in range(period, len(changes)):
+            avg_gain = (avg_gain * period_minus_1 + gains[i]) / period_d
+            avg_loss = (avg_loss * period_minus_1 + losses[i]) / period_d
+
             if avg_loss == 0:
-                rsi = Decimal("100")
+                rsi_values.append(Decimal("100"))
             else:
                 rs = avg_gain / avg_loss
-                rsi = Decimal("100") - (Decimal("100") / (Decimal("1") + rs))
-            rsi_values.append(rsi)
+                rsi_values.append(Decimal("100") - (Decimal("100") / (Decimal("1") + rs)))
+
         return rsi_values
 
     def _calculate_atr(
@@ -212,19 +253,11 @@ class HyperliquidDataFetcher:
             window = prices[i - period + 1:i + 1]
             sma = sum(window) / Decimal(str(period))
             variance = sum((p - sma) ** 2 for p in window) / Decimal(str(period))
-            std_dev = self._decimal_sqrt(variance)
+            std_dev = decimal_sqrt(variance)
             middle.append(sma)
             upper.append(sma + (std_dev_mult * std_dev))
             lower.append(sma - (std_dev_mult * std_dev))
         return {"upper": upper, "middle": middle, "lower": lower}
-
-    def _decimal_sqrt(self, value: Decimal) -> Decimal:
-        if value <= 0:
-            return Decimal("0")
-        x = value
-        for _ in range(50):
-            x = (x + value / x) / Decimal("2")
-        return x
 
     def _calculate_vwap(
         self, highs: List[Decimal], lows: List[Decimal], closes: List[Decimal], volumes: List[Decimal]
@@ -281,7 +314,7 @@ class HyperliquidDataFetcher:
             logger.warning(f"Dati candele intraday insufficienti per {coin}")
             return None
 
-        # Recupera candele medium-term (1h) — NUOVO
+        # Recupera candele medium-term (1h)
         hourly_candles = self.get_candle_snapshot(coin, "1h", 50)
 
         # Recupera candele longer-term (4h)
@@ -311,7 +344,7 @@ class HyperliquidDataFetcher:
         bollinger = self._calculate_bollinger_bands(intraday_closes, 20)
         vwap = self._calculate_vwap(intraday_highs, intraday_lows, intraday_closes, intraday_volumes)
 
-        # Calcola indicatori 1h — NUOVO
+        # Calcola indicatori 1h
         hourly_context = {}
         if hourly_candles and len(hourly_candles) >= 10:
             hourly_closes = [c["close"] for c in hourly_candles]

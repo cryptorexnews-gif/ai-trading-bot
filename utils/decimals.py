@@ -15,6 +15,10 @@ def to_decimal(value: Any, default: Optional[Decimal] = None) -> Decimal:
         return default if default is not None else Decimal("0")
 
 
+# Alias standard — usare questo ovunque al posto di _safe_decimal
+safe_decimal = to_decimal
+
+
 def to_int(value: Any, default: Optional[int] = None) -> int:
     """
     Converte in int con gestione degli errori appropriata.
@@ -125,3 +129,16 @@ def subtract_percentage(value: Decimal, percent: Decimal) -> Decimal:
     percent dovrebbe essere in forma decimale (es. 0.05 per 5%).
     """
     return value * (Decimal("1") - percent)
+
+
+def decimal_sqrt(value: Decimal, iterations: int = 20) -> Decimal:
+    """
+    Calcola radice quadrata di un Decimal con Newton-Raphson.
+    20 iterazioni sono sufficienti per la precisione finanziaria.
+    """
+    if value <= 0:
+        return Decimal("0")
+    x = value
+    for _ in range(iterations):
+        x = (x + value / x) / Decimal("2")
+    return x

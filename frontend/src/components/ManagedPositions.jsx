@@ -1,5 +1,5 @@
 import React from 'react'
-import { Shield, Target, TrendingUp, TrendingDown } from 'lucide-react'
+import { Shield, Target, TrendingUp, TrendingDown, CheckCircle } from 'lucide-react'
 
 export default function ManagedPositions({ positions }) {
   if (!positions || positions.length === 0) {
@@ -32,6 +32,8 @@ export default function ManagedPositions({ positions }) {
           const tp = parseFloat(pos.take_profit_price || 0)
           const slPct = (parseFloat(pos.stop_loss_pct || 0) * 100).toFixed(1)
           const tpPct = (parseFloat(pos.take_profit_pct || 0) * 100).toFixed(1)
+          const beActivated = pos.break_even_activated || false
+          const beActivationPct = (parseFloat(pos.break_even_activation_pct || 0.015) * 100).toFixed(1)
 
           return (
             <div key={pos.coin} className="bg-gray-800/50 rounded-lg p-4 border border-gray-700/50">
@@ -44,6 +46,12 @@ export default function ManagedPositions({ positions }) {
                     {isLong ? <TrendingUp size={10} /> : <TrendingDown size={10} />}
                     {pos.side}
                   </span>
+                  {beActivated && (
+                    <span className="flex items-center gap-1 text-[10px] font-bold px-1.5 py-0.5 rounded bg-cyan-900/50 text-cyan-400">
+                      <CheckCircle size={10} />
+                      BE
+                    </span>
+                  )}
                 </div>
                 <span className="text-xs text-gray-500">
                   Size: {pos.size}
@@ -52,19 +60,30 @@ export default function ManagedPositions({ positions }) {
 
               <div className="grid grid-cols-3 gap-3 text-xs">
                 {/* Stop Loss */}
-                <div className="bg-red-900/20 rounded-lg p-2 border border-red-800/30">
-                  <div className="text-red-400 font-semibold mb-1 flex items-center gap-1">
-                    🛑 Stop Loss
+                <div className={`rounded-lg p-2 border ${
+                  beActivated
+                    ? 'bg-cyan-900/20 border-cyan-800/30'
+                    : 'bg-red-900/20 border-red-800/30'
+                }`}>
+                  <div className={`font-semibold mb-1 flex items-center gap-1 ${
+                    beActivated ? 'text-cyan-400' : 'text-red-400'
+                  }`}>
+                    {beActivated ? '🔒 Break-Even' : '🛑 Stop Loss'}
                   </div>
                   <div className="text-white font-mono">${sl.toFixed(2)}</div>
-                  <div className="text-red-400/60 text-[10px]">-{slPct}%</div>
+                  <div className={`text-[10px] ${beActivated ? 'text-cyan-400/60' : 'text-red-400/60'}`}>
+                    {beActivated ? 'protected' : `-${slPct}%`}
+                  </div>
                 </div>
 
                 {/* Entry */}
                 <div className="bg-gray-700/30 rounded-lg p-2 border border-gray-600/30 text-center">
                   <div className="text-gray-400 font-semibold mb-1">Entry</div>
                   <div className="text-white font-mono">${entry.toFixed(2)}</div>
-                  <div className="text-gray-500 text-[10px]">current</div>
+                  <div className="text-gray-500 text-[10px]">
+                    {!beActivated && `BE@+${beActivationPct}%`}
+                    {beActivated && '✓ secured'}
+                  </div>
                 </div>
 
                 {/* Take Profit */}

@@ -108,6 +108,34 @@ class TrailingStopConfig:
 
 
 @dataclass
+class BreakEvenConfig:
+    """Configurazione break-even stop — sposta SL a entry quando in profitto."""
+    enabled: bool = True
+    activation_pct: Decimal = Decimal("0.015")  # Attiva dopo +1.5% profitto
+    offset_pct: Decimal = Decimal("0.001")  # Sposta SL a entry + 0.1% (piccolo profitto garantito)
+    activated: bool = False  # Stato: se break-even è già stato attivato
+
+    def should_activate(self, entry_price: Decimal, current_price: Decimal, is_long: bool) -> bool:
+        """Controlla se il break-even dovrebbe attivarsi."""
+        if not self.enabled or self.activated:
+            return False
+        if entry_price <= 0:
+            return False
+        if is_long:
+            pnl_pct = (current_price - entry_price) / entry_price
+        else:
+            pnl_pct = (entry_price - current_price) / entry_price
+        return pnl_pct >= self.activation_pct
+
+    def get_break_even_price(self, entry_price: Decimal, is_long: bool) -> Decimal:
+        """Calcola prezzo break-even (entry + piccolo offset)."""
+        if is_long:
+            return entry_price * (Decimal("1") + self.offset_pct)
+        else:
+            return entry_price * (Decimal("1") - self.offset_pct)
+
+
+@dataclass
 class ManagedPosition:
     """Una posizione con gestione rischio attaccata."""
     coin: str
@@ -118,6 +146,7 @@ class ManagedPosition:
     stop_loss: StopLossConfig = field(default_factory=StopLossConfig)
     take_profit: TakeProfitConfig = field(default_factory=TakeProfitConfig)
     trailing_stop: TrailingStopConfig = field(default_factory=TrailingStopConfig)
+    break_even: BreakEvenConfig = field(default_factory=BreakEvenConfig)
     opened_at: float = 0.0
 
     def should_stop_loss(self, current_price: Decimal) -> bool:
@@ -144,6 +173,20 @@ class ManagedPosition:
         self.trailing_stop.update_extreme(current_price, self.is_long)
         return self.trailing_stop.should_trigger(current_price, self.is_long)
 
+    def check_break_even(self, current_price: Decimal) -> bool:
+        """
+        Check and activate break-even if conditions met.
+        Returns True if break-even was just activated (SL moved to entry).
+        """
+        if not self.break_even.enabled or self.break_even.activated:
+            return False
+        if self.break_even.should_activate(self.entry_price, current_price, self.is_long):
+            be_price = self.break_even.get_break_even_price(self.entry_price, self.is_long)
+            self.stop_loss.price = be_price
+            self.break_even.activated = True
+            return True
+        return False
+
     def to_dict(self) -> Dict[str, Any]:
         result = {
             "coin": self.coin,
@@ -167,6 +210,12 @@ class ManagedPosition:
                 "callback_rate": str(self.trailing_stop.callback_rate),
                 "highest_price": str(self.trailing_stop.highest_price) if self.trailing_stop.highest_price else None,
                 "lowest_price": str(self.trailing_stop.lowest_price) if self.trailing_stop.lowest_price else None,
+            },
+            "break_even": {
+                "enabled": self.break_even.enabled,
+                "activation_pct": str(self.break_even.activation_pct),
+                "offset_pct": str(self.break_even.offset_pct),
+                "activated": self.break_even.activated,
             }
         }
         return result
@@ -176,6 +225,7 @@ class ManagedPosition:
         sl_data = data.get("stop_loss", {})
         tp_data = data.get("take_profit", {})
         ts_data = data.get("trailing_stop", {})
+        be_data = data.get("break_even", {})
 
         return ManagedPosition(
             coin=data["coin"],
@@ -199,6 +249,12 @@ class ManagedPosition:
                 callback_rate=Decimal(str(ts_data.get("callback_rate", "0.02"))),
                 highest_price=Decimal(str(ts_data["highest_price"])) if ts_data.get("highest_price") else None,
                 lowest_price=Decimal(str(ts_data["lowest_price"])) if ts_data.get("lowest_price") else None,
+            ),
+            break_even=BreakEvenConfig(
+                enabled=be_data.get("enabled", True),
+                activation_pct=Decimal(str(be_data.get("activation_pct", "0.015"))),
+                offset_pct=Decimal(str(be_data.get("offset_pct", "0.001"))),
+                activated=be_data.get("activated", False),
             ),
         )
 
@@ -260,7 +316,7 @@ class TradeRecord:
     reasoning: str
     success: bool
     mode: str  # 'paper' o 'live'
-    trigger: str = ""  # 'ai', 'stop_loss', 'take_profit', 'trailing_stop', 'emergency'
+    trigger: str = ""  # 'ai', 'stop_loss', 'take_profit', 'trailing_stop', 'emergency', 'break_even'
     order_status: str = "unknown"  # filled, partially_filled, etc.
 
 

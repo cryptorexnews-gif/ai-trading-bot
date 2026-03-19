@@ -10,7 +10,7 @@ from eth_account import Account
 from eth_account.messages import encode_typed_data
 
 from utils.circuit_breaker import CircuitBreakerOpenError, get_or_create_circuit_breaker
-from utils.decimals import to_decimal as utils_to_decimal
+from utils.decimals import safe_decimal
 
 logger = logging.getLogger(__name__)
 
@@ -84,9 +84,6 @@ class HyperliquidExchangeClient:
             f"Exchange client initialized: base_url={self.base_url}, "
             f"mode={self.execution_mode}, mainnet={self.enable_mainnet_trading}"
         )
-
-    def _safe_decimal(self, value: Any, default: Decimal = Decimal("0")) -> Decimal:
-        return utils_to_decimal(value, default)
 
     def _post_info(self, payload: Dict[str, Any], timeout: Optional[int] = None) -> Optional[Any]:
         """POST to /info with circuit breaker and robust session."""
@@ -200,23 +197,49 @@ class HyperliquidExchangeClient:
                 return int(asset.get("maxLeverage", 10))
         return 10
 
+    def get_sz_decimals(self, coin: str) -> Optional[int]:
+        """Get szDecimals from Hyperliquid meta for a coin."""
+        meta = self.get_meta(force_refresh=False)
+        if meta is None:
+            return None
+        for asset in meta.get("universe", []):
+            if asset.get("name") == coin:
+                return asset.get("szDecimals")
+        return None
+
     def get_reference_price(self, coin: str, fallback_price: Decimal) -> Decimal:
         mids = self.get_all_mids()
         if mids and coin in mids:
-            return self._safe_decimal(mids[coin], fallback_price)
+            return safe_decimal(mids[coin], fallback_price)
 
         meta = self.get_meta(force_refresh=False)
         if meta is None:
             return fallback_price
         for asset in meta.get("universe", []):
             if asset.get("name") == coin and asset.get("markPx") is not None:
-                return self._safe_decimal(asset.get("markPx"))
+                return safe_decimal(asset.get("markPx"))
         return fallback_price
 
     def get_tick_size_and_precision(self, asset_id: int) -> Tuple[Decimal, int]:
-        mids = self.get_all_mids()
+        """
+        Get tick size and precision for an asset.
+        Uses szDecimals from meta when available, falls back to mid price inference.
+        """
         meta = self.get_meta(force_refresh=False)
 
+        # Strategy 1: Use szDecimals from meta (most reliable)
+        if meta is not None:
+            universe = meta.get("universe", [])
+            if 0 <= asset_id < len(universe):
+                asset = universe[asset_id]
+                sz_decimals = asset.get("szDecimals")
+                if sz_decimals is not None:
+                    precision = int(sz_decimals)
+                    tick_size = Decimal("1").scaleb(-precision) if precision > 0 else Decimal("1")
+                    return tick_size, precision
+
+        # Strategy 2: Infer from mid price (fallback)
+        mids = self.get_all_mids()
         if mids is not None and meta is not None:
             universe = meta.get("universe", [])
             if 0 <= asset_id < len(universe):
@@ -230,6 +253,7 @@ class HyperliquidExchangeClient:
                 tick_size = Decimal("1").scaleb(-decimals) if decimals > 0 else Decimal("1")
                 return tick_size, decimals
 
+        # Strategy 3: Hardcoded defaults
         default_tick_sizes: Dict[int, Tuple[Decimal, int]] = {
             0: (Decimal("0.1"), 1),
             1: (Decimal("0.01"), 2),

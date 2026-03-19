@@ -54,7 +54,7 @@ export default function App() {
             <div>
               <h1 className="text-xl font-bold">Hyperliquid Trading Bot</h1>
               <p className="text-[10px] text-gray-500">
-                Claude Opus 4.6 • {tradingPairsCount} pairs • SL/TP/Trailing • Multi-TF • Correlation
+                Claude Opus 4.6 • {tradingPairsCount} pairs • SL/TP/Trailing/BE • Multi-TF • Correlation
               </p>
             </div>
           </div>
@@ -157,7 +157,7 @@ export default function App() {
           <PositionsTable positions={positions} />
         </div>
 
-        {/* Managed Positions (SL/TP/Trailing) */}
+        {/* Managed Positions (SL/TP/Trailing/Break-Even) */}
         <ManagedPositions positions={managedPositions} />
 
         {/* Trade History with Export */}
@@ -183,6 +183,7 @@ export default function App() {
             {' '}SL: {((parseFloat(configData?.default_sl_pct || '0.03')) * 100).toFixed(0)}% •
             {' '}TP: {((parseFloat(configData?.default_tp_pct || '0.05')) * 100).toFixed(0)}% •
             {' '}Trailing: {configData?.enable_trailing_stop === 'true' ? 'ON' : 'OFF'} •
+            {' '}BE: @{((parseFloat(configData?.break_even_activation_pct || '0.015')) * 100).toFixed(1)}% •
             {' '}Adaptive: {configData?.enable_adaptive_cycle === 'true' ? 'ON' : 'OFF'}
           </div>
           <div className="text-gray-700">

@@ -3,6 +3,7 @@ from decimal import Decimal
 from typing import Any, Dict, Tuple
 
 from models import PortfolioState, PositionSide, TradingAction
+from utils.decimals import safe_decimal
 
 logger = logging.getLogger(__name__)
 
@@ -42,11 +43,6 @@ class RiskManager:
         self.max_single_asset_pct = max_single_asset_pct
         self.emergency_margin_threshold = emergency_margin_threshold
         self.allowed_actions = {action.value for action in TradingAction}
-
-    def _safe_decimal(self, value: Any, default: Decimal = Decimal("0")) -> Decimal:
-        if value is None:
-            return default
-        return Decimal(str(value))
 
     def _calculate_volatility_adjusted_size(self, base_size: Decimal, volatility: Decimal) -> Decimal:
         """
@@ -109,9 +105,9 @@ class RiskManager:
         peak_portfolio_value: Decimal = Decimal("0")
     ) -> Tuple[bool, str]:
         action = str(order.get("action", "")).strip().lower()
-        size = self._safe_decimal(order.get("size", 0))
-        leverage = self._safe_decimal(order.get("leverage", 1))
-        confidence = self._safe_decimal(order.get("confidence", 0))
+        size = safe_decimal(order.get("size", 0))
+        leverage = safe_decimal(order.get("leverage", 1))
+        confidence = safe_decimal(order.get("confidence", 0))
 
         if action not in self.allowed_actions:
             return False, "unknown_action"

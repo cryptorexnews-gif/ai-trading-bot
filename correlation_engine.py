@@ -4,6 +4,7 @@ from decimal import Decimal
 from typing import Any, Dict, List, Optional, Tuple
 
 from technical_analyzer_simple import technical_fetcher
+from utils.decimals import decimal_sqrt
 
 logger = logging.getLogger(__name__)
 
@@ -52,8 +53,8 @@ class CorrelationEngine:
         if var_a <= 0 or var_b <= 0:
             return Decimal("0")
 
-        std_a = self._sqrt(var_a)
-        std_b = self._sqrt(var_b)
+        std_a = decimal_sqrt(var_a)
+        std_b = decimal_sqrt(var_b)
 
         if std_a == 0 or std_b == 0:
             return Decimal("0")
@@ -61,14 +62,6 @@ class CorrelationEngine:
         correlation = cov / (std_a * std_b)
         # Clamp a [-1, 1]
         return max(Decimal("-1"), min(Decimal("1"), correlation))
-
-    def _sqrt(self, value: Decimal) -> Decimal:
-        if value <= 0:
-            return Decimal("0")
-        x = value
-        for _ in range(50):
-            x = (x + value / x) / Decimal("2")
-        return x
 
     def calculate_correlations(
         self,

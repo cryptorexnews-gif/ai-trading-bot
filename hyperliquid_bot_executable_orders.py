@@ -30,8 +30,10 @@ from position_manager import PositionManager
 from risk_manager import RiskManager
 from state_store import StateStore
 from technical_analyzer_simple import technical_fetcher
+from utils.health import HealthMonitor, HealthStatus, HealthCheckResult, check_disk_space, check_file_writable
 from utils.logging_config import setup_logging
 from utils.metrics import MetricsCollector
+from utils.rate_limiter import get_rate_limiter
 
 # ─── Configuration from environment ───────────────────────────────────────────
 
@@ -49,11 +51,11 @@ LLM_MODEL = os.getenv("LLM_MODEL", "anthropic/claude-opus-4.6")
 LLM_MAX_TOKENS = int(os.getenv("LLM_MAX_TOKENS", "8192"))
 LLM_TEMPERATURE = float(os.getenv("LLM_TEMPERATURE", "0.15"))
 
-TRADING_PAIRS = os.getenv(
+TRADING_PAIRS_RAW = os.getenv(
     "TRADING_PAIRS",
     "BTC,ETH,SOL,BNB,ADA,DOGE,XRP,AVAX,LINK,SUI,ARB,OP,NEAR,WIF,PEPE,INJ,TIA,SEI,RENDER,FET"
 ).split(",")
-TRADING_PAIRS = [p.strip().upper() for p in TRADING_PAIRS if p.strip()]
+TRADING_PAIRS_RAW = [p.strip().upper() for p in TRADING_PAIRS_RAW if p.strip()]
 
 MAX_ORDER_MARGIN_PCT = Decimal(os.getenv("MAX_ORDER_MARGIN_PCT", "0.1"))
 HARD_MAX_LEVERAGE = Decimal(os.getenv("HARD_MAX_LEVERAGE", "10"))
@@ -76,6 +78,8 @@ DEFAULT_TP_PCT = Decimal(os.getenv("DEFAULT_TP_PCT", "0.05"))
 DEFAULT_TRAILING_CALLBACK = Decimal(os.getenv("DEFAULT_TRAILING_CALLBACK", "0.02"))
 ENABLE_TRAILING_STOP = os.getenv("ENABLE_TRAILING_STOP", "true").lower() == "true"
 TRAILING_ACTIVATION_PCT = Decimal(os.getenv("TRAILING_ACTIVATION_PCT", "0.02"))
+BREAK_EVEN_ACTIVATION_PCT = Decimal(os.getenv("BREAK_EVEN_ACTIVATION_PCT", "0.015"))
+BREAK_EVEN_OFFSET_PCT = Decimal(os.getenv("BREAK_EVEN_OFFSET_PCT", "0.001"))
 
 ENABLE_ADAPTIVE_CYCLE = os.getenv("ENABLE_ADAPTIVE_CYCLE", "true").lower() == "true"
 DEFAULT_CYCLE_SEC = int(os.getenv("DEFAULT_CYCLE_SEC", "60"))
@@ -93,41 +97,61 @@ STATE_PATH = "state/bot_state.json"
 METRICS_PATH = "state/bot_metrics.json"
 
 # ─── Minimum order sizes per coin (from Hyperliquid specs) ────────────────────
-# Tier 1: Blue chips — highest liquidity, tightest spreads
-# Tier 2: Large caps — strong volume, good for momentum
-# Tier 3: Mid caps — higher volatility, better R:R opportunities
-# Tier 4: Trending narratives — AI, memes, modular — high vol, high reward
 
 MIN_SIZE_BY_COIN: Dict[str, Decimal] = {
-    # === Tier 1: Blue Chips ===
-    "BTC": Decimal("0.001"),       # ~$111
-    "ETH": Decimal("0.01"),        # ~$25
-    "SOL": Decimal("0.1"),         # ~$19
-    # === Tier 2: Large Caps ===
-    "BNB": Decimal("0.01"),        # ~$7
-    "XRP": Decimal("1"),           # ~$2.50
-    "ADA": Decimal("10"),          # ~$7
-    "DOGE": Decimal("10"),         # ~$2.50
-    "AVAX": Decimal("0.1"),        # ~$4
-    "LINK": Decimal("0.1"),        # ~$2
-    "NEAR": Decimal("1"),          # ~$5
-    # === Tier 3: L2 / Infrastructure ===
-    "SUI": Decimal("1"),           # ~$4
-    "ARB": Decimal("1"),           # ~$1
-    "OP": Decimal("1"),            # ~$2
-    "SEI": Decimal("1"),           # ~$0.50
-    "TIA": Decimal("0.1"),         # ~$1
-    "INJ": Decimal("0.01"),        # ~$0.30
-    # === Tier 4: Narrative / High Vol ===
-    "WIF": Decimal("1"),           # ~$2
-    "PEPE": Decimal("100000"),     # ~$1.50
-    "RENDER": Decimal("0.1"),      # ~$1
-    "FET": Decimal("1"),           # ~$1.50
+    "BTC": Decimal("0.001"),
+    "ETH": Decimal("0.01"),
+    "SOL": Decimal("0.1"),
+    "BNB": Decimal("0.01"),
+    "XRP": Decimal("1"),
+    "ADA": Decimal("10"),
+    "DOGE": Decimal("10"),
+    "AVAX": Decimal("0.1"),
+    "LINK": Decimal("0.1"),
+    "NEAR": Decimal("1"),
+    "SUI": Decimal("1"),
+    "ARB": Decimal("1"),
+    "OP": Decimal("1"),
+    "SEI": Decimal("1"),
+    "TIA": Decimal("0.1"),
+    "INJ": Decimal("0.01"),
+    "WIF": Decimal("1"),
+    "PEPE": Decimal("100000"),
+    "RENDER": Decimal("0.1"),
+    "FET": Decimal("1"),
 }
 
-# Fallback: if a coin is in TRADING_PAIRS but not in MIN_SIZE_BY_COIN,
-# we dynamically fetch from Hyperliquid meta at runtime
 DEFAULT_MIN_SIZE = Decimal("1")
+
+
+def _validate_startup_config() -> List[str]:
+    """Validate critical configuration at startup. Returns list of warnings."""
+    warnings = []
+
+    if not WALLET_ADDRESS:
+        raise SystemExit("CRITICAL: HYPERLIQUID_WALLET_ADDRESS not set")
+    if not PRIVATE_KEY:
+        raise SystemExit("CRITICAL: HYPERLIQUID_PRIVATE_KEY not set")
+
+    if EXECUTION_MODE == "live" and not ENABLE_MAINNET_TRADING:
+        warnings.append("EXECUTION_MODE=live but ENABLE_MAINNET_TRADING=false — orders will be paper")
+
+    if EXECUTION_MODE not in ("paper", "live"):
+        warnings.append(f"Unknown EXECUTION_MODE '{EXECUTION_MODE}', defaulting to paper behavior")
+
+    if MAX_DRAWDOWN_PCT > Decimal("0.30"):
+        warnings.append(f"MAX_DRAWDOWN_PCT={MAX_DRAWDOWN_PCT} is very high (>30%)")
+
+    if HARD_MAX_LEVERAGE > Decimal("20"):
+        warnings.append(f"HARD_MAX_LEVERAGE={HARD_MAX_LEVERAGE} is very high (>20x)")
+
+    if not OPENROUTER_API_KEY:
+        warnings.append("OPENROUTER_API_KEY not set — LLM disabled, using fallback only")
+
+    if DAILY_NOTIONAL_LIMIT_USD < Decimal("10"):
+        warnings.append(f"DAILY_NOTIONAL_LIMIT_USD={DAILY_NOTIONAL_LIMIT_USD} is very low")
+
+    return warnings
 
 
 class HyperliquidBot:
@@ -142,6 +166,11 @@ class HyperliquidBot:
             console_output=True
         )
 
+        # Validate configuration
+        config_warnings = _validate_startup_config()
+        for warning in config_warnings:
+            logging.warning(f"CONFIG WARNING: {warning}")
+
         self.wallet_address = WALLET_ADDRESS
         self._cycle_count = 0
         self._last_cycle_duration = 0.0
@@ -149,14 +178,11 @@ class HyperliquidBot:
         self._shutdown_requested = False
         self._last_portfolio_state: Optional[PortfolioState] = None
         self._dynamic_min_sizes: Dict[str, Decimal] = {}
+        self._trading_pairs: List[str] = list(TRADING_PAIRS_RAW)
 
-        # Validate required config
-        if not WALLET_ADDRESS:
-            logging.critical("HYPERLIQUID_WALLET_ADDRESS not set")
-            sys.exit(1)
-        if not PRIVATE_KEY:
-            logging.critical("HYPERLIQUID_PRIVATE_KEY not set")
-            sys.exit(1)
+        # Rate limiters
+        self._hl_rate_limiter = get_rate_limiter("hyperliquid_api", max_tokens=20, tokens_per_second=2.0)
+        self._llm_rate_limiter = get_rate_limiter("openrouter_api", max_tokens=5, tokens_per_second=0.5)
 
         # Initialize components
         self.exchange_client = HyperliquidExchangeClient(
@@ -196,6 +222,8 @@ class HyperliquidBot:
             default_trailing_callback=DEFAULT_TRAILING_CALLBACK,
             enable_trailing_stop=ENABLE_TRAILING_STOP,
             trailing_activation_pct=TRAILING_ACTIVATION_PCT,
+            break_even_activation_pct=BREAK_EVEN_ACTIVATION_PCT,
+            break_even_offset_pct=BREAK_EVEN_OFFSET_PCT,
         )
 
         self.correlation_engine = CorrelationEngine(
@@ -210,6 +238,10 @@ class HyperliquidBot:
 
         self.notifier = Notifier(enabled=True)
 
+        # Health monitor
+        self.health_monitor = HealthMonitor()
+        self._setup_health_checks()
+
         # Initialize LLM engine
         if OPENROUTER_API_KEY:
             self.llm_engine: Optional[LLMEngine] = LLMEngine(
@@ -219,12 +251,45 @@ class HyperliquidBot:
                 temperature=LLM_TEMPERATURE,
             )
         else:
-            logging.warning("OPENROUTER_API_KEY not set — LLM disabled, using fallback only")
             self.llm_engine = None
 
         # Signal handlers for graceful shutdown
         signal.signal(signal.SIGINT, self._signal_handler)
         signal.signal(signal.SIGTERM, self._signal_handler)
+
+    def _setup_health_checks(self) -> None:
+        """Register health checks."""
+        self.health_monitor.add_check(
+            "exchange_connectivity",
+            lambda: self._check_exchange_health(),
+            interval=60.0
+        )
+        self.health_monitor.add_check(
+            "disk_space",
+            lambda: check_disk_space(".", min_free_gb=0.5),
+            interval=300.0
+        )
+        self.health_monitor.add_check(
+            "state_writable",
+            lambda: check_file_writable("state"),
+            interval=300.0
+        )
+
+    def _check_exchange_health(self) -> HealthCheckResult:
+        """Check exchange connectivity."""
+        meta = self.exchange_client.get_meta(force_refresh=True)
+        if meta:
+            return HealthCheckResult(
+                name="exchange_connectivity",
+                status=HealthStatus.HEALTHY,
+                message="Hyperliquid API reachable",
+                details={"assets_count": len(meta.get("universe", []))}
+            )
+        return HealthCheckResult(
+            name="exchange_connectivity",
+            status=HealthStatus.UNHEALTHY,
+            message="Hyperliquid API unreachable"
+        )
 
     def _signal_handler(self, signum, frame):
         sig_name = signal.Signals(signum).name
@@ -244,12 +309,10 @@ class HyperliquidBot:
         if coin in self._dynamic_min_sizes:
             return self._dynamic_min_sizes[coin]
 
-        # Try to derive from Hyperliquid meta + mid price
         mids = self.exchange_client.get_all_mids()
         if mids and coin in mids:
             mid_price = Decimal(str(mids[coin]))
             if mid_price > 0:
-                # Target ~$1 minimum notional, round to sensible size
                 raw_min = Decimal("1") / mid_price
                 if raw_min < Decimal("0.001"):
                     resolved = Decimal("0.001")
@@ -280,13 +343,13 @@ class HyperliquidBot:
         meta = self.exchange_client.get_meta(force_refresh=True)
         if not meta:
             logging.warning("Cannot validate trading pairs — meta unavailable, using all configured pairs")
-            return TRADING_PAIRS
+            return list(TRADING_PAIRS_RAW)
 
         available_coins = {asset.get("name") for asset in meta.get("universe", [])}
         valid_pairs = []
         invalid_pairs = []
 
-        for coin in TRADING_PAIRS:
+        for coin in TRADING_PAIRS_RAW:
             if coin in available_coins:
                 valid_pairs.append(coin)
             else:
@@ -300,6 +363,7 @@ class HyperliquidBot:
 
     def _get_portfolio_state(self) -> PortfolioState:
         """Fetch current portfolio state from Hyperliquid."""
+        self._hl_rate_limiter.acquire(1)
         user_state = self.exchange_client.get_user_state(self.wallet_address)
         if not user_state:
             logging.warning("Failed to get user state, returning empty portfolio")
@@ -329,7 +393,6 @@ class HyperliquidBot:
                     "margin_used": Decimal(str(pos.get("marginUsed", "0"))),
                 }
 
-        # Update metrics
         self.metrics.set_gauge("current_balance", total_balance)
         self.metrics.set_gauge("available_balance", available_balance)
         self.metrics.set_gauge("margin_usage", margin_usage)
@@ -346,6 +409,7 @@ class HyperliquidBot:
         self, coin: str
     ) -> Tuple[Optional[MarketData], Optional[Dict[str, Any]]]:
         """Get market data and technical indicators for a coin."""
+        self._hl_rate_limiter.acquire(3)  # 3 tokens for 3 candle requests
         tech_data = technical_fetcher.get_technical_indicators(coin)
         if not tech_data:
             return None, None
@@ -377,7 +441,7 @@ class HyperliquidBot:
         }
 
     def _process_sl_tp_trailing(self, portfolio_state: PortfolioState) -> int:
-        """Check and execute SL/TP/trailing stop triggers. Returns count of triggered closes."""
+        """Check and execute SL/TP/trailing stop/break-even triggers. Returns count of triggered closes."""
         self.position_manager.sync_with_exchange(portfolio_state.positions)
 
         mids = technical_fetcher.get_all_mids()
@@ -420,6 +484,8 @@ class HyperliquidBot:
                     self.notifier.notify_take_profit(coin, entry_price, trigger_price, current_price)
                 elif trigger == "trailing_stop":
                     self.notifier.notify_trailing_stop(coin, entry_price, trigger_price, current_price)
+                elif trigger == "break_even_stop":
+                    self.notifier.notify_stop_loss(coin, entry_price, trigger_price, current_price)
 
                 state = self.state_store.load_state()
                 trade_record = {
@@ -496,7 +562,7 @@ class HyperliquidBot:
         if not ENABLE_ADAPTIVE_CYCLE:
             return DEFAULT_CYCLE_SEC
 
-        vol_signal = technical_fetcher.get_volatility_signal(TRADING_PAIRS[0])
+        vol_signal = technical_fetcher.get_volatility_signal(self._trading_pairs[0])
         suggested = vol_signal.get("suggested_cycle_sec", DEFAULT_CYCLE_SEC)
         clamped = max(MIN_CYCLE_SEC, min(MAX_CYCLE_SEC, suggested))
 
@@ -541,6 +607,15 @@ class HyperliquidBot:
             logging.info("=" * 60)
             logging.info(f"Starting trading cycle #{self._cycle_count}")
 
+            # Periodic health check (every 10 cycles)
+            if self._cycle_count % 10 == 1:
+                health_result = self.health_monitor.run_all_checks()
+                if health_result["status"] == HealthStatus.UNHEALTHY:
+                    logging.error(f"Health check UNHEALTHY: {health_result}")
+                    self.notifier.notify_error(f"Health check unhealthy: {health_result['summary']}")
+                elif health_result["status"] == HealthStatus.DEGRADED:
+                    logging.warning(f"Health check DEGRADED: {health_result['summary']}")
+
             portfolio_state = self._get_portfolio_state()
             self._last_portfolio_state = portfolio_state
 
@@ -567,10 +642,10 @@ class HyperliquidBot:
             peak = Decimal(str(state.get("peak_portfolio_value", "0")))
             consecutive_losses = state.get("consecutive_losses", 0)
 
-            # === PHASE 1: Check SL/TP/Trailing Stop ===
+            # === PHASE 1: Check SL/TP/Trailing Stop/Break-Even ===
             sl_tp_triggered = self._process_sl_tp_trailing(portfolio_state)
             if sl_tp_triggered > 0:
-                logging.info(f"SL/TP/Trailing triggered {sl_tp_triggered} closes, refreshing portfolio")
+                logging.info(f"SL/TP/Trailing/BE triggered {sl_tp_triggered} closes, refreshing portfolio")
                 portfolio_state = self._get_portfolio_state()
                 self._last_portfolio_state = portfolio_state
 
@@ -582,7 +657,7 @@ class HyperliquidBot:
                 self._last_portfolio_state = portfolio_state
 
             # === PHASE 3: Correlation analysis ===
-            correlations = self.correlation_engine.calculate_correlations(TRADING_PAIRS, "1h", 50)
+            correlations = self.correlation_engine.calculate_correlations(self._trading_pairs, "1h", 50)
             corr_summary = self.correlation_engine.get_correlation_summary(correlations)
             if corr_summary["high_correlation_pairs"]:
                 logging.info(f"High correlation pairs: {corr_summary['high_correlation_pairs'][:5]}")
@@ -593,7 +668,7 @@ class HyperliquidBot:
 
             trades_executed = 0
 
-            for coin in TRADING_PAIRS:
+            for coin in self._trading_pairs:
                 if self._shutdown_requested:
                     logging.info("Shutdown requested, stopping coin analysis")
                     break
@@ -636,8 +711,9 @@ class HyperliquidBot:
                 if not corr_ok:
                     logging.info(f"{coin} correlation risk: {corr_reason}")
 
-                # Get LLM decision
+                # Get LLM decision (with rate limiting)
                 if self.llm_engine:
+                    self._llm_rate_limiter.acquire(1)
                     self.metrics.increment("llm_calls_total")
                     decision = self.llm_engine.get_trading_decision(
                         market_data=market_data,
@@ -822,11 +898,12 @@ class HyperliquidBot:
         logging.info(f"Execution mode: {EXECUTION_MODE}")
         logging.info(f"Mainnet trading: {ENABLE_MAINNET_TRADING}")
         logging.info(f"LLM model: {LLM_MODEL}")
-        logging.info(f"Trading pairs ({len(TRADING_PAIRS)}): {TRADING_PAIRS}")
+        logging.info(f"Trading pairs ({len(TRADING_PAIRS_RAW)}): {TRADING_PAIRS_RAW}")
         logging.info(
             f"Strategy: Asymmetric R:R — "
             f"SL {float(DEFAULT_SL_PCT)*100}% / TP {float(DEFAULT_TP_PCT)*100}% / "
-            f"Trailing {float(DEFAULT_TRAILING_CALLBACK)*100}%"
+            f"Trailing {float(DEFAULT_TRAILING_CALLBACK)*100}% / "
+            f"Break-Even @{float(BREAK_EVEN_ACTIVATION_PCT)*100}%"
         )
         logging.info(f"Confidence threshold: open={MIN_CONFIDENCE_OPEN} manage={MIN_CONFIDENCE_MANAGE}")
         logging.info(f"Adaptive cycle: {ENABLE_ADAPTIVE_CYCLE} ({MIN_CYCLE_SEC}-{MAX_CYCLE_SEC}s)")
@@ -835,7 +912,11 @@ class HyperliquidBot:
         logging.info(f"Telegram: {'enabled' if self.notifier.telegram_enabled else 'disabled'}")
         logging.info("=" * 60)
 
-        self.notifier.notify_bot_started(EXECUTION_MODE, TRADING_PAIRS)
+        # Run startup health checks
+        health_result = self.health_monitor.run_all_checks()
+        logging.info(f"Startup health check: {health_result['status']} ({health_result['summary']})")
+
+        self.notifier.notify_bot_started(EXECUTION_MODE, TRADING_PAIRS_RAW)
 
         write_live_status(
             is_running=True, execution_mode=EXECUTION_MODE,
@@ -858,8 +939,7 @@ class HyperliquidBot:
                 return
 
         # Validate trading pairs against Hyperliquid universe
-        global TRADING_PAIRS
-        TRADING_PAIRS = self._validate_trading_pairs()
+        self._trading_pairs = self._validate_trading_pairs()
 
         consecutive_failures = 0
 

@@ -6,6 +6,7 @@ from decimal import Decimal
 from typing import Any, Dict, List, Optional, Tuple
 
 from models import (
+    BreakEvenConfig,
     ManagedPosition,
     StopLossConfig,
     TakeProfitConfig,
@@ -19,7 +20,7 @@ MANAGED_POSITIONS_PATH = "state/managed_positions.json"
 
 class PositionManager:
     """
-    Gestisce posizioni con stop-loss, take-profit, e trailing stop.
+    Gestisce posizioni con stop-loss, take-profit, trailing stop, e break-even.
     Controlla posizioni contro prezzi correnti e attiva chiusure quando necessario.
     Persiste stato posizione gestita su disco.
     """
@@ -31,12 +32,16 @@ class PositionManager:
         default_trailing_callback: Decimal = Decimal("0.02"),
         enable_trailing_stop: bool = True,
         trailing_activation_pct: Decimal = Decimal("0.02"),
+        break_even_activation_pct: Decimal = Decimal("0.015"),
+        break_even_offset_pct: Decimal = Decimal("0.001"),
     ):
         self.default_sl_pct = default_sl_pct
         self.default_tp_pct = default_tp_pct
         self.default_trailing_callback = default_trailing_callback
         self.enable_trailing_stop = enable_trailing_stop
         self.trailing_activation_pct = trailing_activation_pct
+        self.break_even_activation_pct = break_even_activation_pct
+        self.break_even_offset_pct = break_even_offset_pct
         self._managed: Dict[str, ManagedPosition] = {}
         self._load_state()
 
@@ -119,13 +124,20 @@ class PositionManager:
                         callback_rate=self.default_trailing_callback,
                         activation_price=activation_price,
                     ),
+                    break_even=BreakEvenConfig(
+                        enabled=True,
+                        activation_pct=self.break_even_activation_pct,
+                        offset_pct=self.break_even_offset_pct,
+                        activated=False,
+                    ),
                 )
                 self._managed[coin] = managed
                 logger.info(
                     f"Nuova posizione gestita: {coin} {'LONG' if is_long else 'SHORT'} "
                     f"entry=${entry_price} SL={float(self.default_sl_pct)*100}% "
                     f"TP={float(self.default_tp_pct)*100}% "
-                    f"trailing={'ON' if self.enable_trailing_stop else 'OFF'}"
+                    f"trailing={'ON' if self.enable_trailing_stop else 'OFF'} "
+                    f"break_even=ON@{float(self.break_even_activation_pct)*100}%"
                 )
             else:
                 # Aggiorna dimensione se cambiata (chiusura parziale, aumento, ecc.)
@@ -144,6 +156,8 @@ class PositionManager:
         """
         Controlla tutte le posizioni gestite contro prezzi correnti.
         Ritorna lista di azioni da intraprendere (ordini chiusura).
+        Ordine di priorità: trailing stop > stop loss > take profit.
+        Break-even è gestito internamente (sposta SL, non chiude).
         """
         actions = []
 
@@ -153,7 +167,15 @@ class PositionManager:
 
             current_price = current_prices[coin]
 
-            # Controlla trailing stop prima (aggiorna prezzi estremi)
+            # === Break-even check (non chiude, sposta SL) ===
+            if managed.check_break_even(current_price):
+                be_price = managed.break_even.get_break_even_price(managed.entry_price, managed.is_long)
+                logger.info(
+                    f"Break-even attivato per {coin}: SL spostato a ${be_price} "
+                    f"(entry=${managed.entry_price}, current=${current_price})"
+                )
+
+            # === Trailing stop (priorità più alta per chiusura) ===
             if managed.should_trailing_stop(current_price):
                 ts_price = managed.trailing_stop.get_trailing_stop_price(managed.is_long)
                 actions.append({
@@ -176,14 +198,18 @@ class PositionManager:
             if managed.trailing_stop.enabled:
                 managed.trailing_stop.update_extreme(current_price, managed.is_long)
 
-            # Controlla stop-loss
+            # === Stop-loss ===
             if managed.should_stop_loss(current_price):
                 sl_price = managed.stop_loss.calculate_stop_price(
                     managed.entry_price, managed.is_long
                 )
+                # Se break-even è attivato, usa il prezzo break-even come SL
+                if managed.break_even.activated and managed.stop_loss.price is not None:
+                    sl_price = managed.stop_loss.price
+
                 actions.append({
                     "coin": coin,
-                    "trigger": "stop_loss",
+                    "trigger": "stop_loss" if not managed.break_even.activated else "break_even_stop",
                     "action": "close_position",
                     "size": managed.size,
                     "is_long": managed.is_long,
@@ -191,13 +217,13 @@ class PositionManager:
                     "trigger_price": sl_price,
                     "entry_price": managed.entry_price,
                     "reasoning": (
-                        f"Stop-loss attivato per {coin}: "
-                        f"prezzo=${current_price} violato SL a ${sl_price}"
+                        f"{'Break-even stop' if managed.break_even.activated else 'Stop-loss'} "
+                        f"attivato per {coin}: prezzo=${current_price} violato SL a ${sl_price}"
                     )
                 })
                 continue
 
-            # Controlla take-profit
+            # === Take-profit ===
             if managed.should_take_profit(current_price):
                 tp_price = managed.take_profit.calculate_tp_price(
                     managed.entry_price, managed.is_long
@@ -217,7 +243,7 @@ class PositionManager:
                     )
                 })
 
-        # Salva estremi trailing stop aggiornati
+        # Salva estremi trailing stop e break-even aggiornati
         self._save_state()
         return actions
 
@@ -258,11 +284,18 @@ class PositionManager:
                 callback_rate=self.default_trailing_callback,
                 activation_price=activation_price,
             ),
+            break_even=BreakEvenConfig(
+                enabled=True,
+                activation_pct=self.break_even_activation_pct,
+                offset_pct=self.break_even_offset_pct,
+                activated=False,
+            ),
         )
         self._save_state()
         logger.info(
             f"Registrata posizione gestita: {coin} {'LONG' if is_long else 'SHORT'} "
-            f"size={size} entry=${entry_price} SL={float(sl_pct)*100}% TP={float(tp_pct)*100}%"
+            f"size={size} entry=${entry_price} SL={float(sl_pct)*100}% TP={float(tp_pct)*100}% "
+            f"BE@{float(self.break_even_activation_pct)*100}%"
         )
 
     def remove_position(self, coin: str) -> None:
@@ -281,6 +314,9 @@ class PositionManager:
         statuses = []
         for coin, pos in self._managed.items():
             sl_price = pos.stop_loss.calculate_stop_price(pos.entry_price, pos.is_long)
+            # Se break-even attivato, usa prezzo break-even
+            if pos.break_even.activated and pos.stop_loss.price is not None:
+                sl_price = pos.stop_loss.price
             tp_price = pos.take_profit.calculate_tp_price(pos.entry_price, pos.is_long)
             ts_price = pos.trailing_stop.get_trailing_stop_price(pos.is_long)
 
@@ -290,11 +326,16 @@ class PositionManager:
                 "size": str(pos.size),
                 "entry_price": str(pos.entry_price),
                 "stop_loss_price": str(sl_price),
+                "stop_loss_pct": str(pos.stop_loss.percentage),
                 "take_profit_price": str(tp_price),
+                "take_profit_pct": str(pos.take_profit.percentage),
                 "trailing_stop_price": str(ts_price) if ts_price else None,
                 "trailing_enabled": pos.trailing_stop.enabled,
+                "trailing_callback": str(pos.trailing_stop.callback_rate),
                 "highest_tracked": str(pos.trailing_stop.highest_price) if pos.trailing_stop.highest_price else None,
                 "lowest_tracked": str(pos.trailing_stop.lowest_price) if pos.trailing_stop.lowest_price else None,
+                "break_even_activated": pos.break_even.activated,
+                "break_even_activation_pct": str(pos.break_even.activation_pct),
                 "opened_at": pos.opened_at,
             })
         return statuses

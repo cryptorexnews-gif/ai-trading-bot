@@ -17,6 +17,7 @@ from flask_cors import CORS
 
 from state_store import StateStore
 from utils.circuit_breaker import get_all_circuit_states
+from utils.metrics import MetricsCollector
 from utils.rate_limiter import get_all_rate_limiter_stats
 
 logger = logging.getLogger(__name__)
@@ -30,6 +31,9 @@ LIVE_STATUS_PATH = "state/bot_live_status.json"
 MANAGED_POSITIONS_PATH = "state/managed_positions.json"
 
 state_store = StateStore(STATE_PATH, METRICS_PATH)
+
+# Metrics collector for Prometheus export
+_metrics_collector = MetricsCollector()
 
 
 from flask.json.provider import DefaultJSONProvider
@@ -100,24 +104,31 @@ def positions():
 
 @app.route("/api/managed-positions", methods=["GET"])
 def managed_positions():
-    """Ottieni posizioni gestite con info SL/TP/trailing stop."""
+    """Ottieni posizioni gestite con info SL/TP/trailing stop/break-even."""
     data = _read_json_file(MANAGED_POSITIONS_PATH)
     positions_list = []
     for coin, pos_data in data.items():
         sl = pos_data.get("stop_loss", {})
         tp = pos_data.get("take_profit", {})
         ts = pos_data.get("trailing_stop", {})
+        be = pos_data.get("break_even", {})
 
         entry_price = Decimal(str(pos_data.get("entry_price", "0")))
         is_long = pos_data.get("is_long", True)
         sl_pct = Decimal(str(sl.get("percentage", "0.03")))
         tp_pct = Decimal(str(tp.get("percentage", "0.05")))
 
-        if is_long:
+        # If break-even activated and SL has absolute price, use that
+        if be.get("activated", False) and sl.get("price"):
+            sl_price = Decimal(str(sl["price"]))
+        elif is_long:
             sl_price = entry_price * (Decimal("1") - sl_pct)
-            tp_price = entry_price * (Decimal("1") + tp_pct)
         else:
             sl_price = entry_price * (Decimal("1") + sl_pct)
+
+        if is_long:
+            tp_price = entry_price * (Decimal("1") + tp_pct)
+        else:
             tp_price = entry_price * (Decimal("1") - tp_pct)
 
         positions_list.append({
@@ -133,6 +144,8 @@ def managed_positions():
             "trailing_callback": ts.get("callback_rate", "0.02"),
             "highest_tracked": ts.get("highest_price"),
             "lowest_tracked": ts.get("lowest_price"),
+            "break_even_activated": be.get("activated", False),
+            "break_even_activation_pct": be.get("activation_pct", "0.015"),
             "opened_at": pos_data.get("opened_at", 0),
         })
 
@@ -239,6 +252,7 @@ def config():
         "default_tp_pct": os.getenv("DEFAULT_TP_PCT", "0.05"),
         "enable_trailing_stop": os.getenv("ENABLE_TRAILING_STOP", "true"),
         "trailing_callback": os.getenv("DEFAULT_TRAILING_CALLBACK", "0.02"),
+        "break_even_activation_pct": os.getenv("BREAK_EVEN_ACTIVATION_PCT", "0.015"),
         "enable_adaptive_cycle": os.getenv("ENABLE_ADAPTIVE_CYCLE", "true"),
         "correlation_threshold": os.getenv("CORRELATION_THRESHOLD", "0.7"),
         "timestamp": time.time()
@@ -276,6 +290,69 @@ def logs():
         })
     except IOError:
         return jsonify({"logs": [], "timestamp": time.time()})
+
+
+@app.route("/metrics", methods=["GET"])
+def prometheus_metrics():
+    """Endpoint Prometheus per metriche in formato testo."""
+    metrics_data = state_store.load_metrics()
+
+    lines = []
+
+    # Counters
+    counters = [
+        ("bot_cycles_total", "Total trading cycles", metrics_data.get("cycles_total", 0)),
+        ("bot_cycles_failed_total", "Total failed cycles", metrics_data.get("cycles_failed", 0)),
+        ("bot_trades_executed_total", "Total trades executed", metrics_data.get("trades_executed_total", 0)),
+        ("bot_holds_total", "Total hold decisions", metrics_data.get("holds_total", 0)),
+        ("bot_risk_rejections_total", "Total risk rejections", metrics_data.get("risk_rejections_total", 0)),
+        ("bot_execution_failures_total", "Total execution failures", metrics_data.get("execution_failures_total", 0)),
+    ]
+
+    for name, help_text, value in counters:
+        lines.append(f"# HELP {name} {help_text}")
+        lines.append(f"# TYPE {name} counter")
+        lines.append(f"{name} {value}")
+
+    # Gauges from live status
+    live_status = _read_json_file(LIVE_STATUS_PATH)
+    portfolio = live_status.get("portfolio", {})
+
+    gauges = [
+        ("bot_balance_usd", "Current balance in USD", portfolio.get("total_balance", 0)),
+        ("bot_available_balance_usd", "Available balance in USD", portfolio.get("available_balance", 0)),
+        ("bot_margin_usage_ratio", "Current margin usage ratio", portfolio.get("margin_usage", 0)),
+        ("bot_open_positions_count", "Number of open positions", portfolio.get("position_count", 0)),
+        ("bot_unrealized_pnl_usd", "Total unrealized PnL in USD", portfolio.get("total_unrealized_pnl", 0)),
+        ("bot_is_running", "Whether bot is running (1=yes, 0=no)", 1 if live_status.get("is_running") else 0),
+        ("bot_cycle_count", "Current cycle count", live_status.get("cycle_count", 0)),
+        ("bot_last_cycle_duration_seconds", "Last cycle duration", live_status.get("last_cycle_duration", 0)),
+    ]
+
+    state = state_store.load_state()
+    gauges.append(("bot_peak_portfolio_value_usd", "Peak portfolio value", float(state.get("peak_portfolio_value", 0))))
+    gauges.append(("bot_consecutive_losses", "Consecutive losing trades", state.get("consecutive_losses", 0)))
+    gauges.append(("bot_consecutive_failed_cycles", "Consecutive failed cycles", state.get("consecutive_failed_cycles", 0)))
+
+    for name, help_text, value in gauges:
+        lines.append(f"# HELP {name} {help_text}")
+        lines.append(f"# TYPE {name} gauge")
+        lines.append(f"{name} {float(value)}")
+
+    # Circuit breaker states
+    cb_states = get_all_circuit_states()
+    for cb_name, cb_state in cb_states.items():
+        state_val = {"closed": 0, "open": 1, "half_open": 2}.get(cb_state.get("state", "closed"), 0)
+        safe_name = cb_name.replace("-", "_").replace(" ", "_")
+        lines.append(f"# HELP bot_circuit_breaker_{safe_name}_state Circuit breaker state (0=closed, 1=open, 2=half_open)")
+        lines.append(f"# TYPE bot_circuit_breaker_{safe_name}_state gauge")
+        lines.append(f"bot_circuit_breaker_{safe_name}_state {state_val}")
+        lines.append(f"bot_circuit_breaker_{safe_name}_failures {cb_state.get('failure_count', 0)}")
+
+    return Response(
+        "\n".join(lines) + "\n",
+        mimetype="text/plain; version=0.0.4; charset=utf-8"
+    )
 
 
 def run_api_server(host: str = "0.0.0.0", port: int = 5000, debug: bool = False):
