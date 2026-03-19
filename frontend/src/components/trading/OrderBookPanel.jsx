@@ -8,6 +8,11 @@ const SIG_FIG_OPTIONS = [
   { value: 5, label: '5' },
 ]
 
+function safeNum(v, fallback = 0) {
+  if (v == null || isNaN(v)) return fallback
+  return v
+}
+
 export default function OrderBookPanel({
   bids,
   asks,
@@ -20,29 +25,34 @@ export default function OrderBookPanel({
   loading,
   panelHeight,
 }) {
+  const safeBids = bids || []
+  const safeAsks = asks || []
+  const safeSpread = safeNum(spread)
+  const safeSpreadPct = safeNum(spreadPct)
+
   // Compute cumulative sizes
   const bidsWithCum = useMemo(() => {
     let cum = 0
-    return bids.map(b => {
-      cum += b.sz
+    return safeBids.map(b => {
+      cum += safeNum(b.sz)
       return { ...b, cum }
     })
-  }, [bids])
+  }, [safeBids])
 
   const asksWithCum = useMemo(() => {
     let cum = 0
-    return asks.map(a => {
-      cum += a.sz
+    return safeAsks.map(a => {
+      cum += safeNum(a.sz)
       return { ...a, cum }
     })
-  }, [asks])
+  }, [safeAsks])
 
-  // Max size for depth bar scaling (across both sides)
+  // Max size for depth bar scaling
   const maxSize = useMemo(() => {
-    const maxBid = bids.length > 0 ? Math.max(...bids.map(b => b.sz)) : 0
-    const maxAsk = asks.length > 0 ? Math.max(...asks.map(a => a.sz)) : 0
+    const maxBid = safeBids.length > 0 ? Math.max(...safeBids.map(b => safeNum(b.sz))) : 0
+    const maxAsk = safeAsks.length > 0 ? Math.max(...safeAsks.map(a => safeNum(a.sz))) : 0
     return Math.max(maxBid, maxAsk, 0.0001)
-  }, [bids, asks])
+  }, [safeBids, safeAsks])
 
   // Bid/ask imbalance
   const totalBidSize = bidsWithCum.length > 0 ? bidsWithCum[bidsWithCum.length - 1].cum : 0
@@ -50,8 +60,7 @@ export default function OrderBookPanel({
   const totalSize = totalBidSize + totalAskSize
   const bidPct = totalSize > 0 ? Math.round((totalBidSize / totalSize) * 100) : 50
 
-  // Layout: split available height between asks and bids
-  // Reserve space for header (~36px), column header (~20px), spread bar (~40px), imbalance (~44px)
+  // Layout
   const overhead = 140
   const availableHeight = panelHeight - overhead
   const halfHeight = Math.max(60, Math.floor(availableHeight / 2))
@@ -89,7 +98,7 @@ export default function OrderBookPanel({
         <span className="text-right">Total</span>
       </div>
 
-      {loading && bids.length === 0 ? (
+      {loading && safeBids.length === 0 ? (
         <div className="flex-1 flex items-center justify-center">
           <div className="flex flex-col gap-1.5 w-full px-4">
             {[...Array(12)].map((_, i) => (
@@ -117,7 +126,7 @@ export default function OrderBookPanel({
           <div className="flex items-center justify-between px-3 py-1.5 border-y border-gray-800 bg-gray-900/60 shrink-0">
             <div className="flex items-center gap-2">
               <span className={`text-[13px] font-bold font-mono ${isPositive ? 'text-green-400' : 'text-red-400'}`}>
-                {lastPrice ? fmtPrice(lastPrice) : '—'}
+                {lastPrice != null ? fmtPrice(lastPrice) : '—'}
               </span>
               {isPositive ? (
                 <svg width="10" height="10" viewBox="0 0 10 10" className="text-green-400">
@@ -131,8 +140,8 @@ export default function OrderBookPanel({
             </div>
             <div className="text-[10px] text-gray-500 font-mono">
               <span className="text-gray-600">Spread </span>
-              <span className="text-yellow-400/80">{fmtPrice(spread)}</span>
-              <span className="text-gray-700 ml-1">({spreadPct.toFixed(3)}%)</span>
+              <span className="text-yellow-400/80">{fmtPrice(safeSpread)}</span>
+              <span className="text-gray-700 ml-1">({safeSpreadPct.toFixed(3)}%)</span>
             </div>
           </div>
 
@@ -176,11 +185,11 @@ export default function OrderBookPanel({
 /* ─── Single row ─── */
 function Row({ price, size, cumulative, maxSize, side }) {
   const isBid = side === 'bid'
-  const depthPct = maxSize > 0 ? Math.min((size / maxSize) * 100, 100) : 0
+  const safeSize = (size != null && !isNaN(size)) ? size : 0
+  const depthPct = maxSize > 0 ? Math.min((safeSize / maxSize) * 100, 100) : 0
 
   return (
     <div className="relative grid grid-cols-3 py-[1.5px] px-3 text-[11px] font-mono hover:bg-white/[0.03] transition-colors">
-      {/* Depth bar — right-aligned like Hyperliquid */}
       <div
         className={`absolute right-0 top-0 bottom-0 pointer-events-none transition-all duration-300 ${
           isBid ? 'bg-green-500/[0.12]' : 'bg-red-500/[0.12]'

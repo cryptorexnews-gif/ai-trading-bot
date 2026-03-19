@@ -8,6 +8,11 @@ import OrderBookPanel from './trading/OrderBookPanel'
 const DEFAULT_COINS = ['BTC', 'ETH', 'SOL', 'BNB', 'XRP', 'ADA', 'DOGE', 'AVAX', 'LINK', 'SUI']
 const PANEL_HEIGHT = 520
 
+function safeNum(v, fallback = 0) {
+  if (v == null || isNaN(v)) return fallback
+  return v
+}
+
 export default function TradingView({ tradingPairs }) {
   const coins = tradingPairs && tradingPairs.length > 0 ? tradingPairs : DEFAULT_COINS
   const [selectedCoin, setSelectedCoin] = useState(coins[0])
@@ -33,23 +38,28 @@ export default function TradingView({ tradingPairs }) {
       )
       if (!res.ok) return
       const data = await res.json()
-      if (!mountedRef.current || !data.candles) return
+      if (!mountedRef.current || !data.candles || data.candles.length === 0) return
 
       setCandles(data.candles)
-      if (data.candles.length > 0) {
-        const last = data.candles[data.candles.length - 1]
-        setLastPrice(last.close)
-        setStats24h({
-          high: Math.max(...data.candles.map(c => c.high)),
-          low: Math.min(...data.candles.map(c => c.low)),
-          volume: data.candles.reduce((sum, c) => sum + c.volume, 0) * last.close,
-          change: data.candles[0].open > 0
-            ? ((last.close - data.candles[0].open) / data.candles[0].open) * 100
-            : 0,
-          open: last.open,
-          close: last.close,
-        })
-      }
+      const last = data.candles[data.candles.length - 1]
+      const first = data.candles[0]
+      setLastPrice(safeNum(last.close, null))
+
+      const high = Math.max(...data.candles.map(c => safeNum(c.high, 0)))
+      const low = Math.min(...data.candles.filter(c => safeNum(c.low, 0) > 0).map(c => c.low))
+      const vol = data.candles.reduce((sum, c) => sum + safeNum(c.volume, 0), 0) * safeNum(last.close, 0)
+      const openPrice = safeNum(first.open, 0)
+      const closePrice = safeNum(last.close, 0)
+      const change = openPrice > 0 ? ((closePrice - openPrice) / openPrice) * 100 : 0
+
+      setStats24h({
+        high: safeNum(high, 0),
+        low: safeNum(low, 0),
+        volume: safeNum(vol, 0),
+        change: safeNum(change, 0),
+        open: openPrice,
+        close: closePrice,
+      })
       setChartLoading(false)
     } catch {
       setChartLoading(false)
@@ -69,8 +79,8 @@ export default function TradingView({ tradingPairs }) {
 
       setBids(data.bids || [])
       setAsks(data.asks || [])
-      setSpread(data.spread || 0)
-      setSpreadPct(data.spread_pct || 0)
+      setSpread(safeNum(data.spread, 0))
+      setSpreadPct(safeNum(data.spread_pct, 0))
       setObLoading(false)
     } catch {
       setObLoading(false)
@@ -82,6 +92,11 @@ export default function TradingView({ tradingPairs }) {
     mountedRef.current = true
     setChartLoading(true)
     setObLoading(true)
+    setCandles([])
+    setBids([])
+    setAsks([])
+    setStats24h(null)
+    setLastPrice(null)
     fetchCandles()
     fetchOrderBook()
     const chartTimer = window.setInterval(fetchCandles, 30000)
@@ -93,8 +108,9 @@ export default function TradingView({ tradingPairs }) {
     }
   }, [fetchCandles, fetchOrderBook])
 
-  const isPositive = stats24h ? stats24h.change >= 0 : true
-  const changePct = stats24h ? stats24h.change.toFixed(2) : null
+  const change = stats24h ? safeNum(stats24h.change, 0) : 0
+  const isPositive = change >= 0
+  const changePct = stats24h ? change.toFixed(2) : null
 
   return (
     <div className="bg-gray-900 rounded-xl border border-gray-800 overflow-hidden">
