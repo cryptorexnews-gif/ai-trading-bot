@@ -99,6 +99,7 @@ HYPERLIQUID_WALLET_ADDRESS=0xYourWalletAddress
 HYPERLIQUID_PRIVATE_KEY=0xYourPrivateKey
 
 # OpenRouter API key for Claude Opus 4.6
+# Get your key from: https://openrouter.ai/keys
 OPENROUTER_API_KEY=sk-or-v1-YourOpenRouterApiKey
 
 # Execution mode: "paper" (simulated) or "live" (real trading)
@@ -107,7 +108,7 @@ EXECUTION_MODE=paper
 # Enable live trading (only after thorough testing!)
 ENABLE_MAINNET_TRADING=false
 
-# Use external LLM (Claude via OpenRouter) or deterministic fallback
+# Use external LLM (Claude Opus 4.6 via OpenRouter) or deterministic fallback
 ALLOW_EXTERNAL_LLM=false
 
 # Include portfolio context in LLM prompt (requires ALLOW_EXTERNAL_LLM=true)

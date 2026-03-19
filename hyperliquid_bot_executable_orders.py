@@ -171,7 +171,7 @@ class HyperliquidTradingBotExecutable:
         self.metrics_file_path = os.getenv("METRICS_FILE_PATH", "logs/agent_metrics.json")
         self.cycle_interval = int(os.getenv("CYCLE_INTERVAL_SEC", "300"))
         
-        # OpenRouter API key for Claude
+        # OpenRouter API key for Claude Opus 4.6
         self.openrouter_api_key = os.getenv("OPENROUTER_API_KEY", "")
         
         self.min_size_by_coin: Dict[str, Decimal] = {

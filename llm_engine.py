@@ -1,10 +1,13 @@
 import json
+import logging
 from decimal import Decimal
 from typing import Any, Dict, List
 
 import requests
 
 from models import PortfolioState, TradingAction
+
+logger = logging.getLogger(__name__)
 
 
 class LLMEngine:
@@ -164,6 +167,11 @@ class LLMEngine:
         portfolio_state: PortfolioState
     ) -> Dict[str, Dict[str, Any]]:
         if not self.allow_external_llm:
+            logger.info("External LLM disabled, using fallback strategy")
+            return self._fallback_orders(portfolio_state)
+
+        if not self.api_key:
+            logger.error("OpenRouter API key missing, using fallback strategy")
             return self._fallback_orders(portfolio_state)
 
         headers = {
@@ -173,25 +181,37 @@ class LLMEngine:
             "X-Title": "Hyperliquid Trading Bot"  # Optional: for OpenRouter analytics
         }
         
+        # Use Claude Opus 4.6 with reasoning enabled (extended thinking)
         payload = {
-            "model": "anthropic/claude-3-opus-20240229",  # OpenRouter model identifier
+            "model": "anthropic/claude-3-opus-20240229",
             "messages": [
                 {
                     "role": "user",
                     "content": self._build_prompt(market_data, portfolio_state)
                 }
             ],
-            "max_tokens": 1024,
+            "max_tokens": 4096,  # Increased for reasoning
             "temperature": 0.2,
-            "stream": False
+            "stream": False,
+            # Enable reasoning/extended thinking (Claude's extended reasoning feature)
+            "extra_body": {
+                "thinking": {
+                    "type": "enabled",
+                    "budget_tokens": 2000  # Allocate tokens for reasoning
+                }
+            }
         }
 
-        response = self.session.post(
-            "https://openrouter.ai/api/v1/chat/completions",
-            headers=headers,
-            json=payload,
-            timeout=30
-        )
+        try:
+            response = self.session.post(
+                "https://openrouter.ai/api/v1/chat/completions",
+                headers=headers,
+                json=payload,
+                timeout=60  # Increased timeout for reasoning
+            )
+        except requests.exceptions.RequestException as e:
+            logger.error(f"OpenRouter request failed: {type(e).__name__}: {str(e)}")
+            return self._fallback_orders(portfolio_state)
 
         if response.status_code != 200:
             logger.error(f"OpenRouter API error: status={response.status_code}, response={response.text[:200]}")
@@ -222,6 +242,8 @@ class LLMEngine:
             return self._fallback_orders(portfolio_state)
 
         sanitized = self._sanitize_orders(parsed)
+        
+        # Ensure all trading pairs have an order
         for coin in self.trading_pairs:
             if coin not in sanitized:
                 sanitized[coin] = {
@@ -231,4 +253,6 @@ class LLMEngine:
                     "confidence": Decimal("0"),
                     "reasoning": "No order for coin"
                 }
+        
+        logger.info(f"LLM generated orders for {len(sanitized)} coins")
         return sanitized
