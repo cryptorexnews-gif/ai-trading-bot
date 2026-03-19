@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 
 const API_BASE = '/api'
 
@@ -6,6 +6,8 @@ export function useApi(endpoint, intervalMs = 5000) {
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
+  const [lastUpdated, setLastUpdated] = useState(null)
+  const mountedRef = useRef(true)
 
   const fetchData = useCallback(async () => {
     try {
@@ -14,20 +16,31 @@ export function useApi(endpoint, intervalMs = 5000) {
         throw new Error(`HTTP ${response.status}`)
       }
       const json = await response.json()
-      setData(json)
-      setError(null)
+      if (mountedRef.current) {
+        setData(json)
+        setError(null)
+        setLastUpdated(new Date())
+      }
     } catch (err) {
-      setError(err.message)
+      if (mountedRef.current) {
+        setError(err.message)
+      }
     } finally {
-      setLoading(false)
+      if (mountedRef.current) {
+        setLoading(false)
+      }
     }
   }, [endpoint])
 
   useEffect(() => {
+    mountedRef.current = true
     fetchData()
     const interval = setInterval(fetchData, intervalMs)
-    return () => clearInterval(interval)
+    return () => {
+      mountedRef.current = false
+      clearInterval(interval)
+    }
   }, [fetchData, intervalMs])
 
-  return { data, loading, error, refetch: fetchData }
+  return { data, loading, error, lastUpdated, refetch: fetchData }
 }

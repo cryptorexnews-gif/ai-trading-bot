@@ -39,7 +39,17 @@ class DecimalEncoder(json.JSONEncoder):
         return super().default(obj)
 
 
-app.json_encoder = DecimalEncoder
+# Use the modern Flask JSON provider approach
+from flask.json.provider import DefaultJSONProvider
+
+class CustomJSONProvider(DefaultJSONProvider):
+    def default(self, obj):
+        if isinstance(obj, Decimal):
+            return float(obj)
+        return super().default(obj)
+
+app.json_provider_class = CustomJSONProvider
+app.json = CustomJSONProvider(app)
 
 
 def _read_json_file(path: str) -> Dict[str, Any]:
@@ -51,17 +61,6 @@ def _read_json_file(path: str) -> Dict[str, Any]:
             return json.load(f)
     except (json.JSONDecodeError, IOError):
         return {}
-
-
-def _write_json_file(path: str, data: Dict[str, Any]) -> None:
-    """Safely write a JSON file."""
-    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-    tmp_path = path + ".tmp"
-    with open(tmp_path, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2, cls=DecimalEncoder)
-        f.flush()
-        os.fsync(f.fileno())
-    os.replace(tmp_path, path)
 
 
 @app.route("/api/health", methods=["GET"])
@@ -117,7 +116,6 @@ def trades():
     limit = request.args.get("limit", 50, type=int)
     state = state_store.load_state()
     history = state.get("trade_history", [])
-    # Return most recent first
     recent = list(reversed(history[-limit:]))
     return jsonify({
         "trades": recent,
@@ -132,7 +130,6 @@ def performance():
     state = state_store.load_state()
     summary = state_store.get_performance_summary(state)
 
-    # Calculate equity curve from trade history
     history = state.get("trade_history", [])
     equity_points = []
     for trade in history:

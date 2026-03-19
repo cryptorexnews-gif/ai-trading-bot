@@ -86,7 +86,7 @@ class LLMEngine:
             else:
                 lines.append(f"  {key}: {value}")
 
-        # Add long-term context summary
+        # Add long-term context summary (compact)
         lt = technical_data.get("long_term_context", {})
         if lt:
             lines.append("  long_term_context:")
@@ -95,7 +95,7 @@ class LLMEngine:
                 if sub_value is not None:
                     val_str = f"{float(sub_value):.6f}" if isinstance(sub_value, Decimal) else str(sub_value)
                     lines.append(f"    {sub_key}: {val_str}")
-            # Last 3 RSI values for trend
+            # Last 3 RSI values for trend direction
             rsi_list = lt.get("rsi_14", [])
             if rsi_list:
                 last_3 = rsi_list[-3:]
@@ -109,11 +109,13 @@ class LLMEngine:
         if not recent_trades:
             return "  No recent trades."
         lines = []
-        for trade in recent_trades[-5:]:  # Last 5 trades
+        for trade in recent_trades[-5:]:
+            success_str = "✓" if trade.get("success") else "✗"
             lines.append(
-                f"  - {trade.get('coin', '?')} {trade.get('action', '?')} "
+                f"  - [{success_str}] {trade.get('coin', '?')} {trade.get('action', '?')} "
                 f"size={trade.get('size', '?')} @ ${trade.get('price', '?')} "
-                f"({trade.get('reasoning', '')[:60]})"
+                f"conf={trade.get('confidence', '?')} "
+                f"({trade.get('reasoning', '')[:80]})"
             )
         return "\n".join(lines)
 
