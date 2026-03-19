@@ -39,6 +39,9 @@ class HyperliquidExchangeClient:
     Client for Hyperliquid exchange API.
     Handles order signing (EIP-712), placement, leverage, and market data.
     Supports both live and paper trading modes.
+
+    Security: The raw private key is never stored. Only the derived Account object
+    is kept in memory. __repr__ is overridden to prevent accidental secret leakage.
     """
 
     def __init__(
@@ -53,7 +56,6 @@ class HyperliquidExchangeClient:
         exchange_timeout: int = 30,
     ):
         self.base_url = base_url
-        self.private_key = private_key
         self.enable_mainnet_trading = enable_mainnet_trading
         self.execution_mode = execution_mode
         self.meta_cache_ttl_sec = meta_cache_ttl_sec
@@ -62,7 +64,11 @@ class HyperliquidExchangeClient:
         self.exchange_timeout = exchange_timeout
 
         self.session = _create_robust_session()
-        self.account = Account.from_key(self.private_key)
+
+        # Security Fix #1: Derive Account immediately, never store raw private key
+        self.account = Account.from_key(private_key)
+        # private_key parameter goes out of scope here — not stored as self.private_key
+
         self._meta_cache: Optional[Dict[str, Any]] = None
         self._meta_cache_at = 0.0
         self._mids_cache: Optional[Dict[str, str]] = None
@@ -82,8 +88,40 @@ class HyperliquidExchangeClient:
 
         logger.info(
             f"Exchange client initialized: base_url={self.base_url}, "
-            f"mode={self.execution_mode}, mainnet={self.enable_mainnet_trading}"
+            f"mode={self.execution_mode}, mainnet={self.enable_mainnet_trading}, "
+            f"wallet={self.get_wallet_address_masked()}"
         )
+
+    def __repr__(self) -> str:
+        """Prevent accidental secret leakage in logs/tracebacks."""
+        return (
+            f"<HyperliquidExchangeClient base_url={self.base_url} "
+            f"mode={self.execution_mode} wallet={self.get_wallet_address_masked()}>"
+        )
+
+    def __str__(self) -> str:
+        return self.__repr__()
+
+    def get_derived_address(self) -> str:
+        """Get the wallet address derived from the private key."""
+        return self.account.address
+
+    def get_wallet_address_masked(self) -> str:
+        """Get masked wallet address for logging."""
+        addr = self.account.address
+        if not addr or len(addr) < 12:
+            return "invalid"
+        return f"{addr[:6]}...{addr[-4:]}"
+
+    @staticmethod
+    def validate_wallet_address(private_key: str, expected_address: str) -> bool:
+        """
+        Security Fix #6: Validate that the wallet address matches the private key.
+        Call this at startup before creating the client.
+        Returns True if addresses match (case-insensitive).
+        """
+        derived = Account.from_key(private_key).address
+        return derived.lower() == expected_address.lower()
 
     def _post_info(self, payload: Dict[str, Any], timeout: Optional[int] = None) -> Optional[Any]:
         """POST to /info with circuit breaker and robust session."""

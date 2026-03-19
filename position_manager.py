@@ -17,6 +17,10 @@ logger = logging.getLogger(__name__)
 
 MANAGED_POSITIONS_PATH = "state/managed_positions.json"
 
+# Security Fix #7: Restrictive file permissions
+_FILE_PERMISSION = 0o600
+_DIR_PERMISSION = 0o700
+
 
 class PositionManager:
     """
@@ -59,15 +63,32 @@ class PositionManager:
             logger.warning(f"Impossibile caricare posizioni gestite: {e}")
 
     def _save_state(self) -> None:
-        """Persisti posizioni gestite su disco atomicamente."""
-        os.makedirs(os.path.dirname(MANAGED_POSITIONS_PATH) or ".", exist_ok=True)
+        """Persisti posizioni gestite su disco atomicamente con permessi restrittivi."""
+        dir_path = os.path.dirname(MANAGED_POSITIONS_PATH) or "."
+        if dir_path != ".":
+            os.makedirs(dir_path, mode=_DIR_PERMISSION, exist_ok=True)
+            try:
+                os.chmod(dir_path, _DIR_PERMISSION)
+            except OSError:
+                pass
+
         data = {coin: pos.to_dict() for coin, pos in self._managed.items()}
         tmp_path = MANAGED_POSITIONS_PATH + ".tmp"
-        with open(tmp_path, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
-            f.flush()
-            os.fsync(f.fileno())
+
+        fd = os.open(tmp_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, _FILE_PERMISSION)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+                f.flush()
+                os.fsync(f.fileno())
+        except Exception:
+            raise
+
         os.replace(tmp_path, MANAGED_POSITIONS_PATH)
+        try:
+            os.chmod(MANAGED_POSITIONS_PATH, _FILE_PERMISSION)
+        except OSError:
+            pass
 
     def sync_with_exchange(
         self,

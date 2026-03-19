@@ -12,6 +12,10 @@ from typing import Any, Dict, Optional
 
 LIVE_STATUS_PATH = "state/bot_live_status.json"
 
+# Security Fix #7: Restrictive file permissions
+_FILE_PERMISSION = 0o600
+_DIR_PERMISSION = 0o700
+
 
 class DecimalEncoder(json.JSONEncoder):
     def default(self, obj):
@@ -43,13 +47,31 @@ def write_live_status(
         "updated_at": time.time()
     }
 
-    os.makedirs(os.path.dirname(LIVE_STATUS_PATH) or ".", exist_ok=True)
+    dir_path = os.path.dirname(LIVE_STATUS_PATH) or "."
+    if dir_path != ".":
+        os.makedirs(dir_path, mode=_DIR_PERMISSION, exist_ok=True)
+        try:
+            os.chmod(dir_path, _DIR_PERMISSION)
+        except OSError:
+            pass
+
     tmp_path = LIVE_STATUS_PATH + ".tmp"
-    with open(tmp_path, "w", encoding="utf-8") as f:
-        json.dump(status, f, ensure_ascii=False, indent=2, cls=DecimalEncoder)
-        f.flush()
-        os.fsync(f.fileno())
+
+    # Create file with restrictive permissions
+    fd = os.open(tmp_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, _FILE_PERMISSION)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(status, f, ensure_ascii=False, indent=2, cls=DecimalEncoder)
+            f.flush()
+            os.fsync(f.fileno())
+    except Exception:
+        raise
+
     os.replace(tmp_path, LIVE_STATUS_PATH)
+    try:
+        os.chmod(LIVE_STATUS_PATH, _FILE_PERMISSION)
+    except OSError:
+        pass
 
 
 def _serialize_decision(decision: Dict[str, Any]) -> Dict[str, Any]:

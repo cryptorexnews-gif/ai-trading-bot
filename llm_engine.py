@@ -17,6 +17,9 @@ class LLMEngine:
     """
     LLM Engine using Claude Opus 4.6 via OpenRouter for trading decisions.
     All market data comes from Hyperliquid API; no external data sources.
+
+    Security: The API key is stored only in the session headers and never logged.
+    __repr__ is overridden to prevent accidental leakage.
     """
 
     def __init__(
@@ -27,7 +30,6 @@ class LLMEngine:
         max_tokens: int = 8192,
         temperature: float = 0.15
     ):
-        self.api_key = api_key
         self.base_url = base_url
         self.model = model
         self.max_tokens = max_tokens
@@ -36,12 +38,20 @@ class LLMEngine:
         self.max_retries = 2
         self.session = requests.Session()
         self.session.headers.update({
-            "Authorization": f"Bearer {self.api_key}",
+            "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
             "HTTP-Referer": "https://github.com/hyperliquid-trading-bot",
             "X-Title": "Hyperliquid Trading Bot"
         })
+        # Do NOT store api_key as self.api_key — it lives only in session headers
         logger.info(f"LLM Engine initialized with model={self.model}, timeout={self.request_timeout}s")
+
+    def __repr__(self) -> str:
+        """Prevent accidental API key leakage in logs/tracebacks."""
+        return f"<LLMEngine model={self.model} base_url={self.base_url}>"
+
+    def __str__(self) -> str:
+        return self.__repr__()
 
     def _format_positions(self, positions: Dict[str, Dict[str, Any]]) -> str:
         if not positions:
@@ -373,7 +383,9 @@ Respond with ONLY this JSON (no markdown, no extra text):
         }
 
     def _call_openrouter(self, prompt: str) -> Optional[str]:
-        """Call OpenRouter API with retry logic via utils/retry.py."""
+        """Call OpenRouter API with retry logic via utils/retry.py.
+        Security: Error messages never include request headers (which contain Bearer token).
+        """
         payload = {
             "model": self.model,
             "messages": [
@@ -407,26 +419,27 @@ Respond with ONLY this JSON (no markdown, no extra text):
                 choices = data.get("choices", [])
                 if choices and choices[0].get("message", {}).get("content"):
                     return choices[0]["message"]["content"]
-                logger.error(f"OpenRouter returned empty choices: {data}")
+                logger.error(f"OpenRouter returned empty choices")
                 return None
 
+            # Security: Never log response headers or request headers
             logger.error(
-                f"OpenRouter non-retryable error: HTTP {response.status_code}, "
-                f"body={response.text[:500]}"
+                f"OpenRouter non-retryable error: HTTP {response.status_code}"
             )
             return None
 
         except requests.exceptions.Timeout:
             logger.error(f"OpenRouter timeout after all retries (timeout={self.request_timeout}s)")
             return None
-        except requests.exceptions.ConnectionError as e:
-            logger.error(f"OpenRouter connection error after all retries: {e}")
+        except requests.exceptions.ConnectionError:
+            logger.error("OpenRouter connection error after all retries")
             return None
         except requests.exceptions.HTTPError as e:
-            logger.error(f"OpenRouter HTTP error after all retries: {e}")
+            # Security: Only log status code, not full exception which may contain headers
+            logger.error(f"OpenRouter HTTP error after all retries: status={getattr(e.response, 'status_code', 'unknown')}")
             return None
         except Exception as e:
-            logger.error(f"OpenRouter unexpected error: {type(e).__name__}: {e}")
+            logger.error(f"OpenRouter unexpected error: {type(e).__name__}")
             return None
 
     def get_trading_decision(

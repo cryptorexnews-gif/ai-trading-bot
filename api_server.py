@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
 Server API per Dashboard Bot Trading Hyperliquid.
+Security: API key authentication, restricted CORS, secret blocklist, log sanitization.
 """
 
 import csv
@@ -8,8 +9,10 @@ import io
 import json
 import logging
 import os
+import re
 import time
 from decimal import Decimal
+from functools import wraps
 from typing import Any, Dict
 
 from flask import Flask, Response, jsonify, request
@@ -23,7 +26,13 @@ from utils.rate_limiter import get_all_rate_limiter_stats
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
-CORS(app)
+
+# Security Fix #3: Restrict CORS to specific origins instead of allowing all
+CORS_ORIGINS = os.getenv("CORS_ALLOWED_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000").split(",")
+CORS(app, origins=[o.strip() for o in CORS_ORIGINS if o.strip()])
+
+# Security Fix #3: API key authentication
+API_AUTH_KEY = os.getenv("DASHBOARD_API_KEY", "")
 
 STATE_PATH = "state/bot_state.json"
 METRICS_PATH = "state/bot_metrics.json"
@@ -34,6 +43,55 @@ state_store = StateStore(STATE_PATH, METRICS_PATH)
 
 # Metrics collector for Prometheus export
 _metrics_collector = MetricsCollector()
+
+# Security Fix #2: Explicit blocklist of secret env var patterns
+_SECRET_ENV_PATTERNS = {
+    "KEY", "TOKEN", "SECRET", "PASSWORD", "PRIVATE", "CREDENTIAL", "AUTH"
+}
+
+
+def _is_secret_env_var(name: str) -> bool:
+    """Check if an environment variable name looks like a secret."""
+    name_upper = name.upper()
+    for pattern in _SECRET_ENV_PATTERNS:
+        if pattern in name_upper:
+            return True
+    return False
+
+
+# Security Fix #5: Log sanitization patterns
+_SENSITIVE_PATTERNS = [
+    # Ethereum private keys (64 hex chars)
+    (re.compile(r'(0x)?[0-9a-fA-F]{64}'), '[REDACTED_KEY]'),
+    # Bearer tokens
+    (re.compile(r'Bearer\s+[A-Za-z0-9\-._~+/]+=*', re.IGNORECASE), 'Bearer [REDACTED]'),
+    # API keys (common patterns: sk-..., or long alphanumeric strings after "key"/"token")
+    (re.compile(r'(sk-[A-Za-z0-9]{20,})'), '[REDACTED_API_KEY]'),
+    # Telegram bot tokens (numeric:alphanumeric)
+    (re.compile(r'\d{8,}:[A-Za-z0-9_-]{30,}'), '[REDACTED_BOT_TOKEN]'),
+]
+
+
+def _sanitize_log_message(message: str) -> str:
+    """Redact sensitive patterns from log messages."""
+    for pattern, replacement in _SENSITIVE_PATTERNS:
+        message = pattern.sub(replacement, message)
+    return message
+
+
+def _require_api_key(f):
+    """Decorator to require API key authentication on endpoints."""
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        if not API_AUTH_KEY:
+            # If no API key is configured, allow access (development mode)
+            # but log a warning on first request
+            return f(*args, **kwargs)
+        provided_key = request.headers.get("X-API-Key", "")
+        if not provided_key or provided_key != API_AUTH_KEY:
+            return jsonify({"error": "unauthorized"}), 401
+        return f(*args, **kwargs)
+    return decorated
 
 
 from flask.json.provider import DefaultJSONProvider
@@ -60,10 +118,12 @@ def _read_json_file(path: str) -> Dict[str, Any]:
 
 @app.route("/api/health", methods=["GET"])
 def health():
+    """Health check — no auth required for load balancer probes."""
     return jsonify({"status": "ok", "timestamp": time.time()})
 
 
 @app.route("/api/status", methods=["GET"])
+@_require_api_key
 def bot_status():
     live_status = _read_json_file(LIVE_STATUS_PATH)
     state = state_store.load_state()
@@ -84,6 +144,7 @@ def bot_status():
 
 
 @app.route("/api/portfolio", methods=["GET"])
+@_require_api_key
 def portfolio():
     live_status = _read_json_file(LIVE_STATUS_PATH)
     return jsonify({
@@ -93,6 +154,7 @@ def portfolio():
 
 
 @app.route("/api/positions", methods=["GET"])
+@_require_api_key
 def positions():
     live_status = _read_json_file(LIVE_STATUS_PATH)
     portfolio_data = live_status.get("portfolio", {})
@@ -103,6 +165,7 @@ def positions():
 
 
 @app.route("/api/managed-positions", methods=["GET"])
+@_require_api_key
 def managed_positions():
     """Ottieni posizioni gestite con info SL/TP/trailing stop/break-even."""
     data = _read_json_file(MANAGED_POSITIONS_PATH)
@@ -155,6 +218,7 @@ def managed_positions():
 
 
 @app.route("/api/trades", methods=["GET"])
+@_require_api_key
 def trades():
     limit = request.args.get("limit", 50, type=int)
     state = state_store.load_state()
@@ -168,6 +232,7 @@ def trades():
 
 
 @app.route("/api/trades/export", methods=["GET"])
+@_require_api_key
 def export_trades():
     """Esporta storia trade come CSV."""
     state = state_store.load_state()
@@ -203,6 +268,7 @@ def export_trades():
 
 
 @app.route("/api/performance", methods=["GET"])
+@_require_api_key
 def performance():
     state = state_store.load_state()
     summary = state_store.get_performance_summary(state)
@@ -233,13 +299,16 @@ def performance():
 
 
 @app.route("/api/config", methods=["GET"])
+@_require_api_key
 def config():
+    """Return bot configuration. Security: Never returns secret env vars."""
     trading_pairs_str = os.getenv(
         "TRADING_PAIRS",
         "BTC,ETH,SOL,BNB,ADA,DOGE,XRP,AVAX,LINK,SUI,ARB,OP,NEAR,WIF,PEPE,INJ,TIA,SEI,RENDER,FET"
     )
     trading_pairs = [p.strip().upper() for p in trading_pairs_str.split(",") if p.strip()]
 
+    # Security Fix #2: Only return non-secret configuration values
     return jsonify({
         "execution_mode": os.getenv("EXECUTION_MODE", "paper"),
         "enable_mainnet_trading": os.getenv("ENABLE_MAINNET_TRADING", "false"),
@@ -264,8 +333,12 @@ def config():
 
 
 @app.route("/api/logs", methods=["GET"])
+@_require_api_key
 def logs():
+    """Return recent logs with sensitive data sanitized."""
     limit = request.args.get("limit", 100, type=int)
+    # Cap limit to prevent excessive reads
+    limit = min(limit, 200)
     log_file = os.getenv("LOG_FILE", "logs/hyperliquid_bot.log")
 
     if not os.path.exists(log_file):
@@ -283,9 +356,16 @@ def logs():
                 continue
             try:
                 entry = json.loads(line)
+                # Security Fix #5: Sanitize log messages
+                if "message" in entry:
+                    entry["message"] = _sanitize_log_message(str(entry["message"]))
+                # Remove exception details that might contain secrets
+                if "exception" in entry:
+                    entry["exception"] = _sanitize_log_message(str(entry["exception"]))
                 log_entries.append(entry)
             except json.JSONDecodeError:
-                log_entries.append({"message": line, "level": "INFO"})
+                # Sanitize plain text log lines too
+                log_entries.append({"message": _sanitize_log_message(line), "level": "INFO"})
 
         return jsonify({
             "logs": list(reversed(log_entries)),
@@ -297,6 +377,7 @@ def logs():
 
 
 @app.route("/metrics", methods=["GET"])
+@_require_api_key
 def prometheus_metrics():
     """Endpoint Prometheus per metriche in formato testo."""
     metrics_data = state_store.load_metrics()
@@ -359,8 +440,14 @@ def prometheus_metrics():
     )
 
 
-def run_api_server(host: str = "0.0.0.0", port: int = 5000, debug: bool = False):
-    logger.info(f"Avvio server API su {host}:{port}")
+def run_api_server(host: str = "127.0.0.1", port: int = 5000, debug: bool = False):
+    """Start the API server. Security Fix #3: Binds to 127.0.0.1 by default."""
+    if not API_AUTH_KEY:
+        logger.warning(
+            "SECURITY WARNING: DASHBOARD_API_KEY not set — API endpoints are unauthenticated. "
+            "Set DASHBOARD_API_KEY in .env for production use."
+        )
+    logger.info(f"Starting API server on {host}:{port} (CORS origins: {CORS_ORIGINS})")
     app.run(host=host, port=port, debug=debug, use_reloader=False)
 
 
@@ -371,5 +458,6 @@ if __name__ == "__main__":
     from utils.logging_config import setup_logging
     setup_logging(log_level="INFO", json_format=False, console_output=True)
 
+    host = os.getenv("API_SERVER_HOST", "127.0.0.1")
     port = int(os.getenv("API_SERVER_PORT", "5000"))
-    run_api_server(port=port, debug=True)
+    run_api_server(host=host, port=port, debug=True)

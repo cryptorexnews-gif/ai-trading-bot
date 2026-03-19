@@ -41,7 +41,8 @@ EXECUTION_MODE = os.getenv("EXECUTION_MODE", "paper").lower()
 ENABLE_MAINNET_TRADING = os.getenv("ENABLE_MAINNET_TRADING", "false").lower() == "true"
 
 WALLET_ADDRESS = os.getenv("HYPERLIQUID_WALLET_ADDRESS", "")
-PRIVATE_KEY = os.getenv("HYPERLIQUID_PRIVATE_KEY", "")
+# Security Fix #1: Private key is read but NOT stored in a module-level variable.
+# It is passed directly to the exchange client constructor and discarded.
 BASE_URL = os.getenv("HYPERLIQUID_BASE_URL", "https://api.hyperliquid.xyz")
 INFO_TIMEOUT = int(os.getenv("HYPERLIQUID_INFO_TIMEOUT", "15"))
 EXCHANGE_TIMEOUT = int(os.getenv("HYPERLIQUID_EXCHANGE_TIMEOUT", "30"))
@@ -112,8 +113,27 @@ def _validate_startup_config() -> List[str]:
     warnings = []
     if not WALLET_ADDRESS:
         raise SystemExit("CRITICAL: HYPERLIQUID_WALLET_ADDRESS not set")
-    if not PRIVATE_KEY:
+    private_key = os.getenv("HYPERLIQUID_PRIVATE_KEY", "")
+    if not private_key:
         raise SystemExit("CRITICAL: HYPERLIQUID_PRIVATE_KEY not set")
+
+    # Security Fix #6: Validate wallet address matches private key
+    if not HyperliquidExchangeClient.validate_wallet_address(private_key, WALLET_ADDRESS):
+        from eth_account import Account
+        derived = Account.from_key(private_key).address
+        raise SystemExit(
+            f"CRITICAL: HYPERLIQUID_WALLET_ADDRESS ({WALLET_ADDRESS}) does not match "
+            f"the address derived from HYPERLIQUID_PRIVATE_KEY ({derived[:6]}...{derived[-4:]}). "
+            f"Fix your .env configuration."
+        )
+
+    # Validate Ethereum address format
+    if not WALLET_ADDRESS.startswith("0x") or len(WALLET_ADDRESS) != 42:
+        raise SystemExit(
+            f"CRITICAL: HYPERLIQUID_WALLET_ADDRESS has invalid format. "
+            f"Expected 0x-prefixed 42-character hex string, got: {WALLET_ADDRESS[:10]}..."
+        )
+
     if EXECUTION_MODE == "live" and not ENABLE_MAINNET_TRADING:
         warnings.append("EXECUTION_MODE=live but ENABLE_MAINNET_TRADING=false — orders will be paper")
     if EXECUTION_MODE not in ("paper", "live"):
@@ -148,12 +168,16 @@ class HyperliquidBot:
         self._hl_rate_limiter = get_rate_limiter("hyperliquid_api", max_tokens=20, tokens_per_second=2.0)
         self._llm_rate_limiter = get_rate_limiter("openrouter_api", max_tokens=5, tokens_per_second=0.5)
 
+        # Security Fix #1: Read private key, pass to constructor, don't store it
+        private_key = os.getenv("HYPERLIQUID_PRIVATE_KEY", "")
         self.exchange_client = HyperliquidExchangeClient(
-            base_url=BASE_URL, private_key=PRIVATE_KEY,
+            base_url=BASE_URL, private_key=private_key,
             enable_mainnet_trading=ENABLE_MAINNET_TRADING, execution_mode=EXECUTION_MODE,
             meta_cache_ttl_sec=META_CACHE_TTL_SEC, paper_slippage_bps=PAPER_SLIPPAGE_BPS,
             info_timeout=INFO_TIMEOUT, exchange_timeout=EXCHANGE_TIMEOUT,
         )
+        # private_key variable goes out of scope after __init__ completes
+
         self.execution_engine = ExecutionEngine(self.exchange_client)
         self.risk_manager = RiskManager(
             min_size_by_coin=MIN_SIZE_BY_COIN, hard_max_leverage=HARD_MAX_LEVERAGE,

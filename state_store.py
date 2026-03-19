@@ -5,6 +5,11 @@ from decimal import Decimal
 from typing import Any, Dict, List, Optional
 
 
+# Security Fix #7: Restrictive file permissions
+_FILE_PERMISSION = 0o600  # Owner read/write only
+_DIR_PERMISSION = 0o700   # Owner read/write/execute only
+
+
 class StateStore:
     def __init__(self, state_path: str, metrics_path: str):
         self.state_path = state_path
@@ -35,15 +40,39 @@ class StateStore:
             "daily_notional_total": "0"
         }
 
+    def _ensure_secure_directory(self, path: str) -> None:
+        """Create directory with restrictive permissions if it doesn't exist."""
+        dir_path = os.path.dirname(path) or "."
+        if dir_path != ".":
+            os.makedirs(dir_path, mode=_DIR_PERMISSION, exist_ok=True)
+            # Also fix permissions if directory already existed with wrong perms
+            try:
+                os.chmod(dir_path, _DIR_PERMISSION)
+            except OSError:
+                pass  # May fail on some filesystems, non-critical
+
     def _atomic_write(self, path: str, data: Dict[str, Any]) -> None:
-        """Scrivi su file temp poi rinomina per sicurezza crash."""
-        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+        """Write to temp file then rename for crash safety. Sets restrictive permissions."""
+        self._ensure_secure_directory(path)
         tmp_path = path + ".tmp"
-        with open(tmp_path, "w", encoding="utf-8") as file_obj:
-            json.dump(data, file_obj, ensure_ascii=False, indent=2)
-            file_obj.flush()
-            os.fsync(file_obj.fileno())
+
+        # Create file with restrictive permissions using os.open + os.fdopen
+        fd = os.open(tmp_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, _FILE_PERMISSION)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as file_obj:
+                json.dump(data, file_obj, ensure_ascii=False, indent=2)
+                file_obj.flush()
+                os.fsync(file_obj.fileno())
+        except Exception:
+            # fd is closed by os.fdopen even on error
+            raise
+
         os.replace(tmp_path, path)
+        # Ensure final file also has correct permissions
+        try:
+            os.chmod(path, _FILE_PERMISSION)
+        except OSError:
+            pass
 
     def load_state(self) -> Dict[str, Any]:
         if not os.path.exists(self.state_path):
