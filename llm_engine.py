@@ -1,6 +1,5 @@
 import json
 import logging
-import os
 import re
 import time
 from decimal import Decimal
@@ -9,10 +8,9 @@ from typing import Any, Dict, List, Optional
 import requests
 
 from models import MarketData, PortfolioState, TradingAction
+from utils.retry import retry_request, RETRYABLE_STATUS_CODES
 
 logger = logging.getLogger(__name__)
-
-RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
 
 
 class LLMEngine:
@@ -233,6 +231,7 @@ ENTRY CRITERIA — Open new positions only when:
 
 POSITION MANAGEMENT:
 - Minimum risk/reward ratio 1:3 (SL 2%, TP 6%) — bot manages SL/TP automatically
+- Break-even stop activates at +1.5% profit (SL moves to entry + 0.1%)
 - If a position is profitable > 3%, consider letting trailing stop manage
 - If a position is losing > 1.5%, consider closing early if technicals turned against
 - Close positions when original thesis is invalidated (trend reversal on 1h)
@@ -374,7 +373,7 @@ Respond with ONLY this JSON (no markdown, no extra text):
         }
 
     def _call_openrouter(self, prompt: str) -> Optional[str]:
-        """Call OpenRouter API with retry logic for transient errors."""
+        """Call OpenRouter API with retry logic via utils/retry.py."""
         payload = {
             "model": self.model,
             "messages": [
@@ -384,66 +383,51 @@ Respond with ONLY this JSON (no markdown, no extra text):
             "temperature": self.temperature,
         }
 
-        last_error = None
+        def _do_request():
+            return self.session.post(
+                f"{self.base_url}/chat/completions",
+                json=payload,
+                timeout=self.request_timeout
+            )
 
-        for attempt in range(self.max_retries + 1):
-            try:
-                response = self.session.post(
-                    f"{self.base_url}/chat/completions",
-                    json=payload,
-                    timeout=self.request_timeout
-                )
+        try:
+            response = retry_request(
+                _do_request,
+                max_attempts=self.max_retries + 1,
+                initial_delay=2.0,
+                max_delay=30.0,
+                backoff_factor=2.0,
+                jitter=True,
+                retryable_status_codes=RETRYABLE_STATUS_CODES,
+                logger_instance=logger,
+            )
 
-                if response.status_code == 200:
-                    data = response.json()
-                    choices = data.get("choices", [])
-                    if choices and choices[0].get("message", {}).get("content"):
-                        return choices[0]["message"]["content"]
-                    logger.error(f"OpenRouter returned empty choices: {data}")
-                    return None
-
-                if response.status_code in RETRYABLE_STATUS_CODES:
-                    wait_time = (2 ** attempt) + (0.5 * attempt)
-                    logger.warning(
-                        f"OpenRouter HTTP {response.status_code} on attempt {attempt + 1}/{self.max_retries + 1}. "
-                        f"Retrying in {wait_time:.1f}s"
-                    )
-                    last_error = f"HTTP {response.status_code}"
-                    time.sleep(wait_time)
-                    continue
-
-                logger.error(
-                    f"OpenRouter non-retryable error: HTTP {response.status_code}, "
-                    f"body={response.text[:500]}"
-                )
+            if response.status_code == 200:
+                data = response.json()
+                choices = data.get("choices", [])
+                if choices and choices[0].get("message", {}).get("content"):
+                    return choices[0]["message"]["content"]
+                logger.error(f"OpenRouter returned empty choices: {data}")
                 return None
 
-            except requests.exceptions.Timeout:
-                wait_time = (2 ** attempt) + 1
-                logger.warning(
-                    f"OpenRouter timeout on attempt {attempt + 1}/{self.max_retries + 1}. "
-                    f"Retrying in {wait_time:.1f}s"
-                )
-                last_error = "timeout"
-                time.sleep(wait_time)
-                continue
+            logger.error(
+                f"OpenRouter non-retryable error: HTTP {response.status_code}, "
+                f"body={response.text[:500]}"
+            )
+            return None
 
-            except requests.exceptions.ConnectionError as e:
-                wait_time = (2 ** attempt) + 1
-                logger.warning(
-                    f"OpenRouter connection error on attempt {attempt + 1}/{self.max_retries + 1}: {e}. "
-                    f"Retrying in {wait_time:.1f}s"
-                )
-                last_error = f"connection_error: {e}"
-                time.sleep(wait_time)
-                continue
-
-            except Exception as e:
-                logger.error(f"OpenRouter unexpected error: {type(e).__name__}: {e}")
-                return None
-
-        logger.error(f"OpenRouter all {self.max_retries + 1} attempts failed. Last error: {last_error}")
-        return None
+        except requests.exceptions.Timeout:
+            logger.error(f"OpenRouter timeout after all retries (timeout={self.request_timeout}s)")
+            return None
+        except requests.exceptions.ConnectionError as e:
+            logger.error(f"OpenRouter connection error after all retries: {e}")
+            return None
+        except requests.exceptions.HTTPError as e:
+            logger.error(f"OpenRouter HTTP error after all retries: {e}")
+            return None
+        except Exception as e:
+            logger.error(f"OpenRouter unexpected error: {type(e).__name__}: {e}")
+            return None
 
     def get_trading_decision(
         self,

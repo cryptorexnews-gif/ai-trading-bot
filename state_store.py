@@ -17,7 +17,8 @@ class StateStore:
             "consecutive_losses": 0,
             "last_trade_timestamp_by_coin": {},
             "daily_notional_by_day": {},
-            "trade_history": []
+            "trade_history": [],
+            "equity_snapshots": [],
         }
 
     def _default_metrics(self) -> Dict[str, Any]:
@@ -103,6 +104,37 @@ class StateStore:
         if len(history) > 100:
             history = history[-100:]
         state["trade_history"] = history
+
+    def add_equity_snapshot(
+        self,
+        state: Dict[str, Any],
+        balance: Decimal,
+        unrealized_pnl: Decimal,
+        position_count: int,
+        margin_usage: Decimal,
+    ) -> None:
+        """
+        Salva snapshot del valore portfolio per equity curve reale.
+        Mantieni ultimi 500 snapshot (circa 8 ore con cicli da 60s).
+        """
+        snapshots = state.get("equity_snapshots", [])
+        snapshots.append({
+            "timestamp": time.time(),
+            "balance": str(balance),
+            "unrealized_pnl": str(unrealized_pnl),
+            "total_value": str(balance + unrealized_pnl),
+            "position_count": position_count,
+            "margin_usage": str(margin_usage),
+        })
+        # Mantieni ultimi 500 snapshot
+        if len(snapshots) > 500:
+            snapshots = snapshots[-500:]
+        state["equity_snapshots"] = snapshots
+
+    def get_equity_snapshots(self, state: Dict[str, Any], limit: int = 200) -> List[Dict[str, Any]]:
+        """Ottieni snapshot equity recenti."""
+        snapshots = state.get("equity_snapshots", [])
+        return snapshots[-limit:] if snapshots else []
 
     def get_recent_trades(self, state: Dict[str, Any], count: int = 5) -> List[Dict[str, Any]]:
         """Ottieni i trade più recenti."""

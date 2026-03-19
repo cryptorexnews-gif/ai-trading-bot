@@ -34,6 +34,7 @@ export default function App() {
   const trades = tradesData?.trades || []
   const perfSummary = perfData?.summary || {}
   const equityCurve = perfData?.equity_curve || []
+  const equitySnapshots = perfData?.equity_snapshots || []
   const logs = logsData?.logs || []
   const managedPositions = managedData?.managed_positions || []
 
@@ -153,7 +154,7 @@ export default function App() {
 
         {/* Charts & Positions */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-          <EquityChart equityCurve={equityCurve} />
+          <EquityChart equityCurve={equityCurve} equitySnapshots={equitySnapshots} />
           <PositionsTable positions={positions} />
         </div>
 

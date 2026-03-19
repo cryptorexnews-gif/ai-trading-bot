@@ -118,7 +118,6 @@ def managed_positions():
         sl_pct = Decimal(str(sl.get("percentage", "0.03")))
         tp_pct = Decimal(str(tp.get("percentage", "0.05")))
 
-        # If break-even activated and SL has absolute price, use that
         if be.get("activated", False) and sl.get("price"):
             sl_price = Decimal(str(sl["price"]))
         elif is_long:
@@ -208,6 +207,7 @@ def performance():
     state = state_store.load_state()
     summary = state_store.get_performance_summary(state)
 
+    # Trade-based activity points (legacy)
     history = state.get("trade_history", [])
     equity_points = []
     for trade in history:
@@ -220,9 +220,13 @@ def performance():
             "trigger": trade.get("trigger", "ai"),
         })
 
+    # Real equity snapshots (portfolio value over time)
+    equity_snapshots = state_store.get_equity_snapshots(state, limit=200)
+
     return jsonify({
         "summary": summary,
         "equity_curve": equity_points,
+        "equity_snapshots": equity_snapshots,
         "daily_notional": state.get("daily_notional_by_day", {}),
         "timestamp": time.time()
     })
@@ -316,14 +320,14 @@ def prometheus_metrics():
 
     # Gauges from live status
     live_status = _read_json_file(LIVE_STATUS_PATH)
-    portfolio = live_status.get("portfolio", {})
+    portfolio_data = live_status.get("portfolio", {})
 
     gauges = [
-        ("bot_balance_usd", "Current balance in USD", portfolio.get("total_balance", 0)),
-        ("bot_available_balance_usd", "Available balance in USD", portfolio.get("available_balance", 0)),
-        ("bot_margin_usage_ratio", "Current margin usage ratio", portfolio.get("margin_usage", 0)),
-        ("bot_open_positions_count", "Number of open positions", portfolio.get("position_count", 0)),
-        ("bot_unrealized_pnl_usd", "Total unrealized PnL in USD", portfolio.get("total_unrealized_pnl", 0)),
+        ("bot_balance_usd", "Current balance in USD", portfolio_data.get("total_balance", 0)),
+        ("bot_available_balance_usd", "Available balance in USD", portfolio_data.get("available_balance", 0)),
+        ("bot_margin_usage_ratio", "Current margin usage ratio", portfolio_data.get("margin_usage", 0)),
+        ("bot_open_positions_count", "Number of open positions", portfolio_data.get("position_count", 0)),
+        ("bot_unrealized_pnl_usd", "Total unrealized PnL in USD", portfolio_data.get("total_unrealized_pnl", 0)),
         ("bot_is_running", "Whether bot is running (1=yes, 0=no)", 1 if live_status.get("is_running") else 0),
         ("bot_cycle_count", "Current cycle count", live_status.get("cycle_count", 0)),
         ("bot_last_cycle_duration_seconds", "Last cycle duration", live_status.get("last_cycle_duration", 0)),
