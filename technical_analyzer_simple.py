@@ -12,11 +12,11 @@ HYPERLIQUID_BASE_URL = "https://api.hyperliquid.xyz"
 
 class HyperliquidDataFetcher:
     """
-    Fetches ALL market data exclusively from Hyperliquid API.
-    No external data sources (Binance, etc.) are used.
-    Uses Decimal for all financial calculations.
-    Includes caching for meta/funding to reduce API calls.
-    Supports multi-timeframe analysis (5m, 1h, 4h).
+    Recupera TUTTI i dati di mercato esclusivamente dall'API Hyperliquid.
+    Nessuna fonte dati esterna (Binance, CoinGecko, ecc.) è usata.
+    Usa Decimal per tutti i calcoli finanziari.
+    Include caching per meta/funding per ridurre chiamate API.
+    Supporta analisi multi-timeframe (5m, 1h, 4h).
     """
 
     def __init__(self, base_url: str = HYPERLIQUID_BASE_URL):
@@ -43,17 +43,17 @@ class HyperliquidDataFetcher:
                 timeout=timeout
             )
             if response.status_code != 200:
-                logger.error(f"Hyperliquid /info error: status={response.status_code}, type={payload.get('type', 'unknown')}")
+                logger.error(f"Hyperliquid /info errore: status={response.status_code}, type={payload.get('type', 'unknown')}")
                 return None
             return response.json()
         except requests.exceptions.Timeout:
-            logger.error(f"Hyperliquid /info timeout for type={payload.get('type', 'unknown')}")
+            logger.error(f"Hyperliquid /info timeout per type={payload.get('type', 'unknown')}")
             return None
         except requests.exceptions.ConnectionError as e:
-            logger.error(f"Hyperliquid /info connection error: {e}")
+            logger.error(f"Hyperliquid /info errore connessione: {e}")
             return None
         except requests.exceptions.RequestException as e:
-            logger.error(f"Hyperliquid /info request error: {e}")
+            logger.error(f"Hyperliquid /info errore richiesta: {e}")
             return None
 
     def get_all_mids(self, force_refresh: bool = False) -> Optional[Dict[str, str]]:
@@ -118,7 +118,7 @@ class HyperliquidDataFetcher:
         if data is None:
             return None
         if not isinstance(data, list):
-            logger.error(f"Unexpected candle data format for {coin}: {type(data)}")
+            logger.error(f"Formato dati candele inaspettato per {coin}: {type(data)}")
             return None
 
         candles = []
@@ -240,8 +240,8 @@ class HyperliquidDataFetcher:
 
     def get_volatility_signal(self, coin: str) -> Dict[str, Any]:
         """
-        Calculate volatility-based signal for adaptive cycle timing.
-        High volatility = shorter cycles, low volatility = longer cycles.
+        Calcola segnale basato su volatilità per timing ciclo adattivo.
+        Alta volatilità = cicli più corti, bassa volatilità = cicli più lunghi.
         """
         candles = self.get_candle_snapshot(coin, "5m", 30)
         if not candles or len(candles) < 10:
@@ -271,37 +271,37 @@ class HyperliquidDataFetcher:
 
     def get_technical_indicators(self, coin: str) -> Optional[Dict[str, Any]]:
         """
-        Get comprehensive technical indicators for a coin.
-        ALL data sourced from Hyperliquid candle snapshots.
+        Ottieni indicatori tecnici completi per una coin.
+        TUTTI i dati sorgenti da snapshot candele Hyperliquid.
         Multi-timeframe: 5m (intraday), 1h (medium), 4h (long-term).
         """
-        # Fetch intraday candles (5m)
+        # Recupera candele intraday (5m)
         intraday_candles = self.get_candle_snapshot(coin, "5m", 100)
         if not intraday_candles or len(intraday_candles) < 10:
-            logger.warning(f"Insufficient intraday candle data for {coin}")
+            logger.warning(f"Dati candele intraday insufficienti per {coin}")
             return None
 
-        # Fetch medium-term candles (1h) — NEW
+        # Recupera candele medium-term (1h) — NUOVO
         hourly_candles = self.get_candle_snapshot(coin, "1h", 50)
 
-        # Fetch longer-term candles (4h)
+        # Recupera candele longer-term (4h)
         daily_candles = self.get_candle_snapshot(coin, "4h", 50)
         if not daily_candles or len(daily_candles) < 5:
-            logger.warning(f"Insufficient 4h candle data for {coin}")
+            logger.warning(f"Dati candele 4h insufficienti per {coin}")
             return None
 
-        # Extract price series — intraday
+        # Estrai serie prezzi — intraday
         intraday_closes = [c["close"] for c in intraday_candles]
         intraday_highs = [c["high"] for c in intraday_candles]
         intraday_lows = [c["low"] for c in intraday_candles]
         intraday_volumes = [c["volume"] for c in intraday_candles]
 
-        # Extract price series — 4h
+        # Estrai serie prezzi — 4h
         daily_closes = [c["close"] for c in daily_candles]
         daily_highs = [c["high"] for c in daily_candles]
         daily_lows = [c["low"] for c in daily_candles]
 
-        # Calculate intraday indicators
+        # Calcola indicatori intraday
         ema_20 = self.calculate_ema(intraday_closes, 20)
         ema_9 = self.calculate_ema(intraday_closes, 9)
         macd_line, signal_line, histogram = self.calculate_macd(intraday_closes)
@@ -311,7 +311,7 @@ class HyperliquidDataFetcher:
         bollinger = self._calculate_bollinger_bands(intraday_closes, 20)
         vwap = self._calculate_vwap(intraday_highs, intraday_lows, intraday_closes, intraday_volumes)
 
-        # Calculate 1h indicators — NEW
+        # Calcola indicatori 1h — NUOVO
         hourly_context = {}
         if hourly_candles and len(hourly_candles) >= 10:
             hourly_closes = [c["close"] for c in hourly_candles]
@@ -336,14 +336,14 @@ class HyperliquidDataFetcher:
                               hourly_rsi_14[-1] if hourly_rsi_14 else Decimal("50")],
             }
 
-        # Calculate longer-term indicators (4h)
+        # Calcola indicatori longer-term (4h)
         daily_ema_20 = self.calculate_ema(daily_closes, 20)
         daily_ema_50 = self.calculate_ema(daily_closes, min(50, len(daily_closes)))
         daily_macd, daily_signal, daily_hist = self.calculate_macd(daily_closes)
         daily_rsi_14 = self.calculate_rsi(daily_closes, 14)
         daily_atr_14 = self._calculate_atr(daily_highs, daily_lows, daily_closes, 14)
 
-        # Current values
+        # Valori correnti
         current_price = intraday_closes[-1]
         current_volume = intraday_volumes[-1]
         avg_volume = (
@@ -363,13 +363,13 @@ class HyperliquidDataFetcher:
         volume_24h = sum(intraday_volumes) * current_price if intraday_volumes else Decimal("0")
         funding_data = self.get_funding_for_coin(coin)
 
-        # Bollinger band position
+        # Posizione banda Bollinger
         bb_upper = bollinger["upper"][-1] if bollinger["upper"] else Decimal("0")
         bb_lower = bollinger["lower"][-1] if bollinger["lower"] else Decimal("0")
         bb_width = bb_upper - bb_lower
         bb_position = ((current_price - bb_lower) / bb_width) if bb_width > 0 else Decimal("0.5")
 
-        # Multi-timeframe trend alignment
+        # Allineamento trend multi-timeframe
         intraday_trend = "bullish" if (ema_9 and ema_20 and ema_9[-1] > ema_20[-1]) else "bearish"
         daily_trend = "bullish" if (daily_ema_20 and daily_ema_50 and daily_ema_20[-1] > daily_ema_50[-1]) else "bearish"
         hourly_trend = hourly_context.get("trend", "unknown")
@@ -396,7 +396,7 @@ class HyperliquidDataFetcher:
             "bollinger_upper": bb_upper,
             "bollinger_middle": bollinger["middle"][-1] if bollinger["middle"] else Decimal("0"),
             "bollinger_lower": bb_lower,
-            # Multi-timeframe context
+            # Contesto multi-timeframe
             "intraday_trend": intraday_trend,
             "hourly_context": hourly_context,
             "trends_aligned": trends_aligned,
@@ -421,5 +421,5 @@ class HyperliquidDataFetcher:
         }
 
 
-# Global instance
+# Istanza globale
 technical_fetcher = HyperliquidDataFetcher()

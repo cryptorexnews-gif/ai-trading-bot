@@ -11,8 +11,8 @@ logger = logging.getLogger(__name__)
 
 class Notifier:
     """
-    Send notifications via Telegram.
-    Supports trade alerts, SL/TP/trailing triggers, errors, and daily summaries.
+    Invia notifiche via Telegram.
+    Supporta avvisi trade, trigger SL/TP/trailing, errori, e riepiloghi giornalieri.
     """
 
     def __init__(
@@ -32,9 +32,9 @@ class Notifier:
         self.telegram_enabled = bool(self.telegram_bot_token and self.telegram_chat_id)
 
         if self.telegram_enabled:
-            logger.info("Telegram notifications enabled")
+            logger.info("Notifiche Telegram abilitate")
         else:
-            logger.info("Telegram not configured — notifications disabled")
+            logger.info("Telegram non configurato — notifiche disabilitate")
 
     def _rate_limit_ok(self) -> bool:
         now = time.time()
@@ -57,10 +57,10 @@ class Notifier:
             response = self._session.post(url, json=payload, timeout=10)
             if response.status_code == 200:
                 return True
-            logger.warning(f"Telegram send failed: status={response.status_code}")
+            logger.warning(f"Invio Telegram fallito: status={response.status_code}")
             return False
         except Exception as e:
-            logger.warning(f"Telegram send error: {e}")
+            logger.warning(f"Errore invio Telegram: {e}")
             return False
 
     def _send(self, message: str, force: bool = False) -> None:
@@ -71,7 +71,7 @@ class Notifier:
         self._send_telegram(message)
 
     def notify_trade(self, trade: Dict[str, Any]) -> None:
-        """Send notification for an executed trade."""
+        """Invia notifica per trade eseguito."""
         action = trade.get("action", "unknown").upper()
         coin = trade.get("coin", "?")
         size = trade.get("size", "?")
@@ -92,9 +92,9 @@ class Notifier:
 
         message = (
             f"{success} {trigger_emoji} <b>{action}</b> {coin}\n"
-            f"📏 Size: {size} | 💵 Price: ${price}\n"
-            f"💰 Notional: ${notional}\n"
-            f"🎯 Confidence: {float(confidence)*100:.0f}% | Mode: {mode}\n"
+            f"📏 Dimensione: {size} | 💵 Prezzo: ${price}\n"
+            f"💰 Notionale: ${notional}\n"
+            f"🎯 Confidenza: {float(confidence)*100:.0f}% | Modalità: {mode}\n"
             f"⚡ Trigger: {trigger}"
         )
 
@@ -107,10 +107,10 @@ class Notifier:
     def notify_stop_loss(self, coin: str, entry_price: Decimal, trigger_price: Decimal, current_price: Decimal) -> None:
         pnl_pct = ((current_price - entry_price) / entry_price * Decimal("100")) if entry_price > 0 else Decimal("0")
         message = (
-            f"🛑 <b>STOP-LOSS TRIGGERED</b>\n\n"
+            f"🛑 <b>STOP-LOSS ATTIVATO</b>\n\n"
             f"Coin: <b>{coin}</b>\n"
-            f"Entry: ${entry_price} → Current: ${current_price}\n"
-            f"Stop Level: ${trigger_price}\n"
+            f"Entrata: ${entry_price} → Corrente: ${current_price}\n"
+            f"Livello Stop: ${trigger_price}\n"
             f"PnL: {float(pnl_pct):.2f}%"
         )
         self._send(message, force=True)
@@ -118,10 +118,10 @@ class Notifier:
     def notify_take_profit(self, coin: str, entry_price: Decimal, trigger_price: Decimal, current_price: Decimal) -> None:
         pnl_pct = ((current_price - entry_price) / entry_price * Decimal("100")) if entry_price > 0 else Decimal("0")
         message = (
-            f"🎯 <b>TAKE-PROFIT TRIGGERED</b>\n\n"
+            f"🎯 <b>TAKE-PROFIT ATTIVATO</b>\n\n"
             f"Coin: <b>{coin}</b>\n"
-            f"Entry: ${entry_price} → Current: ${current_price}\n"
-            f"TP Level: ${trigger_price}\n"
+            f"Entrata: ${entry_price} → Corrente: ${current_price}\n"
+            f"TP Livello: ${trigger_price}\n"
             f"PnL: +{float(pnl_pct):.2f}%"
         )
         self._send(message, force=True)
@@ -129,23 +129,23 @@ class Notifier:
     def notify_trailing_stop(self, coin: str, entry_price: Decimal, trigger_price: Decimal, current_price: Decimal) -> None:
         pnl_pct = ((current_price - entry_price) / entry_price * Decimal("100")) if entry_price > 0 else Decimal("0")
         message = (
-            f"📈 <b>TRAILING STOP TRIGGERED</b>\n\n"
+            f"📈 <b>TRAILING STOP ATTIVATO</b>\n\n"
             f"Coin: <b>{coin}</b>\n"
-            f"Entry: ${entry_price} → Current: ${current_price}\n"
+            f"Entrata: ${entry_price} → Corrente: ${current_price}\n"
             f"Trailing Stop: ${trigger_price}\n"
             f"PnL: {float(pnl_pct):.2f}%"
         )
         self._send(message, force=True)
 
     def notify_error(self, error_message: str) -> None:
-        message = f"🚨 <b>BOT ERROR</b>\n\n{error_message[:500]}"
+        message = f"🚨 <b>ERRORE BOT</b>\n\n{error_message[:500]}"
         self._send(message, force=True)
 
     def notify_emergency_derisk(self, coin: str, reason: str) -> None:
         message = (
-            f"🚨🚨 <b>EMERGENCY DE-RISK</b>\n\n"
-            f"Closing: <b>{coin}</b>\n"
-            f"Reason: {reason}"
+            f"🚨🚨 <b>DE-RISK DI EMERGENZA</b>\n\n"
+            f"Chiusura: <b>{coin}</b>\n"
+            f"Ragione: {reason}"
         )
         self._send(message, force=True)
 
@@ -158,24 +158,24 @@ class Notifier:
         pnl_emoji = "📈" if float(str(pnl)) >= 0 else "📉"
 
         message = (
-            f"📊 <b>DAILY SUMMARY</b>\n\n"
-            f"💰 Balance: ${balance}\n"
-            f"{pnl_emoji} Daily PnL: ${pnl}\n"
-            f"📋 Trades: {total_trades} | Win Rate: {win_rate:.1f}%\n"
-            f"✅ Wins: {summary.get('wins', 0)} | ❌ Losses: {summary.get('losses', 0)}\n"
-            f"🔄 Holds: {summary.get('holds', 0)}"
+            f"📊 <b>RIEPILOGO GIORNALIERO</b>\n\n"
+            f"💰 Saldo: ${balance}\n"
+            f"{pnl_emoji} PnL Giornaliero: ${pnl}\n"
+            f"📋 Trade: {total_trades} | Tasso Vittoria: {win_rate:.1f}%\n"
+            f"✅ Vittorie: {summary.get('wins', 0)} | ❌ Perdite: {summary.get('losses', 0)}\n"
+            f"🔄 Hold: {summary.get('holds', 0)}"
         )
         self._send(message, force=True)
 
     def notify_bot_started(self, mode: str, pairs: List[str]) -> None:
         message = (
-            f"🟢 <b>BOT STARTED</b>\n\n"
-            f"Mode: <b>{mode.upper()}</b>\n"
-            f"Pairs: {', '.join(pairs)}\n"
-            f"Strategy: Asymmetric R:R (SL 2% / TP 6% / Trailing 1.5%)"
+            f"🟢 <b>BOT AVVIATO</b>\n\n"
+            f"Modalità: <b>{mode.upper()}</b>\n"
+            f"Coppie: {', '.join(pairs)}\n"
+            f"Strategia: R:R Asimmetrico (SL 2% / TP 6% / Trailing 1.5%)"
         )
         self._send(message, force=True)
 
-    def notify_bot_stopped(self, reason: str = "manual") -> None:
-        message = f"🔴 <b>BOT STOPPED</b>\n\nReason: {reason}"
+    def notify_bot_stopped(self, reason: str = "manuale") -> None:
+        message = f"🔴 <b>BOT FERMO</b>\n\nRagione: {reason}"
         self._send(message, force=True)

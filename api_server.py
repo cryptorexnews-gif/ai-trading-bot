@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-API Server for Hyperliquid Trading Bot Dashboard.
+Server API per Dashboard Bot Trading Hyperliquid.
 """
 
 import csv
@@ -100,7 +100,7 @@ def positions():
 
 @app.route("/api/managed-positions", methods=["GET"])
 def managed_positions():
-    """Get managed positions with SL/TP/trailing stop info."""
+    """Ottieni posizioni gestite con info SL/TP/trailing stop."""
     data = _read_json_file(MANAGED_POSITIONS_PATH)
     positions_list = []
     for coin, pos_data in data.items():
@@ -157,7 +157,7 @@ def trades():
 
 @app.route("/api/trades/export", methods=["GET"])
 def export_trades():
-    """Export trade history as CSV."""
+    """Esporta storia trade come CSV."""
     state = state_store.load_state()
     history = state.get("trade_history", [])
 
@@ -272,7 +272,7 @@ def logs():
 
 
 def run_api_server(host: str = "0.0.0.0", port: int = 5000, debug: bool = False):
-    logger.info(f"Starting API server on {host}:{port}")
+    logger.info(f"Avvio server API su {host}:{port}")
     app.run(host=host, port=port, debug=debug, use_reloader=False)
 
 

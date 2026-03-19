@@ -1,69 +1,4 @@
-import logging
-import os
-import time
-from decimal import Decimal
-from typing import Any, Dict, Optional, Tuple
-
-import msgpack
-import requests
-from requests.adapters import HTTPAdapter
-from urllib3.util.retry import Retry
-from Crypto.Hash import keccak
-from eth_account import Account
-from eth_account.messages import encode_typed_data
-
-from utils.circuit_breaker import get_or_create_circuit_breaker, CircuitBreakerOpenError
-from utils.decimals import (
-    to_decimal as utils_to_decimal,
-    quantize_price,
-    quantize_with_precision,
-    calculate_margin,
-    add_percentage,
-    subtract_percentage
-)
-
-logger = logging.getLogger(__name__)
-
-
-def _create_robust_session() -> requests.Session:
-    """Create a requests session with connection pooling and automatic retries."""
-    session = requests.Session()
-
-    retry_strategy = Retry(
-        total=3,
-        backoff_factor=1,
-        status_forcelist=[429, 500, 502, 503, 504],
-        allowed_methods=["POST", "GET"],
-        raise_on_status=False
-    )
-
-    adapter = HTTPAdapter(
-        max_retries=retry_strategy,
-        pool_connections=10,
-        pool_maxsize=10,
-        pool_block=False
-    )
-
-    session.mount("https://", adapter)
-    session.mount("http://", adapter)
-    session.headers.update({"Content-Type": "application/json"})
-
-    return session
-
-
-class HyperliquidExchangeClient:
-    def __init__(
-        self,
-        base_url: str,
-        private_key: str,
-        enable_mainnet_trading: bool,
-        execution_mode: str,
-        meta_cache_ttl_sec: int,
-        paper_slippage_bps: Decimal,
-        info_timeout: int = 15,
-        exchange_timeout: int = 30
-    ):
-        self.base_url = base_url
+self.base_url = base_url
         self.private_key = private_key
         self.enable_mainnet_trading = enable_mainnet_trading
         self.execution_mode = execution_mode
@@ -78,9 +13,9 @@ class HyperliquidExchangeClient:
         self._meta_cache_at = 0.0
         self._mids_cache: Optional[Dict[str, str]] = None
         self._mids_cache_at = 0.0
-        self._mids_cache_ttl = 30  # 30 seconds for mid prices
+        self._mids_cache_ttl = 30  # 30 secondi per prezzi mid
 
-        # Circuit breakers
+        # Circuit breaker
         self._info_cb = get_or_create_circuit_breaker(
             "hyperliquid_info",
             failure_threshold=5,
@@ -93,7 +28,7 @@ class HyperliquidExchangeClient:
         )
 
         logger.info(
-            f"Exchange client initialized: base_url={self.base_url}, "
+            f"Client exchange inizializzato: base_url={self.base_url}, "
             f"mode={self.execution_mode}, mainnet={self.enable_mainnet_trading}"
         )
 
@@ -101,7 +36,7 @@ class HyperliquidExchangeClient:
         return utils_to_decimal(value, default)
 
     def _post_info(self, payload: Dict[str, Any], timeout: Optional[int] = None) -> Optional[Any]:
-        """POST to /info with circuit breaker and robust session."""
+        """POST a /info con circuit breaker e sessione robusta."""
         if timeout is None:
             timeout = self.info_timeout
 
@@ -114,7 +49,7 @@ class HyperliquidExchangeClient:
             if response.status_code != 200:
                 logger.error(
                     f"/info type={payload.get('type', 'unknown')} "
-                    f"failed status={response.status_code}"
+                    f"fallito status={response.status_code}"
                 )
                 response.raise_for_status()
             return response.json()
@@ -122,20 +57,20 @@ class HyperliquidExchangeClient:
         try:
             return self._info_cb.call(_do_post)
         except CircuitBreakerOpenError:
-            logger.error("Circuit breaker OPEN for /info endpoint")
+            logger.error("Circuit breaker OPEN per endpoint /info")
             return None
         except requests.exceptions.Timeout:
-            logger.error(f"/info timeout after {timeout}s for type={payload.get('type', 'unknown')}")
+            logger.error(f"/info timeout dopo {timeout}s per type={payload.get('type', 'unknown')}")
             return None
         except requests.exceptions.ConnectionError as e:
-            logger.error(f"/info connection error: {e}")
+            logger.error(f"/info errore connessione: {e}")
             return None
         except Exception as e:
-            logger.error(f"/info unexpected error: {type(e).__name__}: {str(e)}")
+            logger.error(f"/info errore imprevisto: {type(e).__name__}: {str(e)}")
             return None
 
     def _post_exchange(self, payload: Dict[str, Any], timeout: Optional[int] = None) -> Optional[Any]:
-        """POST to /exchange with circuit breaker and robust session."""
+        """POST a /exchange con circuit breaker e sessione robusta."""
         if timeout is None:
             timeout = self.exchange_timeout
 
@@ -147,23 +82,23 @@ class HyperliquidExchangeClient:
                 timeout=timeout
             )
             if response.status_code != 200:
-                logger.error(f"/exchange failed status={response.status_code}")
+                logger.error(f"/exchange fallito status={response.status_code}")
                 response.raise_for_status()
             return response.json()
 
         try:
             return self._exchange_cb.call(_do_post)
         except CircuitBreakerOpenError:
-            logger.error("Circuit breaker OPEN for /exchange endpoint")
+            logger.error("Circuit breaker OPEN per endpoint /exchange")
             return None
         except requests.exceptions.Timeout:
-            logger.error(f"/exchange timeout after {timeout}s")
+            logger.error(f"/exchange timeout dopo {timeout}s")
             return None
         except requests.exceptions.ConnectionError as e:
-            logger.error(f"/exchange connection error: {e}")
+            logger.error(f"/exchange errore connessione: {e}")
             return None
         except Exception as e:
-            logger.error(f"/exchange unexpected error: {type(e).__name__}: {str(e)}")
+            logger.error(f"/exchange errore imprevisto: {type(e).__name__}: {str(e)}")
             return None
 
     def get_meta(self, force_refresh: bool = False) -> Optional[Dict[str, Any]]:
@@ -173,13 +108,13 @@ class HyperliquidExchangeClient:
 
         meta = self._post_info({"type": "meta"})
         if meta is None:
-            return self._meta_cache  # Return stale cache if available
+            return self._meta_cache  # Ritorna cache stale se disponibile
         self._meta_cache = meta
         self._meta_cache_at = now
         return meta
 
     def get_all_mids(self, force_refresh: bool = False) -> Optional[Dict[str, str]]:
-        """Get all mid prices with caching."""
+        """Ottieni tutti i prezzi mid con caching."""
         now = time.time()
         if not force_refresh and self._mids_cache and (now - self._mids_cache_at) < self._mids_cache_ttl:
             return self._mids_cache
@@ -322,12 +257,12 @@ class HyperliquidExchangeClient:
             leverage = max_leverage
 
         if self.execution_mode != "live" or not self.enable_mainnet_trading:
-            logger.info(f"PAPER leverage set {coin} -> {leverage}x")
+            logger.info(f"PAPER leverage impostato {coin} -> {leverage}x")
             return True
 
         asset_id = self.get_asset_id(coin)
         if asset_id is None:
-            logger.error(f"Asset ID not found for {coin}")
+            logger.error(f"ID asset non trovato per {coin}")
             return False
 
         action = {
@@ -349,10 +284,10 @@ class HyperliquidExchangeClient:
         if result is None:
             return False
         if result.get("status") == "ok":
-            logger.info(f"LIVE leverage set {coin} -> {leverage}x")
+            logger.info(f"LIVE leverage impostato {coin} -> {leverage}x")
             return True
 
-        logger.error(f"Failed to set leverage for {coin}: {result}")
+        logger.error(f"Impostazione leverage fallita per {coin}: {result}")
         return False
 
     def place_order(
@@ -366,7 +301,7 @@ class HyperliquidExchangeClient:
             slip = (self.paper_slippage_bps / Decimal("10000"))
             fill_price = desired_price * (Decimal("1") + slip if side.lower() == "buy" else Decimal("1") - slip)
             notional = abs(size * fill_price)
-            logger.info(f"PAPER order {coin} {side.upper()} size={size} fill={fill_price}")
+            logger.info(f"PAPER ordine {coin} {side.upper()} size={size} fill={fill_price}")
             return {
                 "success": True,
                 "mode": "paper",
@@ -376,7 +311,7 @@ class HyperliquidExchangeClient:
 
         asset_id = self.get_asset_id(coin)
         if asset_id is None:
-            logger.error(f"Asset ID not found for {coin}")
+            logger.error(f"ID asset non trovato per {coin}")
             return {"success": False, "mode": "live", "reason": "asset_not_found", "notional": "0"}
 
         is_buy = side.lower() == "buy"
@@ -426,17 +361,17 @@ class HyperliquidExchangeClient:
         if result is None:
             return {"success": False, "mode": "live", "reason": "http_error", "notional": "0"}
         if result.get("status") != "ok":
-            logger.error(f"Exchange rejected order for {coin}: {result}")
+            logger.error(f"Exchange ha rifiutato ordine per {coin}: {result}")
             return {"success": False, "mode": "live", "reason": "exchange_rejected", "notional": "0"}
 
         statuses = result.get("response", {}).get("data", {}).get("statuses", [])
         for status in statuses:
             if "error" in status:
-                logger.error(f"Order status error for {coin}: {status}")
+                logger.error(f"Stato ordine errore per {coin}: {status}")
                 return {"success": False, "mode": "live", "reason": "status_error", "notional": "0"}
 
         notional = abs(size * limit_price)
-        logger.info(f"LIVE order success {coin} {side.upper()} size={size_str} limit={limit_price}")
+        logger.info(f"LIVE ordine successo {coin} {side.upper()} size={size_str} limit={limit_price}")
         return {
             "success": True,
             "mode": "live",

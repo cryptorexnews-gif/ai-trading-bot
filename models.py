@@ -31,10 +31,10 @@ class OrderStatus(Enum):
 
 @dataclass
 class StopLossConfig:
-    """Stop-loss configuration for a position."""
+    """Configurazione stop-loss per una posizione."""
     enabled: bool = True
-    percentage: Decimal = Decimal("0.03")  # 3% default
-    price: Optional[Decimal] = None  # Absolute price level
+    percentage: Decimal = Decimal("0.03")  # 3% predefinito
+    price: Optional[Decimal] = None  # Livello prezzo assoluto
     trailing: bool = False
 
     def calculate_stop_price(self, entry_price: Decimal, is_long: bool) -> Decimal:
@@ -48,10 +48,10 @@ class StopLossConfig:
 
 @dataclass
 class TakeProfitConfig:
-    """Take-profit configuration for a position."""
+    """Configurazione take-profit per una posizione."""
     enabled: bool = True
-    percentage: Decimal = Decimal("0.05")  # 5% default
-    price: Optional[Decimal] = None  # Absolute price level
+    percentage: Decimal = Decimal("0.05")  # 5% predefinito
+    price: Optional[Decimal] = None  # Livello prezzo assoluto
 
     def calculate_tp_price(self, entry_price: Decimal, is_long: bool) -> Decimal:
         if self.price is not None:
@@ -64,15 +64,15 @@ class TakeProfitConfig:
 
 @dataclass
 class TrailingStopConfig:
-    """Trailing stop configuration."""
+    """Configurazione trailing stop."""
     enabled: bool = False
     callback_rate: Decimal = Decimal("0.02")  # 2% callback
-    activation_price: Optional[Decimal] = None  # Price at which trailing activates
-    highest_price: Optional[Decimal] = None  # Tracked highest price (for longs)
-    lowest_price: Optional[Decimal] = None  # Tracked lowest price (for shorts)
+    activation_price: Optional[Decimal] = None  # Prezzo di attivazione
+    highest_price: Optional[Decimal] = None  # Prezzo più alto tracciato (per long)
+    lowest_price: Optional[Decimal] = None  # Prezzo più basso tracciato (per short)
 
     def update_extreme(self, current_price: Decimal, is_long: bool) -> None:
-        """Update the tracked extreme price."""
+        """Aggiorna il prezzo estremo tracciato."""
         if is_long:
             if self.highest_price is None or current_price > self.highest_price:
                 self.highest_price = current_price
@@ -81,7 +81,7 @@ class TrailingStopConfig:
                 self.lowest_price = current_price
 
     def get_trailing_stop_price(self, is_long: bool) -> Optional[Decimal]:
-        """Calculate current trailing stop price."""
+        """Calcola prezzo corrente trailing stop."""
         if is_long and self.highest_price is not None:
             return self.highest_price * (Decimal("1") - self.callback_rate)
         elif not is_long and self.lowest_price is not None:
@@ -89,10 +89,10 @@ class TrailingStopConfig:
         return None
 
     def should_trigger(self, current_price: Decimal, is_long: bool) -> bool:
-        """Check if trailing stop should trigger."""
+        """Controlla se trailing stop dovrebbe scattare."""
         if not self.enabled:
             return False
-        # Check activation threshold
+        # Controlla soglia attivazione
         if self.activation_price is not None:
             if is_long and current_price < self.activation_price:
                 return False
@@ -109,7 +109,7 @@ class TrailingStopConfig:
 
 @dataclass
 class ManagedPosition:
-    """A position with attached risk management."""
+    """Una posizione con gestione rischio attaccata."""
     coin: str
     size: Decimal
     entry_price: Decimal
@@ -247,7 +247,7 @@ class PortfolioState:
 
 @dataclass
 class TradeRecord:
-    """Record of an executed trade for history tracking."""
+    """Record di un trade eseguito per tracking storia."""
     timestamp: float
     coin: str
     action: str
@@ -259,16 +259,16 @@ class TradeRecord:
     confidence: float
     reasoning: str
     success: bool
-    mode: str  # 'paper' or 'live'
+    mode: str  # 'paper' o 'live'
     trigger: str = ""  # 'ai', 'stop_loss', 'take_profit', 'trailing_stop', 'emergency'
     order_status: str = "unknown"  # filled, partially_filled, etc.
 
 
 @dataclass
 class AssetCorrelation:
-    """Correlation data between assets."""
+    """Dati correlazione tra asset."""
     coin_a: str
     coin_b: str
-    correlation: Decimal  # -1 to 1
-    period: str  # e.g., "4h", "1d"
+    correlation: Decimal  # -1 a 1
+    period: str  # es. "4h", "1d"
     sample_count: int = 0

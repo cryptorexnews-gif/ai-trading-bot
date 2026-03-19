@@ -10,27 +10,27 @@ logger = logging.getLogger(__name__)
 
 class CorrelationEngine:
     """
-    Calculates price correlations between assets using Hyperliquid candle data.
-    Used to prevent opening correlated positions that multiply risk.
+    Calcola correlazioni prezzo tra asset usando dati candele Hyperliquid.
+    Usato per prevenire aperture posizioni correlate che moltiplicano rischio.
     """
 
     def __init__(self, correlation_threshold: Decimal = Decimal("0.7")):
         self.correlation_threshold = correlation_threshold
         self._cache: Dict[str, Dict[str, Decimal]] = {}
         self._cache_at: float = 0.0
-        self._cache_ttl: float = 600.0  # 10 minutes
+        self._cache_ttl: float = 600.0  # 10 minuti
 
     def _calculate_pearson(
         self,
         prices_a: List[Decimal],
         prices_b: List[Decimal]
     ) -> Decimal:
-        """Calculate Pearson correlation between two price series using returns."""
+        """Calcola correlazione Pearson tra due serie prezzi usando returns."""
         n = min(len(prices_a), len(prices_b))
         if n < 10:
             return Decimal("0")
 
-        # Calculate returns
+        # Calcola returns
         returns_a = []
         returns_b = []
         for i in range(1, n):
@@ -59,7 +59,7 @@ class CorrelationEngine:
             return Decimal("0")
 
         correlation = cov / (std_a * std_b)
-        # Clamp to [-1, 1]
+        # Clamp a [-1, 1]
         return max(Decimal("-1"), min(Decimal("1"), correlation))
 
     def _sqrt(self, value: Decimal) -> Decimal:
@@ -76,19 +76,19 @@ class CorrelationEngine:
         interval: str = "1h",
         limit: int = 50
     ) -> Dict[str, Dict[str, Decimal]]:
-        """Calculate pairwise correlations for a list of coins."""
+        """Calcola correlazioni pairwise per una lista di coin."""
         now = time.time()
         if self._cache and (now - self._cache_at) < self._cache_ttl:
             return self._cache
 
-        # Fetch candle data for all coins
+        # Recupera dati candele per tutte le coin
         candle_data: Dict[str, List[Decimal]] = {}
         for coin in coins:
             candles = technical_fetcher.get_candle_snapshot(coin, interval, limit)
             if candles and len(candles) >= 10:
                 candle_data[coin] = [c["close"] for c in candles]
 
-        # Calculate pairwise correlations
+        # Calcola correlazioni pairwise
         correlations: Dict[str, Dict[str, Decimal]] = {}
         coin_list = list(candle_data.keys())
 
@@ -106,7 +106,7 @@ class CorrelationEngine:
         self._cache = correlations
         self._cache_at = now
 
-        logger.info(f"Correlation matrix updated for {len(coin_list)} coins")
+        logger.info(f"Matrice correlazione aggiornata per {len(coin_list)} coin")
         return correlations
 
     def check_correlation_risk(
@@ -117,8 +117,8 @@ class CorrelationEngine:
         correlations: Dict[str, Dict[str, Decimal]]
     ) -> Tuple[bool, str]:
         """
-        Check if opening a position would create excessive correlated risk.
-        Returns (is_safe, reason).
+        Controlla se aprire una posizione creerebbe rischio correlato eccessivo.
+        Ritorna (is_safe, reason).
         """
         if action in ["hold", "close_position", "reduce_position"]:
             return True, "ok"
@@ -139,7 +139,7 @@ class CorrelationEngine:
             existing_is_long = existing_size > 0
             corr = correlations.get(coin, {}).get(existing_coin, Decimal("0"))
 
-            # High positive correlation + same direction = concentrated risk
+            # Alta correlazione positiva + stessa direzione = rischio concentrato
             if abs(corr) >= self.correlation_threshold:
                 same_direction = (is_new_long and existing_is_long) or (not is_new_long and not existing_is_long)
                 if same_direction and corr > 0:
@@ -147,7 +147,7 @@ class CorrelationEngine:
                         f"high_correlation_{coin}_{existing_coin}_"
                         f"corr={float(corr):.2f}_same_direction"
                     )
-                # High negative correlation + opposite direction = also concentrated
+                # Alta correlazione negativa + direzione opposta = anche rischio concentrato
                 if not same_direction and corr < -self.correlation_threshold:
                     return False, (
                         f"high_neg_correlation_{coin}_{existing_coin}_"
@@ -157,7 +157,7 @@ class CorrelationEngine:
         return True, "ok"
 
     def get_correlation_summary(self, correlations: Dict[str, Dict[str, Decimal]]) -> Dict[str, Any]:
-        """Get a human-readable summary of correlations."""
+        """Ottieni riepilogo leggibile delle correlazioni."""
         high_corr_pairs = []
         coins = list(correlations.keys())
 

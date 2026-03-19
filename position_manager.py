@@ -19,9 +19,9 @@ MANAGED_POSITIONS_PATH = "state/managed_positions.json"
 
 class PositionManager:
     """
-    Manages positions with stop-loss, take-profit, and trailing stop.
-    Checks positions against current prices and triggers closes when needed.
-    Persists managed position state to disk.
+    Gestisce posizioni con stop-loss, take-profit, e trailing stop.
+    Controlla posizioni contro prezzi correnti e attiva chiusure quando necessario.
+    Persiste stato posizione gestita su disco.
     """
 
     def __init__(
@@ -41,7 +41,7 @@ class PositionManager:
         self._load_state()
 
     def _load_state(self) -> None:
-        """Load managed positions from disk."""
+        """Carica posizioni gestite da disco."""
         if not os.path.exists(MANAGED_POSITIONS_PATH):
             return
         try:
@@ -49,12 +49,12 @@ class PositionManager:
                 data = json.load(f)
             for coin, pos_data in data.items():
                 self._managed[coin] = ManagedPosition.from_dict(pos_data)
-            logger.info(f"Loaded {len(self._managed)} managed positions from disk")
+            logger.info(f"Caricate {len(self._managed)} posizioni gestite da disco")
         except (json.JSONDecodeError, IOError, KeyError) as e:
-            logger.warning(f"Could not load managed positions: {e}")
+            logger.warning(f"Impossibile caricare posizioni gestite: {e}")
 
     def _save_state(self) -> None:
-        """Persist managed positions to disk atomically."""
+        """Persisti posizioni gestite su disco atomicamente."""
         os.makedirs(os.path.dirname(MANAGED_POSITIONS_PATH) or ".", exist_ok=True)
         data = {coin: pos.to_dict() for coin, pos in self._managed.items()}
         tmp_path = MANAGED_POSITIONS_PATH + ".tmp"
@@ -69,20 +69,20 @@ class PositionManager:
         exchange_positions: Dict[str, Dict[str, Any]]
     ) -> None:
         """
-        Sync managed positions with actual exchange positions.
-        Removes managed entries for positions that no longer exist.
-        Adds managed entries for new positions found on exchange.
+        Sincronizza posizioni gestite con posizioni exchange effettive.
+        Rimuove voci gestite per posizioni che non esistono più.
+        Aggiunge voci gestite per nuove posizioni trovate su exchange.
         """
-        # Remove managed positions that are no longer on exchange
+        # Rimuovi posizioni gestite che non sono più su exchange
         closed_coins = [
             coin for coin in self._managed
             if coin not in exchange_positions
         ]
         for coin in closed_coins:
-            logger.info(f"Position {coin} closed on exchange, removing from managed")
+            logger.info(f"Posizione {coin} chiusa su exchange, rimuovo da gestite")
             del self._managed[coin]
 
-        # Add new positions found on exchange that aren't managed yet
+        # Aggiungi nuove posizioni trovate su exchange che non sono gestite ancora
         for coin, pos in exchange_positions.items():
             size = Decimal(str(pos.get("size", 0)))
             if size == 0:
@@ -91,7 +91,7 @@ class PositionManager:
                 entry_price = Decimal(str(pos.get("entry_price", 0)))
                 is_long = size > 0
 
-                # Calculate trailing stop activation price
+                # Calcola prezzo attivazione trailing stop
                 activation_price = None
                 if self.enable_trailing_stop:
                     if is_long:
@@ -122,13 +122,13 @@ class PositionManager:
                 )
                 self._managed[coin] = managed
                 logger.info(
-                    f"New managed position: {coin} {'LONG' if is_long else 'SHORT'} "
+                    f"Nuova posizione gestita: {coin} {'LONG' if is_long else 'SHORT'} "
                     f"entry=${entry_price} SL={float(self.default_sl_pct)*100}% "
                     f"TP={float(self.default_tp_pct)*100}% "
                     f"trailing={'ON' if self.enable_trailing_stop else 'OFF'}"
                 )
             else:
-                # Update size if changed (partial close, increase, etc.)
+                # Aggiorna dimensione se cambiata (chiusura parziale, aumento, ecc.)
                 existing = self._managed[coin]
                 new_size = abs(size)
                 if new_size != existing.size:
@@ -142,8 +142,8 @@ class PositionManager:
         current_prices: Dict[str, Decimal]
     ) -> List[Dict[str, Any]]:
         """
-        Check all managed positions against current prices.
-        Returns list of actions to take (close orders).
+        Controlla tutte le posizioni gestite contro prezzi correnti.
+        Ritorna lista di azioni da intraprendere (ordini chiusura).
         """
         actions = []
 
@@ -153,7 +153,7 @@ class PositionManager:
 
             current_price = current_prices[coin]
 
-            # Check trailing stop first (updates extreme prices)
+            # Controlla trailing stop prima (aggiorna prezzi estremi)
             if managed.should_trailing_stop(current_price):
                 ts_price = managed.trailing_stop.get_trailing_stop_price(managed.is_long)
                 actions.append({
@@ -166,17 +166,17 @@ class PositionManager:
                     "trigger_price": ts_price,
                     "entry_price": managed.entry_price,
                     "reasoning": (
-                        f"Trailing stop triggered for {coin}: "
-                        f"price=${current_price} hit trailing stop at ${ts_price}"
+                        f"Trailing stop attivato per {coin}: "
+                        f"prezzo=${current_price} colpito trailing stop a ${ts_price}"
                     )
                 })
                 continue
 
-            # Update trailing stop extreme even if not triggered
+            # Aggiorna trailing stop estremi anche se non attivato
             if managed.trailing_stop.enabled:
                 managed.trailing_stop.update_extreme(current_price, managed.is_long)
 
-            # Check stop-loss
+            # Controlla stop-loss
             if managed.should_stop_loss(current_price):
                 sl_price = managed.stop_loss.calculate_stop_price(
                     managed.entry_price, managed.is_long
@@ -191,13 +191,13 @@ class PositionManager:
                     "trigger_price": sl_price,
                     "entry_price": managed.entry_price,
                     "reasoning": (
-                        f"Stop-loss triggered for {coin}: "
-                        f"price=${current_price} breached SL at ${sl_price}"
+                        f"Stop-loss attivato per {coin}: "
+                        f"prezzo=${current_price} violato SL a ${sl_price}"
                     )
                 })
                 continue
 
-            # Check take-profit
+            # Controlla take-profit
             if managed.should_take_profit(current_price):
                 tp_price = managed.take_profit.calculate_tp_price(
                     managed.entry_price, managed.is_long
@@ -212,12 +212,12 @@ class PositionManager:
                     "trigger_price": tp_price,
                     "entry_price": managed.entry_price,
                     "reasoning": (
-                        f"Take-profit triggered for {coin}: "
-                        f"price=${current_price} reached TP at ${tp_price}"
+                        f"Take-profit attivato per {coin}: "
+                        f"prezzo=${current_price} raggiunto TP a ${tp_price}"
                     )
                 })
 
-        # Save updated trailing stop extremes
+        # Salva estremi trailing stop aggiornati
         self._save_state()
         return actions
 
@@ -232,7 +232,7 @@ class PositionManager:
         tp_pct: Optional[Decimal] = None,
         trailing: Optional[bool] = None,
     ) -> None:
-        """Register a new position with risk management."""
+        """Registra una nuova posizione con gestione rischio."""
         sl_pct = sl_pct or self.default_sl_pct
         tp_pct = tp_pct or self.default_tp_pct
         use_trailing = trailing if trailing is not None else self.enable_trailing_stop
@@ -261,23 +261,23 @@ class PositionManager:
         )
         self._save_state()
         logger.info(
-            f"Registered managed position: {coin} {'LONG' if is_long else 'SHORT'} "
+            f"Registrata posizione gestita: {coin} {'LONG' if is_long else 'SHORT'} "
             f"size={size} entry=${entry_price} SL={float(sl_pct)*100}% TP={float(tp_pct)*100}%"
         )
 
     def remove_position(self, coin: str) -> None:
-        """Remove a managed position (after close)."""
+        """Rimuovi una posizione gestita (dopo chiusura)."""
         if coin in self._managed:
             del self._managed[coin]
             self._save_state()
-            logger.info(f"Removed managed position: {coin}")
+            logger.info(f"Rimossa posizione gestita: {coin}")
 
     def get_managed_positions(self) -> Dict[str, ManagedPosition]:
-        """Get all managed positions."""
+        """Ottieni tutte le posizioni gestite."""
         return self._managed.copy()
 
     def get_position_status(self) -> List[Dict[str, Any]]:
-        """Get status of all managed positions for dashboard."""
+        """Ottieni stato di tutte le posizioni gestite per dashboard."""
         statuses = []
         for coin, pos in self._managed.items():
             sl_price = pos.stop_loss.calculate_stop_price(pos.entry_price, pos.is_long)
