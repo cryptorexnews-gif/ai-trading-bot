@@ -18,10 +18,10 @@ class RiskManager:
         max_order_margin_pct: Decimal,
         trade_cooldown_sec: int,
         daily_notional_limit_usd: Decimal,
-        volatility_multiplier: Decimal = Decimal("1.5"),
-        max_drawdown_pct: Decimal = Decimal("0.15"),
-        max_single_asset_pct: Decimal = Decimal("0.4"),
-        emergency_margin_threshold: Decimal = Decimal("0.9")
+        volatility_multiplier: Decimal = Decimal("1.2"),
+        max_drawdown_pct: Decimal = Decimal("0.12"),
+        max_single_asset_pct: Decimal = Decimal("0.35"),
+        emergency_margin_threshold: Decimal = Decimal("0.88")
     ):
         self.min_size_by_coin = min_size_by_coin
         self.hard_max_leverage = hard_max_leverage
@@ -41,10 +41,21 @@ class RiskManager:
         return Decimal(str(value)) if value is not None else default
 
     def _calculate_volatility_adjusted_size(self, base_size: Decimal, volatility: Decimal) -> Decimal:
-        """Adjust position size based on market volatility (higher vol = smaller size)."""
+        """
+        Adjust position size based on market volatility.
+        Higher volatility = smaller size to maintain consistent risk per trade.
+        Uses inverse volatility scaling with a floor to prevent zero-size orders.
+        """
         if volatility <= 0:
             return base_size
-        adjustment = Decimal("1") / (Decimal("1") + (volatility * self.volatility_multiplier))
+        # Normalize: if volatility is "normal" (~0.005), adjustment ≈ 1.0
+        # If volatility is 2x normal, adjustment ≈ 0.7
+        # If volatility is 0.5x normal, adjustment ≈ 1.15 (capped at 1.2)
+        normal_vol = Decimal("0.005")
+        ratio = volatility / normal_vol
+        adjustment = Decimal("1") / (Decimal("1") + ((ratio - Decimal("1")) * self.volatility_multiplier))
+        # Clamp between 0.4 and 1.2
+        adjustment = max(Decimal("0.4"), min(Decimal("1.2"), adjustment))
         return base_size * adjustment
 
     def check_drawdown(
@@ -52,7 +63,6 @@ class RiskManager:
         portfolio_state: PortfolioState,
         peak_portfolio_value: Decimal
     ) -> Tuple[bool, str]:
-        """Check if portfolio drawdown exceeds maximum allowed."""
         if peak_portfolio_value <= 0:
             return True, "ok"
         current = portfolio_state.total_balance
@@ -63,14 +73,18 @@ class RiskManager:
                 f"(limit={float(self.max_drawdown_pct) * 100:.1f}%)"
             )
             return False, "max_drawdown_breached"
+        # Soft warning at 66% of max drawdown
+        if drawdown >= self.max_drawdown_pct * Decimal("0.66"):
+            logger.info(
+                f"Drawdown warning: {float(drawdown) * 100:.1f}% "
+                f"approaching limit of {float(self.max_drawdown_pct) * 100:.1f}%"
+            )
         return True, "ok"
 
     def check_emergency_derisk(self, portfolio_state: PortfolioState) -> bool:
-        """Check if margin usage is critically high and we need emergency de-risk."""
         return portfolio_state.margin_usage >= self.emergency_margin_threshold
 
     def get_emergency_close_coin(self, portfolio_state: PortfolioState) -> str:
-        """Get the coin with the worst unrealized PnL to close first."""
         worst_coin = ""
         worst_pnl = Decimal("0")
         for coin, pos in portfolio_state.positions.items():
@@ -135,7 +149,7 @@ class RiskManager:
             if market_price <= 0 or size <= 0:
                 return False, "invalid_price_or_size"
 
-            # Position conflict detection: don't open opposite direction
+            # Position conflict detection
             current_side = portfolio_state.get_position_side(coin)
             if action == TradingAction.BUY.value and current_side == PositionSide.SHORT:
                 return False, "conflict_buy_while_short"

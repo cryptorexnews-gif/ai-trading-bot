@@ -4,7 +4,8 @@ Hyperliquid Trading Bot - Executable Orders Version
 Main bot script with Claude Opus 4.6 powered trading decisions.
 All market data sourced exclusively from Hyperliquid API.
 Features: SL/TP/Trailing Stop, Order Verification, Correlation Engine,
-          Notifications, Adaptive Cycle Timing, Multi-Timeframe Analysis.
+          Telegram Notifications, Adaptive Cycle Timing, Multi-Timeframe Analysis.
+Optimized for asymmetric risk/reward profitability.
 """
 
 import logging
@@ -39,7 +40,7 @@ load_dotenv()
 # Configuration from environment
 EXECUTION_MODE = os.getenv("EXECUTION_MODE", "paper").lower()
 ENABLE_MAINNET_TRADING = os.getenv("ENABLE_MAINNET_TRADING", "false").lower() == "true"
-SAFE_FALLBACK_MODE = os.getenv("SAFE_FALLBACK_MODE", "de_risk").lower()
+SAFE_FALLBACK_MODE = os.getenv("SAFE_FALLBACK_MODE", "hold").lower()
 ALLOW_EXTERNAL_LLM = os.getenv("ALLOW_EXTERNAL_LLM", "true").lower() == "true"
 LLM_INCLUDE_PORTFOLIO_CONTEXT = os.getenv("LLM_INCLUDE_PORTFOLIO_CONTEXT", "true").lower() == "true"
 HYPERLIQUID_PRIVATE_KEY = os.getenv("HYPERLIQUID_PRIVATE_KEY")
@@ -52,38 +53,38 @@ HYPERLIQUID_EXCHANGE_TIMEOUT = int(os.getenv("HYPERLIQUID_EXCHANGE_TIMEOUT", "30
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
 LLM_MODEL = os.getenv("LLM_MODEL", "anthropic/claude-opus-4.6")
 LLM_MAX_TOKENS = int(os.getenv("LLM_MAX_TOKENS", "8192"))
-LLM_TEMPERATURE = float(os.getenv("LLM_TEMPERATURE", "0.2"))
+LLM_TEMPERATURE = float(os.getenv("LLM_TEMPERATURE", "0.15"))
 
-# Risk Management
-MAX_ORDER_MARGIN_PCT = Decimal(os.getenv("MAX_ORDER_MARGIN_PCT", "0.1"))
+# Risk Management — Optimized for profitability
+MAX_ORDER_MARGIN_PCT = Decimal(os.getenv("MAX_ORDER_MARGIN_PCT", "0.15"))
 HARD_MAX_LEVERAGE = Decimal(os.getenv("HARD_MAX_LEVERAGE", "10"))
-MIN_CONFIDENCE_OPEN = Decimal(os.getenv("MIN_CONFIDENCE_OPEN", "0.7"))
-MIN_CONFIDENCE_MANAGE = Decimal(os.getenv("MIN_CONFIDENCE_MANAGE", "0.5"))
-MAX_MARGIN_USAGE = Decimal(os.getenv("MAX_MARGIN_USAGE", "0.8"))
-MAX_DRAWDOWN_PCT = Decimal(os.getenv("MAX_DRAWDOWN_PCT", "0.15"))
-TRADE_COOLDOWN_SEC = int(os.getenv("TRADE_COOLDOWN_SEC", "300"))
-DAILY_NOTIONAL_LIMIT_USD = Decimal(os.getenv("DAILY_NOTIONAL_LIMIT_USD", "1000"))
-MAX_TRADES_PER_CYCLE = int(os.getenv("MAX_TRADES_PER_CYCLE", "5"))
+MIN_CONFIDENCE_OPEN = Decimal(os.getenv("MIN_CONFIDENCE_OPEN", "0.72"))
+MIN_CONFIDENCE_MANAGE = Decimal(os.getenv("MIN_CONFIDENCE_MANAGE", "0.50"))
+MAX_MARGIN_USAGE = Decimal(os.getenv("MAX_MARGIN_USAGE", "0.75"))
+MAX_DRAWDOWN_PCT = Decimal(os.getenv("MAX_DRAWDOWN_PCT", "0.12"))
+TRADE_COOLDOWN_SEC = int(os.getenv("TRADE_COOLDOWN_SEC", "180"))
+DAILY_NOTIONAL_LIMIT_USD = Decimal(os.getenv("DAILY_NOTIONAL_LIMIT_USD", "2000"))
+MAX_TRADES_PER_CYCLE = int(os.getenv("MAX_TRADES_PER_CYCLE", "3"))
 MAX_CONSECUTIVE_FAILED_CYCLES = int(os.getenv("MAX_CONSECUTIVE_FAILED_CYCLES", "10"))
 META_CACHE_TTL_SEC = int(os.getenv("META_CACHE_TTL_SEC", "300"))
 MAX_MARKET_DATA_AGE_SEC = int(os.getenv("MAX_MARKET_DATA_AGE_SEC", "300"))
-PAPER_SLIPPAGE_BPS = Decimal(os.getenv("PAPER_SLIPPAGE_BPS", "50"))
+PAPER_SLIPPAGE_BPS = Decimal(os.getenv("PAPER_SLIPPAGE_BPS", "30"))
 
-# SL/TP/Trailing Configuration
-DEFAULT_SL_PCT = Decimal(os.getenv("DEFAULT_SL_PCT", "0.03"))
-DEFAULT_TP_PCT = Decimal(os.getenv("DEFAULT_TP_PCT", "0.05"))
-DEFAULT_TRAILING_CALLBACK = Decimal(os.getenv("DEFAULT_TRAILING_CALLBACK", "0.02"))
+# SL/TP/Trailing — Asymmetric R:R (tight SL, wide TP)
+DEFAULT_SL_PCT = Decimal(os.getenv("DEFAULT_SL_PCT", "0.02"))
+DEFAULT_TP_PCT = Decimal(os.getenv("DEFAULT_TP_PCT", "0.06"))
+DEFAULT_TRAILING_CALLBACK = Decimal(os.getenv("DEFAULT_TRAILING_CALLBACK", "0.015"))
 ENABLE_TRAILING_STOP = os.getenv("ENABLE_TRAILING_STOP", "true").lower() == "true"
-TRAILING_ACTIVATION_PCT = Decimal(os.getenv("TRAILING_ACTIVATION_PCT", "0.02"))
+TRAILING_ACTIVATION_PCT = Decimal(os.getenv("TRAILING_ACTIVATION_PCT", "0.025"))
 
 # Adaptive Cycle
 ENABLE_ADAPTIVE_CYCLE = os.getenv("ENABLE_ADAPTIVE_CYCLE", "true").lower() == "true"
-MIN_CYCLE_SEC = int(os.getenv("MIN_CYCLE_SEC", "20"))
-MAX_CYCLE_SEC = int(os.getenv("MAX_CYCLE_SEC", "120"))
-DEFAULT_CYCLE_SEC = int(os.getenv("DEFAULT_CYCLE_SEC", "60"))
+MIN_CYCLE_SEC = int(os.getenv("MIN_CYCLE_SEC", "15"))
+MAX_CYCLE_SEC = int(os.getenv("MAX_CYCLE_SEC", "90"))
+DEFAULT_CYCLE_SEC = int(os.getenv("DEFAULT_CYCLE_SEC", "45"))
 
 # Correlation
-CORRELATION_THRESHOLD = Decimal(os.getenv("CORRELATION_THRESHOLD", "0.7"))
+CORRELATION_THRESHOLD = Decimal(os.getenv("CORRELATION_THRESHOLD", "0.65"))
 
 # Logging
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
@@ -104,7 +105,7 @@ MIN_SIZE_BY_COIN = {
 
 
 class HyperliquidBot:
-    """Main trading bot with SL/TP/Trailing, Order Verification, Correlation, Notifications."""
+    """Main trading bot with SL/TP/Trailing, Order Verification, Correlation, Telegram Notifications."""
 
     def __init__(self):
         self._shutdown_requested = False
@@ -195,7 +196,7 @@ class HyperliquidBot:
         self.metrics = MetricsCollector()
         self.wallet_address = HYPERLIQUID_WALLET_ADDRESS
 
-        # New components
+        # Position management with asymmetric R:R
         self.position_manager = PositionManager(
             default_sl_pct=DEFAULT_SL_PCT,
             default_tp_pct=DEFAULT_TP_PCT,
@@ -264,7 +265,7 @@ class HyperliquidBot:
             "size": Decimal("0"),
             "leverage": 1,
             "confidence": Decimal("0.5"),
-            "reasoning": f"Fallback: {SAFE_FALLBACK_MODE} mode - holding for safety"
+            "reasoning": f"Fallback: {SAFE_FALLBACK_MODE} mode — holding for safety"
         }
 
     def _get_daily_notional_used(self, state: Dict[str, Any]) -> Decimal:
@@ -300,7 +301,6 @@ class HyperliquidBot:
 
     def _process_sl_tp_trailing(self, portfolio_state: PortfolioState) -> int:
         """Check and execute SL/TP/Trailing stop orders. Returns count of triggered closes."""
-        # Get current prices
         mids = technical_fetcher.get_all_mids()
         if not mids:
             return 0
@@ -331,7 +331,7 @@ class HyperliquidBot:
                 f"entry=${entry_price} current=${current_price} trigger=${trigger_price}"
             )
 
-            # Send notification
+            # Send Telegram notification
             if trigger == "stop_loss":
                 self.notifier.notify_stop_loss(coin, entry_price, trigger_price, current_price)
             elif trigger == "take_profit":
@@ -348,12 +348,12 @@ class HyperliquidBot:
                 triggered += 1
                 logging.info(f"{trigger} close of {coin} succeeded")
 
-                # Record trade
                 self.notifier.notify_trade({
                     "coin": coin,
                     "action": "close_position",
                     "size": str(size),
                     "price": str(current_price),
+                    "notional": str(abs(size * current_price)),
                     "confidence": 1.0,
                     "mode": EXECUTION_MODE,
                     "success": True,
@@ -367,11 +367,9 @@ class HyperliquidBot:
         return triggered
 
     def _calculate_adaptive_cycle(self) -> int:
-        """Calculate next cycle duration based on market volatility."""
         if not ENABLE_ADAPTIVE_CYCLE:
             return DEFAULT_CYCLE_SEC
 
-        # Use BTC as the volatility reference
         vol_signal = technical_fetcher.get_volatility_signal("BTC")
         suggested = vol_signal.get("suggested_cycle_sec", DEFAULT_CYCLE_SEC)
         clamped = max(MIN_CYCLE_SEC, min(MAX_CYCLE_SEC, suggested))
@@ -497,6 +495,8 @@ class HyperliquidBot:
                 logging.info(
                     f"{coin}: price=${market_data.last_price}, "
                     f"RSI14={float(tech_data.get('current_rsi_14', 50)):.1f}, "
+                    f"BB={float(tech_data.get('bb_position', 0.5)):.2f}, "
+                    f"vol_ratio={float(tech_data.get('volume_ratio', 1)):.2f}, "
                     f"trends={'ALIGNED' if trends_aligned else 'DIVERGENT'} "
                     f"(5m={intraday_trend}, 1h={hourly_trend})"
                 )
@@ -620,7 +620,7 @@ class HyperliquidBot:
                                 leverage=decision["leverage"],
                             )
 
-                        # Notify
+                        # Notify via Telegram
                         self.notifier.notify_trade(trade_record)
 
                         logging.info(f"{coin} executed: reason={result['reason']}, notional=${notional}")
@@ -695,9 +695,12 @@ class HyperliquidBot:
         logging.info(f"Mainnet trading: {ENABLE_MAINNET_TRADING}")
         logging.info(f"LLM model: {LLM_MODEL}")
         logging.info(f"Trading pairs: {TRADING_PAIRS}")
-        logging.info(f"SL: {float(DEFAULT_SL_PCT)*100}% | TP: {float(DEFAULT_TP_PCT)*100}% | Trailing: {ENABLE_TRAILING_STOP}")
-        logging.info(f"Adaptive cycle: {ENABLE_ADAPTIVE_CYCLE} | Correlation threshold: {CORRELATION_THRESHOLD}")
-        logging.info(f"Notifications: TG={self.notifier.telegram_enabled} Discord={self.notifier.discord_enabled}")
+        logging.info(f"Strategy: Asymmetric R:R — SL {float(DEFAULT_SL_PCT)*100}% / TP {float(DEFAULT_TP_PCT)*100}% / Trailing {float(DEFAULT_TRAILING_CALLBACK)*100}%")
+        logging.info(f"Confidence threshold: open={MIN_CONFIDENCE_OPEN} manage={MIN_CONFIDENCE_MANAGE}")
+        logging.info(f"Adaptive cycle: {ENABLE_ADAPTIVE_CYCLE} ({MIN_CYCLE_SEC}-{MAX_CYCLE_SEC}s)")
+        logging.info(f"Correlation threshold: {CORRELATION_THRESHOLD}")
+        logging.info(f"Max drawdown: {float(MAX_DRAWDOWN_PCT)*100}%")
+        logging.info(f"Telegram: {'enabled' if self.notifier.telegram_enabled else 'disabled'}")
         logging.info("=" * 60)
 
         self.notifier.notify_bot_started(EXECUTION_MODE, TRADING_PAIRS)

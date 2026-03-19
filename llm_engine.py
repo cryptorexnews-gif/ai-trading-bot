@@ -20,6 +20,7 @@ class LLMEngine:
     """
     LLM Engine using Claude Opus 4.6 via OpenRouter for trading decisions.
     All market data comes from Hyperliquid; no external data sources.
+    Optimized prompt for asymmetric risk/reward profitability.
     """
 
     def __init__(
@@ -28,14 +29,14 @@ class LLMEngine:
         base_url: str = "https://openrouter.ai/api/v1",
         model: str = "anthropic/claude-opus-4.6",
         max_tokens: int = 8192,
-        temperature: float = 0.2
+        temperature: float = 0.15
     ):
         self.api_key = api_key
         self.base_url = base_url
         self.model = model
         self.max_tokens = max_tokens
         self.temperature = temperature
-        self.request_timeout = 120  # Claude Opus 4.6 needs generous timeout
+        self.request_timeout = 120
         self.max_retries = 2
         self.session = requests.Session()
         self.session.headers.update({
@@ -47,7 +48,6 @@ class LLMEngine:
         logger.info(f"LLM Engine initialized with model={self.model}, timeout={self.request_timeout}s")
 
     def _format_positions(self, positions: Dict[str, Dict[str, Any]]) -> str:
-        """Format positions for the prompt."""
         if not positions:
             return "  No open positions."
         lines = []
@@ -57,17 +57,20 @@ class LLMEngine:
             pnl = pos.get("unrealized_pnl", 0)
             side = "LONG" if Decimal(str(size)) > 0 else "SHORT"
             margin = pos.get("margin_used", "N/A")
+            # Calculate PnL percentage
+            entry_d = Decimal(str(entry_px))
+            pnl_d = Decimal(str(pnl))
+            size_d = abs(Decimal(str(size)))
+            pnl_pct = (pnl_d / (size_d * entry_d) * Decimal("100")) if (size_d * entry_d) > 0 else Decimal("0")
             lines.append(
                 f"  - {coin}: {side} | Size: {size} | Entry: ${entry_px} | "
-                f"Unrealized PnL: ${pnl} | Margin: ${margin}"
+                f"PnL: ${pnl} ({float(pnl_pct):+.2f}%) | Margin: ${margin}"
             )
         return "\n".join(lines)
 
     def _format_technical_data(self, technical_data: Optional[Dict[str, Any]]) -> str:
-        """Format Hyperliquid technical data for the prompt — key indicators only."""
         if not technical_data:
             return "  No technical data available."
-        # Only include the most decision-relevant indicators (not raw series)
         key_indicators = [
             "current_price", "change_24h", "volume_24h", "funding_rate",
             "open_interest", "vwap", "volume_ratio", "bb_position",
@@ -86,16 +89,33 @@ class LLMEngine:
             else:
                 lines.append(f"  {key}: {value}")
 
-        # Add long-term context summary (compact)
+        # Multi-timeframe context
+        lines.append(f"  intraday_trend (5m): {technical_data.get('intraday_trend', 'unknown')}")
+        lines.append(f"  trends_aligned (5m+1h+4h): {technical_data.get('trends_aligned', False)}")
+
+        # Hourly context
+        hourly = technical_data.get("hourly_context", {})
+        if hourly:
+            lines.append("  hourly_context (1h):")
+            for sub_key in ["ema_9", "ema_20", "rsi_14", "macd", "macd_signal", "atr_14", "trend"]:
+                sub_value = hourly.get(sub_key)
+                if sub_value is not None:
+                    val_str = f"{float(sub_value):.6f}" if isinstance(sub_value, Decimal) else str(sub_value)
+                    lines.append(f"    {sub_key}: {val_str}")
+            rsi_trend = hourly.get("rsi_trend", [])
+            if rsi_trend:
+                formatted = [f"{float(v):.2f}" if isinstance(v, Decimal) else str(v) for v in rsi_trend]
+                lines.append(f"    rsi_trend: [{', '.join(formatted)}]")
+
+        # Long-term context
         lt = technical_data.get("long_term_context", {})
         if lt:
-            lines.append("  long_term_context:")
+            lines.append(f"  long_term_trend (4h): {lt.get('trend', 'unknown')}")
             for sub_key in ["ema_20", "ema_50", "atr_14", "current_volume", "avg_volume"]:
                 sub_value = lt.get(sub_key)
                 if sub_value is not None:
                     val_str = f"{float(sub_value):.6f}" if isinstance(sub_value, Decimal) else str(sub_value)
                     lines.append(f"    {sub_key}: {val_str}")
-            # Last 3 RSI values for trend direction
             rsi_list = lt.get("rsi_14", [])
             if rsi_list:
                 last_3 = rsi_list[-3:]
@@ -105,17 +125,17 @@ class LLMEngine:
         return "\n".join(lines)
 
     def _format_recent_trades(self, recent_trades: List[Dict[str, Any]]) -> str:
-        """Format recent trade history for context."""
         if not recent_trades:
             return "  No recent trades."
         lines = []
         for trade in recent_trades[-5:]:
             success_str = "✓" if trade.get("success") else "✗"
+            trigger = trade.get("trigger", "ai")
             lines.append(
                 f"  - [{success_str}] {trade.get('coin', '?')} {trade.get('action', '?')} "
                 f"size={trade.get('size', '?')} @ ${trade.get('price', '?')} "
-                f"conf={trade.get('confidence', '?')} "
-                f"({trade.get('reasoning', '')[:80]})"
+                f"conf={trade.get('confidence', '?')} trigger={trigger} "
+                f"({trade.get('reasoning', '')[:60]})"
             )
         return "\n".join(lines)
 
@@ -130,7 +150,6 @@ class LLMEngine:
         peak_portfolio_value: Decimal = Decimal("0"),
         consecutive_losses: int = 0
     ) -> str:
-        """Build structured prompt with all Hyperliquid-sourced data."""
 
         all_mids_section = ""
         if all_mids:
@@ -150,7 +169,6 @@ FUNDING DATA (from Hyperliquid):
   Open Interest: {funding_data.get('open_interest', 'N/A')}
   Premium: {funding_data.get('premium', 'N/A')}"""
 
-        # Drawdown context
         drawdown_section = ""
         if peak_portfolio_value > 0:
             current_dd = (peak_portfolio_value - portfolio_state.total_balance) / peak_portfolio_value
@@ -158,10 +176,9 @@ FUNDING DATA (from Hyperliquid):
 RISK CONTEXT:
   Peak Portfolio Value: ${peak_portfolio_value}
   Current Drawdown: {float(current_dd) * 100:.2f}%
-  Max Allowed Drawdown: 15%
+  Max Allowed Drawdown: 12%
   Consecutive Losing Trades: {consecutive_losses}"""
 
-        # Total exposure
         total_exposure = portfolio_state.get_total_exposure()
         total_pnl = portfolio_state.get_total_unrealized_pnl()
 
@@ -171,7 +188,15 @@ RISK CONTEXT:
 RECENT TRADE HISTORY (last 5):
 {self._format_recent_trades(recent_trades)}"""
 
-        prompt = f"""You are an expert cryptocurrency trader operating on Hyperliquid exchange.
+        # Determine trend alignment for emphasis
+        trends_aligned = technical_data.get("trends_aligned", False) if technical_data else False
+        alignment_note = ""
+        if trends_aligned:
+            alignment_note = "\n⚡ ALL TIMEFRAMES ALIGNED — higher confidence entries are appropriate."
+        else:
+            alignment_note = "\n⚠️ TIMEFRAMES DIVERGENT — prefer smaller sizes or hold unless strong edge."
+
+        prompt = f"""You are an elite cryptocurrency trader on Hyperliquid exchange, optimizing for CONSISTENT PROFITABILITY with asymmetric risk/reward.
 ALL data below comes directly from Hyperliquid's API. Make your decision based ONLY on this data.
 
 {all_mids_section}
@@ -183,8 +208,9 @@ TARGET ASSET: {market_data.coin}
   Funding Rate: {float(market_data.funding_rate):.6f}%
 {funding_section}
 
-TECHNICAL INDICATORS (from Hyperliquid candles):
+TECHNICAL INDICATORS (from Hyperliquid candles — multi-timeframe):
 {self._format_technical_data(technical_data)}
+{alignment_note}
 
 PORTFOLIO STATE:
   Total Balance: ${portfolio_state.total_balance}
@@ -199,17 +225,45 @@ CURRENT POSITIONS:
 {self._format_positions(portfolio_state.positions)}
 {recent_trades_section}
 
-TRADING RULES:
+=== STRATEGY RULES (FOLLOW STRICTLY) ===
+
+ENTRY CRITERIA — Only open new positions when:
+1. Multi-timeframe confluence: At least 2 of 3 timeframes (5m, 1h, 4h) agree on direction
+2. RSI confirmation: RSI-14 between 30-45 for longs (oversold bounce), 55-70 for shorts (overbought rejection)
+3. Volume confirmation: volume_ratio > 1.2 (above-average volume confirms move)
+4. MACD alignment: histogram direction matches trade direction
+5. Bollinger position: bb_position < 0.3 for longs (near lower band), > 0.7 for shorts (near upper band)
+6. VWAP: Price below VWAP for longs (discount), above VWAP for shorts (premium)
+
+POSITION MANAGEMENT:
+- Risk/Reward minimum 1:3 (SL 2%, TP 6%) — the bot handles SL/TP automatically
+- If a position is profitable > 3%, consider letting trailing stop manage it (hold)
+- If a position is losing > 1.5%, consider closing early if technicals turned against you
+- Close positions when the original thesis is invalidated (trend reversal on 1h)
+- Reduce position if margin usage > 60%
+
+SIZING RULES:
 - Minimum sizes: BTC 0.001, ETH 0.001, SOL 0.1, BNB 0.001, ADA 16.0
-- Maximum leverage: 10x
+- Use leverage 3-7x for high-confidence trades (all timeframes aligned)
+- Use leverage 2-4x for medium-confidence trades
+- Never exceed 10x leverage
 - Max 40% of balance on a single asset
+
+CRITICAL RULES:
 - Do NOT open BUY if already SHORT on same asset (close first)
 - Do NOT open SELL if already LONG on same asset (close first)
-- If drawdown > 10%, prefer reducing exposure or holding
-- If consecutive losses > 3, strongly prefer "hold"
-- Consider VWAP and volume_ratio for entry timing
-- bb_position near 0 = oversold, near 1 = overbought
-- Use "hold" if uncertain or no clear edge
+- If drawdown > 8%, ONLY allow close_position or reduce_position or hold
+- If consecutive losses > 3, MUST respond with "hold" unless closing a losing position
+- If funding rate is extreme (> 0.01% or < -0.01%), factor it into direction bias
+- Negative funding = shorts paying longs = bullish pressure
+- Positive funding = longs paying shorts = bearish pressure
+- If no clear edge exists, ALWAYS hold — preserving capital is paramount
+
+CONFIDENCE SCORING:
+- 0.85-1.0: All timeframes aligned + strong volume + clear RSI signal
+- 0.72-0.84: 2/3 timeframes aligned + decent volume
+- 0.50-0.71: Mixed signals — only for managing existing positions
+- Below 0.50: Hold
 
 Respond with ONLY this JSON (no markdown, no extra text):
 {{
@@ -217,12 +271,11 @@ Respond with ONLY this JSON (no markdown, no extra text):
   "size": 0.001,
   "leverage": 5,
   "confidence": 0.75,
-  "reasoning": "Concise analysis of why this trade"
+  "reasoning": "Concise analysis: [timeframe alignment] + [key indicator] + [risk/reward assessment]"
 }}"""
         return prompt.strip()
 
     def _parse_llm_response(self, response_text: str) -> Optional[Dict[str, Any]]:
-        """Parse LLM response with multiple fallback strategies."""
         cleaned = response_text.strip()
 
         # Strategy 1: Direct JSON parse
@@ -277,7 +330,6 @@ Respond with ONLY this JSON (no markdown, no extra text):
         return None
 
     def _validate_decision(self, parsed: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        """Validate and normalize a parsed LLM decision."""
         required_keys = ["action", "size", "leverage", "confidence", "reasoning"]
         if not all(key in parsed for key in required_keys):
             missing = [k for k in required_keys if k not in parsed]
@@ -320,7 +372,6 @@ Respond with ONLY this JSON (no markdown, no extra text):
         }
 
     def _call_openrouter(self, payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        """Call OpenRouter API with retry logic for transient errors."""
         last_error = None
 
         for attempt in range(self.max_retries + 1):
@@ -388,7 +439,6 @@ Respond with ONLY this JSON (no markdown, no extra text):
         peak_portfolio_value: Decimal = Decimal("0"),
         consecutive_losses: int = 0
     ) -> Optional[Dict[str, Any]]:
-        """Get trading decision from Claude Opus 4.6 via OpenRouter."""
         prompt = self._build_prompt(
             market_data, portfolio_state, technical_data, all_mids, funding_data,
             recent_trades, peak_portfolio_value, consecutive_losses
@@ -400,11 +450,13 @@ Respond with ONLY this JSON (no markdown, no extra text):
                 {
                     "role": "system",
                     "content": (
-                        "You are an autonomous crypto trading agent on Hyperliquid. "
-                        "You analyze market data and respond ONLY with valid JSON trading decisions. "
+                        "You are an autonomous crypto trading agent on Hyperliquid optimized for CONSISTENT PROFITABILITY. "
+                        "You use multi-timeframe confluence (5m, 1h, 4h) to find high-probability entries. "
+                        "You target asymmetric risk/reward: cut losers fast (2% SL), let winners run (6% TP + trailing). "
+                        "You respond ONLY with valid JSON trading decisions. "
                         "Never include markdown formatting, code blocks, or explanatory text outside the JSON. "
-                        "Think carefully about risk/reward before each decision. "
-                        "Preserve capital above all — when in doubt, hold."
+                        "CAPITAL PRESERVATION is your #1 priority — when in doubt, HOLD. "
+                        "Only trade when you have genuine edge with multi-timeframe confirmation."
                     )
                 },
                 {
@@ -421,7 +473,6 @@ Respond with ONLY this JSON (no markdown, no extra text):
         if data is None:
             return None
 
-        # Check for API-level errors
         if "error" in data:
             logger.error(f"OpenRouter returned error: {data['error']}")
             return None
@@ -438,7 +489,6 @@ Respond with ONLY this JSON (no markdown, no extra text):
             logger.error("Empty content in LLM response")
             return None
 
-        # Log usage info
         usage = data.get("usage", {})
         if usage:
             logger.info(
