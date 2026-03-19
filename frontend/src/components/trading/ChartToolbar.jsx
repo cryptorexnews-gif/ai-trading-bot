@@ -30,12 +30,12 @@ export default function ChartToolbar({
           {coins.map(c => <option key={c} value={c}>{c}/USDC</option>)}
         </select>
 
-        {lastPrice && (
+        {lastPrice != null && (
           <span className={`text-xl font-bold font-mono ${isPositive ? 'text-green-400' : 'text-red-400'}`}>
             ${fmtPrice(lastPrice)}
           </span>
         )}
-        {changePct !== null && (
+        {changePct != null && (
           <span className={`text-sm font-bold ${isPositive ? 'text-green-400' : 'text-red-400'}`}>
             {isPositive ? '+' : ''}{changePct}%
           </span>

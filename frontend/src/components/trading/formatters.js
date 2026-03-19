@@ -3,6 +3,7 @@
  */
 
 export function fmtPrice(p) {
+  if (p == null || isNaN(p)) return '—'
   if (p >= 10000) return p.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
   if (p >= 100) return p.toFixed(2)
   if (p >= 1) return p.toFixed(4)
@@ -11,6 +12,7 @@ export function fmtPrice(p) {
 }
 
 export function fmtSize(s) {
+  if (s == null || isNaN(s)) return '—'
   if (s >= 1000000) return `${(s / 1000000).toFixed(2)}M`
   if (s >= 1000) return `${(s / 1000).toFixed(1)}k`
   if (s >= 1) return s.toFixed(3)
@@ -18,6 +20,7 @@ export function fmtSize(s) {
 }
 
 export function fmtVol(v) {
+  if (v == null || isNaN(v)) return '—'
   if (v >= 1e9) return `$${(v / 1e9).toFixed(2)}B`
   if (v >= 1e6) return `$${(v / 1e6).toFixed(2)}M`
   if (v >= 1e3) return `$${(v / 1e3).toFixed(1)}K`
