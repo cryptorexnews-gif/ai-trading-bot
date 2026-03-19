@@ -4,7 +4,6 @@ ORDEN MÍNIMA FUNCIONAL PARA HYPERLIQUID
 Script que hace UNA SOLA orden mínima con el esquema EIP-712 correcto
 """
 
-import json
 import time
 import requests
 import os
@@ -17,7 +16,14 @@ from Crypto.Hash import keccak
 load_dotenv()
 PRIVATE_KEY = os.getenv("HYPERLIQUID_PRIVATE_KEY")
 WALLET_ADDRESS = os.getenv("HYPERLIQUID_WALLET_ADDRESS")
+ENABLE_MAINNET_TRADING = os.getenv("ENABLE_MAINNET_TRADING", "false").lower() == "true"
 BASE_URL = "https://api.hyperliquid.xyz"
+
+
+def mask_wallet(wallet: str) -> str:
+    if not wallet or len(wallet) < 12:
+        return "invalid_wallet"
+    return f"{wallet[:6]}...{wallet[-4:]}"
 
 
 def address_to_bytes(address):
@@ -104,6 +110,7 @@ def get_asset_id(coin):
         for i, asset in enumerate(meta.get("universe", [])):
             if asset.get("name") == coin:
                 return i
+    print(f"❌ Error obteniendo asset ID para {coin}: status={response.status_code} (body redacted)")
     return None
 
 
@@ -134,10 +141,14 @@ def create_minimal_order(coin, is_buy, sz, limit_px):
 
 def send_minimal_order():
     """Envía UNA SOLA orden mínima a Hyperliquid"""
+    if not ENABLE_MAINNET_TRADING:
+        print("🛑 Bloqueado: ENABLE_MAINNET_TRADING no está en true (fail-closed).")
+        return False
+
     print("=== ORDEN MÍNIMA HYPERLIQUID ===")
 
     account = Account.from_key(PRIVATE_KEY)
-    print(f"💰 Wallet: {account.address}")
+    print(f"💰 Wallet: {mask_wallet(account.address)}")
 
     coin = "ETH"
     is_buy = True
@@ -180,16 +191,16 @@ def send_minimal_order():
 
     response = requests.post(url, json=payload, headers=headers, timeout=30)
     print(f"📡 Status: {response.status_code}")
-    print(f"📨 Response: {response.text}")
 
     if response.status_code == 200:
         result = response.json()
-        print("🎉 ¡ORDEN EXITOSA!")
-        print(json.dumps(result, indent=2))
-        return True
+        if result.get("status") == "ok":
+            print("🎉 Orden aceptada por exchange")
+            return True
+        print("❌ Exchange rechazó la orden (detalles redacted)")
+        return False
 
-    print(f"❌ Error: {response.status_code}")
-    print(f"💬 Mensaje: {response.text}")
+    print("❌ Error HTTP al enviar orden (body redacted)")
     return False
 
 
@@ -206,12 +217,11 @@ def verify_wallet_balance():
     response = requests.post(url, json=payload, timeout=15)
     if response.status_code == 200:
         data = response.json()
-        print(f"✅ Estado del usuario recibido correctamente")
+        print("✅ Estado del usuario recibido correctamente")
         print(f"📊 Keys: {list(data.keys())}")
         return True
 
-    print(f"❌ Error al verificar balance: {response.status_code}")
-    print(f"💬 {response.text}")
+    print(f"❌ Error al verificar balance: status={response.status_code} (body redacted)")
     return False
 
 
@@ -222,11 +232,23 @@ if __name__ == "__main__":
     print("=" * 50)
     print()
 
+    if not ENABLE_MAINNET_TRADING:
+        print("🛑 Seguridad: ENABLE_MAINNET_TRADING=false, no se permite enviar órdenes reales.")
+    else:
+        print("✅ ENABLE_MAINNET_TRADING=true detectado.")
+
     verify_wallet_balance()
 
-    if input("\n¿Enviar orden mínima REAL a Hyperliquid? (y/n): ").lower() == 'y':
-        print("\n" + "=" * 30)
-        send_minimal_order()
+    if ENABLE_MAINNET_TRADING:
+        expected_suffix = WALLET_ADDRESS[-4:] if WALLET_ADDRESS else ""
+        typed_suffix = input(f"\nEscribe los últimos 4 caracteres de tu wallet ({mask_wallet(WALLET_ADDRESS)}) para confirmar: ").strip()
+
+        if typed_suffix != expected_suffix:
+            print("🛑 Confirmación fallida. Orden cancelada.")
+        elif input("¿Enviar orden mínima REAL a Hyperliquid? (y/n): ").lower() == 'y':
+            print("\n" + "=" * 30)
+            send_minimal_order()
+        else:
+            print("\n📋 Orden preparada pero no enviada")
     else:
-        print("\n📋 Orden preparada pero no enviada")
-        print("Para enviar manualmente, ejecuta el script y responde 'y'")
+        print("\n📋 Script en modo seguro: no se enviarán órdenes reales")

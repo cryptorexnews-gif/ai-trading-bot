@@ -92,6 +92,8 @@ class HyperliquidTradingBotExecutable:
         self.min_confidence_manage = Decimal(os.getenv("MIN_CONFIDENCE_MANAGE", "0.10"))
 
         self.enable_mainnet_trading = os.getenv("ENABLE_MAINNET_TRADING", "false").lower() == "true"
+        self.allow_external_llm = os.getenv("ALLOW_EXTERNAL_LLM", "false").lower() == "true"
+        self.include_portfolio_in_llm_prompt = os.getenv("LLM_INCLUDE_PORTFOLIO_CONTEXT", "false").lower() == "true"
 
         self.allowed_actions = {action.value for action in TradingAction}
         self.min_size_by_coin: Dict[str, Decimal] = {
@@ -114,6 +116,10 @@ class HyperliquidTradingBotExecutable:
 
         if not self.testnet and not self.enable_mainnet_trading:
             logger.warning("Mainnet live execution is DISABLED. Set ENABLE_MAINNET_TRADING=true to enable real orders.")
+        if not self.allow_external_llm:
+            logger.warning("External LLM calls are DISABLED. Set ALLOW_EXTERNAL_LLM=true to enable DeepSeek.")
+        if self.allow_external_llm and not self.include_portfolio_in_llm_prompt:
+            logger.info("LLM prompt uses market-only context (portfolio telemetry excluded).")
 
     def _mask_wallet(self, wallet: str) -> str:
         if not wallet or len(wallet) < 12:
@@ -125,6 +131,9 @@ class HyperliquidTradingBotExecutable:
             return Decimal(str(value))
         except (InvalidOperation, ValueError, TypeError):
             return default
+
+    def _log_http_error(self, context: str, status_code: int) -> None:
+        logger.error(f"{context} failed with status={status_code} (response body redacted)")
 
     def get_all_market_data(self) -> Dict[str, MarketData]:
         market_data: Dict[str, MarketData] = {}
@@ -169,7 +178,7 @@ class HyperliquidTradingBotExecutable:
         response = requests.post(f"{self.base_url}/info", json=payload, timeout=15)
 
         if response.status_code != 200:
-            logger.error(f"Could not fetch portfolio state: {response.status_code} - {response.text}")
+            self._log_http_error("Portfolio state request", response.status_code)
             return PortfolioState(Decimal("0"), Decimal("0"), Decimal("0"), {})
 
         data = response.json()
@@ -227,20 +236,9 @@ class HyperliquidTradingBotExecutable:
         market_data: Dict[str, MarketData],
         portfolio_state: PortfolioState
     ) -> str:
-        balance_bucket = "low" if portfolio_state.total_balance < Decimal("100") else "medium" if portfolio_state.total_balance < Decimal("10000") else "high"
-        margin_pct = (portfolio_state.margin_usage * Decimal("100")).quantize(Decimal("0.1"))
-        position_count = len(portfolio_state.positions)
-        long_count = sum(1 for _, p in portfolio_state.positions.items() if p["size"] > 0)
-        short_count = sum(1 for _, p in portfolio_state.positions.items() if p["size"] < 0)
-
         prompt_lines = [
             "You are an expert cryptocurrency trading analyst.",
             "Return ONLY valid JSON array with one object per coin.",
-            "",
-            "PORTFOLIO CONTEXT (SANITIZED):",
-            f"- Balance tier: {balance_bucket}",
-            f"- Margin usage: {margin_pct}%",
-            f"- Open positions: {position_count} (long: {long_count}, short: {short_count})",
             "",
             "MARKET DATA:"
         ]
@@ -249,6 +247,21 @@ class HyperliquidTradingBotExecutable:
             prompt_lines.append(
                 f"- {coin}: price={data.last_price}, change_24h={data.change_24h}, volume_24h={data.volume_24h}"
             )
+
+        if self.include_portfolio_in_llm_prompt:
+            balance_bucket = "low" if portfolio_state.total_balance < Decimal("100") else "medium" if portfolio_state.total_balance < Decimal("10000") else "high"
+            margin_pct = (portfolio_state.margin_usage * Decimal("100")).quantize(Decimal("0.1"))
+            position_count = len(portfolio_state.positions)
+            long_count = sum(1 for _, p in portfolio_state.positions.items() if p["size"] > 0)
+            short_count = sum(1 for _, p in portfolio_state.positions.items() if p["size"] < 0)
+
+            prompt_lines.extend([
+                "",
+                "OPTIONAL PORTFOLIO CONTEXT:",
+                f"- Balance tier: {balance_bucket}",
+                f"- Margin usage: {margin_pct}%",
+                f"- Open positions: {position_count} (long: {long_count}, short: {short_count})"
+            ])
 
         prompt_lines.extend([
             "",
@@ -353,6 +366,10 @@ class HyperliquidTradingBotExecutable:
         market_data: Dict[str, MarketData],
         portfolio_state: PortfolioState
     ) -> Dict[str, Dict[str, Any]]:
+        if not self.allow_external_llm:
+            logger.warning("External LLM is disabled; using safe fallback (all HOLD).")
+            return self._sanitize_and_validate_orders([])
+
         prompt = self._build_sanitized_prompt(market_data, portfolio_state)
 
         headers = {
@@ -383,7 +400,7 @@ class HyperliquidTradingBotExecutable:
         )
 
         if response.status_code != 200:
-            logger.warning(f"DeepSeek API failed ({response.status_code}), using safe fallback")
+            self._log_http_error("DeepSeek chat completions", response.status_code)
             return self._sanitize_and_validate_orders([])
 
         result = response.json()
@@ -719,18 +736,18 @@ class HyperliquidTradingBotExecutable:
         )
 
         if response.status_code != 200:
-            logger.error(f"Order HTTP error: {response.status_code} - {response.text}")
+            self._log_http_error("Order request", response.status_code)
             return False
 
         result = response.json()
         if result.get("status") != "ok":
-            logger.error(f"Order rejected: {result}")
+            logger.error("Order rejected by exchange (details redacted)")
             return False
 
         statuses = result.get("response", {}).get("data", {}).get("statuses", [])
         for status in statuses:
             if "error" in status:
-                logger.error(f"Order error for {coin}: {status['error']}")
+                logger.error("Order error returned in status payload (details redacted)")
                 return False
 
         logger.info(f"Order success for {coin}")
@@ -785,7 +802,7 @@ class HyperliquidTradingBotExecutable:
             timeout=15
         )
         if response.status_code != 200:
-            logger.error(f"Leverage HTTP error: {response.status_code} - {response.text}")
+            self._log_http_error("Leverage update request", response.status_code)
             return False
 
         result = response.json()
@@ -793,14 +810,14 @@ class HyperliquidTradingBotExecutable:
             logger.info(f"Leverage set for {coin}: {leverage}x")
             return True
 
-        logger.error(f"Failed to set leverage for {coin}: {result}")
+        logger.error(f"Failed to set leverage for {coin} (exchange details redacted)")
         return False
 
     def _get_asset_id(self, coin: str) -> Optional[int]:
         payload = {"type": "meta"}
         response = requests.post(f"{self.base_url}/info", json=payload, timeout=15)
         if response.status_code != 200:
-            logger.error(f"Failed to get meta for asset IDs: {response.status_code}")
+            logger.error(f"Failed to get meta for asset IDs: status={response.status_code}")
             return None
 
         data = response.json()

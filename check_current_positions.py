@@ -32,7 +32,7 @@ def get_user_state():
     if response.status_code == 200:
         return response.json()
 
-    print(f"Error: {response.status_code} - {response.text}")
+    print(f"Error en estado de usuario: status={response.status_code} (body redacted)")
     return None
 
 
@@ -45,7 +45,7 @@ def get_meta():
     if response.status_code == 200:
         return response.json()
 
-    print(f"Error al obtener metadata: {response.status_code}")
+    print(f"Error al obtener metadata: status={response.status_code} (body redacted)")
     return None
 
 
