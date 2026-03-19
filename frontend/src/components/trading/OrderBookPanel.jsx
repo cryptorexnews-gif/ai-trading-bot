@@ -94,7 +94,7 @@ export default function OrderBookPanel({
   const delta = bidPct - 50
 
   // Calculate heights
-  const overhead = 160 // header + depth selector + col headers + spread + imbalance
+  const overhead = 160
   const availableHeight = panelHeight - overhead
   const halfHeight = Math.max(80, Math.floor(availableHeight / 2))
 
