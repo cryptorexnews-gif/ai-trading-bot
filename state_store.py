@@ -2,7 +2,7 @@ import json
 import os
 import time
 from decimal import Decimal
-from typing import Any, Dict
+from typing import Any, Dict, List, Optional
 
 
 class StateStore:
@@ -14,8 +14,10 @@ class StateStore:
         return {
             "peak_portfolio_value": "0",
             "consecutive_failed_cycles": 0,
+            "consecutive_losses": 0,
             "last_trade_timestamp_by_coin": {},
-            "daily_notional_by_day": {}
+            "daily_notional_by_day": {},
+            "trade_history": []
         }
 
     def _default_metrics(self) -> Dict[str, Any]:
@@ -24,6 +26,8 @@ class StateStore:
             "cycles_total": 0,
             "cycles_failed": 0,
             "trades_executed_total": 0,
+            "trades_won": 0,
+            "trades_lost": 0,
             "holds_total": 0,
             "risk_rejections_total": 0,
             "execution_failures_total": 0,
@@ -45,7 +49,13 @@ class StateStore:
             return self._default_state()
         try:
             with open(self.state_path, "r", encoding="utf-8") as file_obj:
-                return json.load(file_obj)
+                data = json.load(file_obj)
+                # Ensure all default keys exist (migration safety)
+                defaults = self._default_state()
+                for key, value in defaults.items():
+                    if key not in data:
+                        data[key] = value
+                return data
         except (json.JSONDecodeError, IOError):
             return self._default_state()
 
@@ -80,3 +90,42 @@ class StateStore:
         keys_sorted = sorted(daily_notional_by_day.keys(), reverse=True)
         keep_keys = set(keys_sorted[:7])
         return {k: v for k, v in daily_notional_by_day.items() if k in keep_keys}
+
+    def add_trade_record(
+        self,
+        state: Dict[str, Any],
+        trade: Dict[str, Any]
+    ) -> None:
+        """Add a trade record to history, keeping last 100 trades."""
+        history = state.get("trade_history", [])
+        history.append(trade)
+        # Keep only last 100 trades to prevent unbounded growth
+        if len(history) > 100:
+            history = history[-100:]
+        state["trade_history"] = history
+
+    def get_recent_trades(self, state: Dict[str, Any], count: int = 5) -> List[Dict[str, Any]]:
+        """Get the most recent trades."""
+        history = state.get("trade_history", [])
+        return history[-count:] if history else []
+
+    def get_performance_summary(self, state: Dict[str, Any]) -> Dict[str, Any]:
+        """Calculate performance summary from trade history."""
+        history = state.get("trade_history", [])
+        if not history:
+            return {"total_trades": 0, "win_rate": 0.0, "total_pnl": "0"}
+
+        total = len(history)
+        wins = sum(1 for t in history if t.get("success", False) and t.get("action") != "hold")
+        losses = sum(1 for t in history if not t.get("success", True) and t.get("action") != "hold")
+        holds = sum(1 for t in history if t.get("action") == "hold")
+        actual_trades = total - holds
+
+        return {
+            "total_trades": actual_trades,
+            "wins": wins,
+            "losses": losses,
+            "holds": holds,
+            "win_rate": (wins / actual_trades * 100) if actual_trades > 0 else 0.0,
+            "consecutive_losses": state.get("consecutive_losses", 0)
+        }

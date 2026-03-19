@@ -15,12 +15,20 @@ class HyperliquidDataFetcher:
     Fetches ALL market data exclusively from Hyperliquid API.
     No external data sources (Binance, etc.) are used.
     Uses Decimal for all financial calculations.
+    Includes caching for meta/funding to reduce API calls.
     """
 
     def __init__(self, base_url: str = HYPERLIQUID_BASE_URL):
         self.base_url = base_url
         self.session = requests.Session()
         self.session.headers.update({"Content-Type": "application/json"})
+        # Caches to avoid redundant API calls within a cycle
+        self._meta_cache: Optional[Dict[str, Any]] = None
+        self._meta_cache_at: float = 0.0
+        self._meta_cache_ttl: float = 120.0  # 2 minutes
+        self._mids_cache: Optional[Dict[str, str]] = None
+        self._mids_cache_at: float = 0.0
+        self._mids_cache_ttl: float = 15.0  # 15 seconds
 
     def _d(self, value: Any) -> Decimal:
         """Convert any value to Decimal safely."""
@@ -50,43 +58,33 @@ class HyperliquidDataFetcher:
             logger.error(f"Hyperliquid /info request error: {e}")
             return None
 
-    def get_all_mids(self) -> Optional[Dict[str, str]]:
-        """Get all mid prices from Hyperliquid."""
-        return self._post_info({"type": "allMids"})
+    def get_all_mids(self, force_refresh: bool = False) -> Optional[Dict[str, str]]:
+        """Get all mid prices from Hyperliquid with caching."""
+        now = time.time()
+        if not force_refresh and self._mids_cache and (now - self._mids_cache_at) < self._mids_cache_ttl:
+            return self._mids_cache
+        result = self._post_info({"type": "allMids"})
+        if result is not None:
+            self._mids_cache = result
+            self._mids_cache_at = now
+        return self._mids_cache
 
-    def get_meta(self) -> Optional[Dict[str, Any]]:
-        """Get exchange metadata (universe, asset info)."""
-        return self._post_info({"type": "meta"})
-
-    def get_funding_rates(self) -> Optional[List[Dict[str, Any]]]:
-        """Get current funding rates for all assets."""
-        meta = self.get_meta()
-        if not meta:
-            return None
-
-        mids = self.get_all_mids()
-        if not mids:
-            return None
-
-        # Hyperliquid provides funding info in meta
-        universe = meta.get("universe", [])
-        funding_data = []
-        for asset in universe:
-            coin = asset.get("name", "")
-            funding_data.append({
-                "coin": coin,
-                "funding_rate": asset.get("funding", "0"),
-                "open_interest": asset.get("openInterest", "0"),
-                "max_leverage": asset.get("maxLeverage", 10),
-                "mid_price": mids.get(coin, "0")
-            })
-        return funding_data
+    def get_meta(self, force_refresh: bool = False) -> Optional[Dict[str, Any]]:
+        """Get exchange metadata with caching."""
+        now = time.time()
+        if not force_refresh and self._meta_cache and (now - self._meta_cache_at) < self._meta_cache_ttl:
+            return self._meta_cache
+        result = self._post_info({"type": "meta"})
+        if result is not None:
+            self._meta_cache = result
+            self._meta_cache_at = now
+        return self._meta_cache
 
     def get_funding_for_coin(self, coin: str) -> Dict[str, Any]:
-        """Get funding data for a specific coin from Hyperliquid."""
+        """Get funding data for a specific coin from cached meta."""
         meta = self.get_meta()
         if not meta:
-            return {"funding_rate": "0", "open_interest": "0", "premium": "0"}
+            return {"funding_rate": "0", "open_interest": "0", "premium": "0", "max_leverage": 10}
 
         for asset in meta.get("universe", []):
             if asset.get("name") == coin:
@@ -97,7 +95,7 @@ class HyperliquidDataFetcher:
                     "max_leverage": int(asset.get("maxLeverage", 10))
                 }
 
-        return {"funding_rate": "0", "open_interest": "0", "premium": "0"}
+        return {"funding_rate": "0", "open_interest": "0", "premium": "0", "max_leverage": 10}
 
     def get_candle_snapshot(
         self,
@@ -267,7 +265,6 @@ class HyperliquidDataFetcher:
             window = prices[i - period + 1:i + 1]
             sma = sum(window) / Decimal(str(period))
             variance = sum((p - sma) ** 2 for p in window) / Decimal(str(period))
-            # Approximate sqrt using Newton's method
             std_dev = self._decimal_sqrt(variance)
 
             middle.append(sma)
@@ -284,6 +281,23 @@ class HyperliquidDataFetcher:
         for _ in range(50):
             x = (x + value / x) / Decimal("2")
         return x
+
+    def _calculate_vwap(
+        self,
+        highs: List[Decimal],
+        lows: List[Decimal],
+        closes: List[Decimal],
+        volumes: List[Decimal]
+    ) -> Decimal:
+        """Calculate Volume Weighted Average Price."""
+        if not volumes or not closes:
+            return Decimal("0")
+        total_volume = sum(volumes)
+        if total_volume == 0:
+            return closes[-1] if closes else Decimal("0")
+        typical_prices = [(h + l + c) / Decimal("3") for h, l, c in zip(highs, lows, closes)]
+        vwap = sum(tp * v for tp, v in zip(typical_prices, volumes)) / total_volume
+        return vwap
 
     def get_technical_indicators(self, coin: str) -> Optional[Dict[str, Any]]:
         """
@@ -321,6 +335,9 @@ class HyperliquidDataFetcher:
         intraday_atr = self._calculate_atr(intraday_highs, intraday_lows, intraday_closes, 14)
         bollinger = self._calculate_bollinger_bands(intraday_closes, 20)
 
+        # Calculate VWAP
+        vwap = self._calculate_vwap(intraday_highs, intraday_lows, intraday_closes, intraday_volumes)
+
         # Calculate longer-term indicators
         daily_ema_20 = self.calculate_ema(daily_closes, 20)
         daily_ema_50 = self.calculate_ema(daily_closes, min(50, len(daily_closes)))
@@ -336,6 +353,9 @@ class HyperliquidDataFetcher:
             if intraday_volumes else Decimal("0")
         )
 
+        # Volume ratio (current vs average — spike detection)
+        volume_ratio = (current_volume / avg_volume) if avg_volume > 0 else Decimal("1")
+
         # Calculate 24h change from candle data
         if len(daily_closes) >= 2 and daily_closes[-2] != 0:
             change_24h = (daily_closes[-1] - daily_closes[-2]) / daily_closes[-2]
@@ -347,8 +367,14 @@ class HyperliquidDataFetcher:
         # Estimate 24h volume from candle data
         volume_24h = sum(intraday_volumes) * current_price if intraday_volumes else Decimal("0")
 
-        # Get funding data from Hyperliquid
+        # Get funding data from cached meta
         funding_data = self.get_funding_for_coin(coin)
+
+        # Price position relative to Bollinger Bands (0=lower, 0.5=middle, 1=upper)
+        bb_upper = bollinger["upper"][-1] if bollinger["upper"] else Decimal("0")
+        bb_lower = bollinger["lower"][-1] if bollinger["lower"] else Decimal("0")
+        bb_width = bb_upper - bb_lower
+        bb_position = ((current_price - bb_lower) / bb_width) if bb_width > 0 else Decimal("0.5")
 
         return {
             "current_price": current_price,
@@ -356,6 +382,9 @@ class HyperliquidDataFetcher:
             "volume_24h": volume_24h,
             "funding_rate": self._d(funding_data.get("funding_rate", "0")),
             "open_interest": funding_data.get("open_interest", "0"),
+            "vwap": vwap,
+            "volume_ratio": volume_ratio,
+            "bb_position": bb_position,
             "current_ema9": ema_9[-1] if ema_9 else Decimal("0"),
             "current_ema20": ema_20[-1] if ema_20 else Decimal("0"),
             "current_macd": macd_line[-1] if macd_line else Decimal("0"),
@@ -364,9 +393,9 @@ class HyperliquidDataFetcher:
             "current_rsi_7": rsi_7[-1] if rsi_7 else Decimal("50"),
             "current_rsi_14": rsi_14[-1] if rsi_14 else Decimal("50"),
             "intraday_atr": intraday_atr[-1] if intraday_atr else Decimal("0"),
-            "bollinger_upper": bollinger["upper"][-1] if bollinger["upper"] else Decimal("0"),
+            "bollinger_upper": bb_upper,
             "bollinger_middle": bollinger["middle"][-1] if bollinger["middle"] else Decimal("0"),
-            "bollinger_lower": bollinger["lower"][-1] if bollinger["lower"] else Decimal("0"),
+            "bollinger_lower": bb_lower,
             "intraday_series": {
                 "closes": intraday_closes[-10:],
                 "ema_9": ema_9[-10:],
@@ -389,7 +418,7 @@ class HyperliquidDataFetcher:
         }
 
     def get_open_interest_and_funding(self, coin: str) -> Dict[str, str]:
-        """Get open interest and funding from Hyperliquid (not random data)."""
+        """Get open interest and funding from Hyperliquid."""
         funding_data = self.get_funding_for_coin(coin)
         return {
             "open_interest_latest": str(funding_data.get("open_interest", "0")),

@@ -1,7 +1,10 @@
+import logging
 from decimal import Decimal
 from typing import Any, Dict, Tuple
 
-from models import PortfolioState, TradingAction
+from models import PortfolioState, PositionSide, TradingAction
+
+logger = logging.getLogger(__name__)
 
 
 class RiskManager:
@@ -15,7 +18,10 @@ class RiskManager:
         max_order_margin_pct: Decimal,
         trade_cooldown_sec: int,
         daily_notional_limit_usd: Decimal,
-        volatility_multiplier: Decimal = Decimal("1.5")
+        volatility_multiplier: Decimal = Decimal("1.5"),
+        max_drawdown_pct: Decimal = Decimal("0.15"),
+        max_single_asset_pct: Decimal = Decimal("0.4"),
+        emergency_margin_threshold: Decimal = Decimal("0.9")
     ):
         self.min_size_by_coin = min_size_by_coin
         self.hard_max_leverage = hard_max_leverage
@@ -26,6 +32,9 @@ class RiskManager:
         self.trade_cooldown_sec = trade_cooldown_sec
         self.daily_notional_limit_usd = daily_notional_limit_usd
         self.volatility_multiplier = volatility_multiplier
+        self.max_drawdown_pct = max_drawdown_pct
+        self.max_single_asset_pct = max_single_asset_pct
+        self.emergency_margin_threshold = emergency_margin_threshold
         self.allowed_actions = {action.value for action in TradingAction}
 
     def _safe_decimal(self, value: Any, default: Decimal = Decimal("0")) -> Decimal:
@@ -38,6 +47,39 @@ class RiskManager:
         adjustment = Decimal("1") / (Decimal("1") + (volatility * self.volatility_multiplier))
         return base_size * adjustment
 
+    def check_drawdown(
+        self,
+        portfolio_state: PortfolioState,
+        peak_portfolio_value: Decimal
+    ) -> Tuple[bool, str]:
+        """Check if portfolio drawdown exceeds maximum allowed."""
+        if peak_portfolio_value <= 0:
+            return True, "ok"
+        current = portfolio_state.total_balance
+        drawdown = (peak_portfolio_value - current) / peak_portfolio_value
+        if drawdown >= self.max_drawdown_pct:
+            logger.warning(
+                f"Max drawdown breached: {float(drawdown) * 100:.1f}% "
+                f"(limit={float(self.max_drawdown_pct) * 100:.1f}%)"
+            )
+            return False, "max_drawdown_breached"
+        return True, "ok"
+
+    def check_emergency_derisk(self, portfolio_state: PortfolioState) -> bool:
+        """Check if margin usage is critically high and we need emergency de-risk."""
+        return portfolio_state.margin_usage >= self.emergency_margin_threshold
+
+    def get_emergency_close_coin(self, portfolio_state: PortfolioState) -> str:
+        """Get the coin with the worst unrealized PnL to close first."""
+        worst_coin = ""
+        worst_pnl = Decimal("0")
+        for coin, pos in portfolio_state.positions.items():
+            pnl = Decimal(str(pos.get("unrealized_pnl", 0)))
+            if pnl < worst_pnl:
+                worst_pnl = pnl
+                worst_coin = coin
+        return worst_coin
+
     def check_order(
         self,
         coin: str,
@@ -47,7 +89,8 @@ class RiskManager:
         last_trade_timestamp_by_coin: Dict[str, float],
         daily_notional_used: Decimal,
         now_ts: float,
-        volatility: Decimal = Decimal("0")
+        volatility: Decimal = Decimal("0"),
+        peak_portfolio_value: Decimal = Decimal("0")
     ) -> Tuple[bool, str]:
         action = str(order.get("action", "")).strip().lower()
         size = self._safe_decimal(order.get("size", 0))
@@ -81,11 +124,23 @@ class RiskManager:
             return False, "confidence_open_too_low"
 
         if action in open_actions:
+            # Drawdown check
+            dd_ok, dd_reason = self.check_drawdown(portfolio_state, peak_portfolio_value)
+            if not dd_ok:
+                return False, dd_reason
+
             if portfolio_state.margin_usage > self.max_margin_usage:
                 return False, "margin_usage_too_high"
 
             if market_price <= 0 or size <= 0:
                 return False, "invalid_price_or_size"
+
+            # Position conflict detection: don't open opposite direction
+            current_side = portfolio_state.get_position_side(coin)
+            if action == TradingAction.BUY.value and current_side == PositionSide.SHORT:
+                return False, "conflict_buy_while_short"
+            if action == TradingAction.SELL.value and current_side == PositionSide.LONG:
+                return False, "conflict_sell_while_long"
 
             # Apply volatility adjustment to size
             adjusted_size = self._calculate_volatility_adjusted_size(size, volatility)
@@ -101,11 +156,22 @@ class RiskManager:
             if required_margin > max_margin_per_trade:
                 return False, "per_trade_margin_cap_exceeded"
 
+            # Per-asset concentration limit
+            new_notional = adjusted_size * market_price
+            existing_notional = Decimal("0")
+            if coin in portfolio_state.positions:
+                pos = portfolio_state.positions[coin]
+                existing_notional = abs(Decimal(str(pos.get("size", 0)))) * Decimal(str(pos.get("entry_price", 0)))
+            total_asset_exposure = existing_notional + new_notional
+            max_asset_exposure = portfolio_state.total_balance * self.max_single_asset_pct
+            if total_asset_exposure > max_asset_exposure:
+                return False, "single_asset_concentration_exceeded"
+
             last_ts = float(last_trade_timestamp_by_coin.get(coin, 0))
             if (now_ts - last_ts) < self.trade_cooldown_sec:
                 return False, "cooldown_active"
 
-            projected_daily = daily_notional_used + (adjusted_size * market_price)
+            projected_daily = daily_notional_used + new_notional
             if projected_daily > self.daily_notional_limit_usd:
                 return False, "daily_notional_cap_exceeded"
 
