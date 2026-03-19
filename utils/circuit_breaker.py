@@ -1,4 +1,3 @@
-HALF_OPEN transition based on recovery_timeout, so the breaker actually recovers instead of staying open forever.">
 import logging
 import time
 from enum import Enum
@@ -64,7 +63,6 @@ class CircuitBreaker:
             CircuitBreakerOpenError: If circuit is open and recovery timeout not elapsed
             Exception: Any exception from the wrapped function
         """
-        # Check if we should transition from OPEN to HALF_OPEN
         self._maybe_transition_to_half_open()
 
         if self.state == CircuitState.OPEN:
@@ -75,7 +73,6 @@ class CircuitBreaker:
 
         if self.state == CircuitState.HALF_OPEN:
             if self.half_open_calls >= self.half_open_max_calls:
-                # Too many half-open calls failed, go back to OPEN
                 self.state = CircuitState.OPEN
                 self.last_failure_time = time.time()
                 raise CircuitBreakerOpenError(
@@ -87,7 +84,7 @@ class CircuitBreaker:
             result = func(*args, **kwargs)
             self._on_success()
             return result
-        except self.expected_exception as e:
+        except self.expected_exception:
             self._on_failure()
             raise
 

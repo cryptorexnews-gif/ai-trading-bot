@@ -1,15 +1,15 @@
 import logging
 import time
 from decimal import Decimal
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Optional
 
 logger = logging.getLogger(__name__)
 
 
 class OrderVerifier:
     """
-    Verifica che ordini piazzati su Hyperliquid siano stati effettivamente riempiti.
-    Confronta stato posizione prima e dopo piazzamento ordine.
+    Verifies that orders placed on Hyperliquid were actually filled.
+    Compares position state before and after order placement.
     """
 
     def __init__(self, exchange_client, max_wait_sec: float = 10.0, check_interval: float = 2.0):
@@ -18,7 +18,7 @@ class OrderVerifier:
         self.check_interval = check_interval
 
     def _get_position_size(self, wallet: str, coin: str) -> Decimal:
-        """Ottieni dimensione posizione corrente per una coin."""
+        """Get current position size for a coin."""
         user_state = self.exchange_client.get_user_state(wallet)
         if not user_state:
             return Decimal("0")
@@ -30,7 +30,7 @@ class OrderVerifier:
         return Decimal("0")
 
     def snapshot_position(self, wallet: str, coin: str) -> Dict[str, Any]:
-        """Prendi snapshot di stato posizione corrente prima ordine."""
+        """Take snapshot of current position state before order."""
         size = self._get_position_size(wallet, coin)
         return {
             "coin": coin,
@@ -44,13 +44,13 @@ class OrderVerifier:
         coin: str,
         expected_side: str,
         expected_size: Decimal,
-        snapshot: Dict[str, Any<dyad-write path="order_verifier.py">
+        snapshot: Dict[str, Any],
         tolerance_pct: Decimal = Decimal("0.05")
     ) -> Dict[str, Any]:
         """
-        Verifica che un ordine sia stato riempito controllando cambiamento posizione.
+        Verify that an order was filled by checking position change.
 
-        Ritorna dict con:
+        Returns dict with:
           - verified: bool
           - fill_status: 'filled', 'partially_filled', 'not_filled', 'unknown'
           - actual_size_change: Decimal
@@ -59,25 +59,25 @@ class OrderVerifier:
         size_before = snapshot.get("size_before", Decimal("0"))
         start_time = time.time()
 
-        # Cambiamento dimensione attesa
+        # Expected size change
         if expected_side == "buy":
             expected_change = expected_size
         else:
             expected_change = -expected_size
 
-        # Poll per riempimento
+        # Poll for fill
         while (time.time() - start_time) < self.max_wait_sec:
             current_size = self._get_position_size(wallet, coin)
             actual_change = current_size - size_before
 
-            # Controlla se riempito completamente (entro tolleranza)
+            # Check if fully filled (within tolerance)
             if abs(actual_change) > 0:
                 fill_ratio = abs(actual_change) / abs(expected_change) if expected_change != 0 else Decimal("0")
 
                 if fill_ratio >= (Decimal("1") - tolerance_pct):
                     logger.info(
-                        f"Ordine verificato RIEMPITO per {coin}: "
-                        f"atteso={expected_change}, attuale={actual_change}, "
+                        f"Order verified FILLED for {coin}: "
+                        f"expected={expected_change}, actual={actual_change}, "
                         f"fill_ratio={float(fill_ratio)*100:.1f}%"
                     )
                     return {
@@ -90,8 +90,8 @@ class OrderVerifier:
                     }
                 elif fill_ratio >= Decimal("0.1"):
                     logger.warning(
-                        f"Ordine PARZIALMENTE RIEMPITO per {coin}: "
-                        f"atteso={expected_change}, attuale={actual_change}, "
+                        f"Order PARTIALLY FILLED for {coin}: "
+                        f"expected={expected_change}, actual={actual_change}, "
                         f"fill_ratio={float(fill_ratio)*100:.1f}%"
                     )
                     return {
@@ -105,14 +105,14 @@ class OrderVerifier:
 
             time.sleep(self.check_interval)
 
-        # Timeout — controlla un'ultima volta
+        # Timeout — check one last time
         final_size = self._get_position_size(wallet, coin)
         final_change = final_size - size_before
 
         if abs(final_change) > 0:
             fill_ratio = abs(final_change) / abs(expected_change) if expected_change != 0 else Decimal("0")
             status = "filled" if fill_ratio >= (Decimal("1") - tolerance_pct) else "partially_filled"
-            logger.info(f"Ordine {status} per {coin} (rilevato al timeout): fill_ratio={float(fill_ratio)*100:.1f}%")
+            logger.info(f"Order {status} for {coin} (detected at timeout): fill_ratio={float(fill_ratio)*100:.1f}%")
             return {
                 "verified": True,
                 "fill_status": status,
@@ -122,7 +122,7 @@ class OrderVerifier:
                 "wait_time": self.max_wait_sec
             }
 
-        logger.warning(f"Ordine NON RIEMPITO per {coin} dopo {self.max_wait_sec}s attesa")
+        logger.warning(f"Order NOT FILLED for {coin} after {self.max_wait_sec}s wait")
         return {
             "verified": False,
             "fill_status": "not_filled",

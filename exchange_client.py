@@ -1,4 +1,58 @@
-self.base_url = base_url
+import logging
+import time
+from decimal import Decimal
+from typing import Any, Dict, Optional, Tuple
+
+import msgpack
+import requests
+from Crypto.Hash import keccak
+from eth_account import Account
+from eth_account.messages import encode_typed_data
+
+from utils.circuit_breaker import CircuitBreakerOpenError, get_or_create_circuit_breaker
+from utils.decimals import to_decimal as utils_to_decimal
+
+logger = logging.getLogger(__name__)
+
+
+def _create_robust_session() -> requests.Session:
+    """Create a requests session with connection pooling and retry adapter."""
+    session = requests.Session()
+    session.headers.update({"Content-Type": "application/json"})
+    adapter = requests.adapters.HTTPAdapter(
+        pool_connections=10,
+        pool_maxsize=10,
+        max_retries=requests.adapters.Retry(
+            total=2,
+            backoff_factor=0.5,
+            status_forcelist=[502, 503, 504],
+            allowed_methods=["POST"],
+        ),
+    )
+    session.mount("https://", adapter)
+    session.mount("http://", adapter)
+    return session
+
+
+class HyperliquidExchangeClient:
+    """
+    Client for Hyperliquid exchange API.
+    Handles order signing (EIP-712), placement, leverage, and market data.
+    Supports both live and paper trading modes.
+    """
+
+    def __init__(
+        self,
+        base_url: str,
+        private_key: str,
+        enable_mainnet_trading: bool = False,
+        execution_mode: str = "paper",
+        meta_cache_ttl_sec: int = 120,
+        paper_slippage_bps: Decimal = Decimal("5"),
+        info_timeout: int = 15,
+        exchange_timeout: int = 30,
+    ):
+        self.base_url = base_url
         self.private_key = private_key
         self.enable_mainnet_trading = enable_mainnet_trading
         self.execution_mode = execution_mode
@@ -13,9 +67,8 @@ self.base_url = base_url
         self._meta_cache_at = 0.0
         self._mids_cache: Optional[Dict[str, str]] = None
         self._mids_cache_at = 0.0
-        self._mids_cache_ttl = 30  # 30 secondi per prezzi mid
+        self._mids_cache_ttl = 30
 
-        # Circuit breaker
         self._info_cb = get_or_create_circuit_breaker(
             "hyperliquid_info",
             failure_threshold=5,
@@ -28,7 +81,7 @@ self.base_url = base_url
         )
 
         logger.info(
-            f"Client exchange inizializzato: base_url={self.base_url}, "
+            f"Exchange client initialized: base_url={self.base_url}, "
             f"mode={self.execution_mode}, mainnet={self.enable_mainnet_trading}"
         )
 
@@ -36,7 +89,7 @@ self.base_url = base_url
         return utils_to_decimal(value, default)
 
     def _post_info(self, payload: Dict[str, Any], timeout: Optional[int] = None) -> Optional[Any]:
-        """POST a /info con circuit breaker e sessione robusta."""
+        """POST to /info with circuit breaker and robust session."""
         if timeout is None:
             timeout = self.info_timeout
 
@@ -49,7 +102,7 @@ self.base_url = base_url
             if response.status_code != 200:
                 logger.error(
                     f"/info type={payload.get('type', 'unknown')} "
-                    f"fallito status={response.status_code}"
+                    f"failed status={response.status_code}"
                 )
                 response.raise_for_status()
             return response.json()
@@ -57,20 +110,20 @@ self.base_url = base_url
         try:
             return self._info_cb.call(_do_post)
         except CircuitBreakerOpenError:
-            logger.error("Circuit breaker OPEN per endpoint /info")
+            logger.error("Circuit breaker OPEN for /info endpoint")
             return None
         except requests.exceptions.Timeout:
-            logger.error(f"/info timeout dopo {timeout}s per type={payload.get('type', 'unknown')}")
+            logger.error(f"/info timeout after {timeout}s for type={payload.get('type', 'unknown')}")
             return None
         except requests.exceptions.ConnectionError as e:
-            logger.error(f"/info errore connessione: {e}")
+            logger.error(f"/info connection error: {e}")
             return None
         except Exception as e:
-            logger.error(f"/info errore imprevisto: {type(e).__name__}: {str(e)}")
+            logger.error(f"/info unexpected error: {type(e).__name__}: {str(e)}")
             return None
 
     def _post_exchange(self, payload: Dict[str, Any], timeout: Optional[int] = None) -> Optional[Any]:
-        """POST a /exchange con circuit breaker e sessione robusta."""
+        """POST to /exchange with circuit breaker and robust session."""
         if timeout is None:
             timeout = self.exchange_timeout
 
@@ -82,23 +135,23 @@ self.base_url = base_url
                 timeout=timeout
             )
             if response.status_code != 200:
-                logger.error(f"/exchange fallito status={response.status_code}")
+                logger.error(f"/exchange failed status={response.status_code}")
                 response.raise_for_status()
             return response.json()
 
         try:
             return self._exchange_cb.call(_do_post)
         except CircuitBreakerOpenError:
-            logger.error("Circuit breaker OPEN per endpoint /exchange")
+            logger.error("Circuit breaker OPEN for /exchange endpoint")
             return None
         except requests.exceptions.Timeout:
-            logger.error(f"/exchange timeout dopo {timeout}s")
+            logger.error(f"/exchange timeout after {timeout}s")
             return None
         except requests.exceptions.ConnectionError as e:
-            logger.error(f"/exchange errore connessione: {e}")
+            logger.error(f"/exchange connection error: {e}")
             return None
         except Exception as e:
-            logger.error(f"/exchange errore imprevisto: {type(e).__name__}: {str(e)}")
+            logger.error(f"/exchange unexpected error: {type(e).__name__}: {str(e)}")
             return None
 
     def get_meta(self, force_refresh: bool = False) -> Optional[Dict[str, Any]]:
@@ -108,13 +161,13 @@ self.base_url = base_url
 
         meta = self._post_info({"type": "meta"})
         if meta is None:
-            return self._meta_cache  # Ritorna cache stale se disponibile
+            return self._meta_cache
         self._meta_cache = meta
         self._meta_cache_at = now
         return meta
 
     def get_all_mids(self, force_refresh: bool = False) -> Optional[Dict[str, str]]:
-        """Ottieni tutti i prezzi mid con caching."""
+        """Get all mid prices with caching."""
         now = time.time()
         if not force_refresh and self._mids_cache and (now - self._mids_cache_at) < self._mids_cache_ttl:
             return self._mids_cache
@@ -257,12 +310,12 @@ self.base_url = base_url
             leverage = max_leverage
 
         if self.execution_mode != "live" or not self.enable_mainnet_trading:
-            logger.info(f"PAPER leverage impostato {coin} -> {leverage}x")
+            logger.info(f"PAPER leverage set {coin} -> {leverage}x")
             return True
 
         asset_id = self.get_asset_id(coin)
         if asset_id is None:
-            logger.error(f"ID asset non trovato per {coin}")
+            logger.error(f"Asset ID not found for {coin}")
             return False
 
         action = {
@@ -284,10 +337,10 @@ self.base_url = base_url
         if result is None:
             return False
         if result.get("status") == "ok":
-            logger.info(f"LIVE leverage impostato {coin} -> {leverage}x")
+            logger.info(f"LIVE leverage set {coin} -> {leverage}x")
             return True
 
-        logger.error(f"Impostazione leverage fallita per {coin}: {result}")
+        logger.error(f"Set leverage failed for {coin}: {result}")
         return False
 
     def place_order(
@@ -299,9 +352,12 @@ self.base_url = base_url
     ) -> Dict[str, Any]:
         if self.execution_mode != "live" or not self.enable_mainnet_trading:
             slip = (self.paper_slippage_bps / Decimal("10000"))
-            fill_price = desired_price * (Decimal("1") + slip if side.lower() == "buy" else Decimal("1") - slip)
+            if side.lower() == "buy":
+                fill_price = desired_price * (Decimal("1") + slip)
+            else:
+                fill_price = desired_price * (Decimal("1") - slip)
             notional = abs(size * fill_price)
-            logger.info(f"PAPER ordine {coin} {side.upper()} size={size} fill={fill_price}")
+            logger.info(f"PAPER order {coin} {side.upper()} size={size} fill={fill_price}")
             return {
                 "success": True,
                 "mode": "paper",
@@ -311,7 +367,7 @@ self.base_url = base_url
 
         asset_id = self.get_asset_id(coin)
         if asset_id is None:
-            logger.error(f"ID asset non trovato per {coin}")
+            logger.error(f"Asset ID not found for {coin}")
             return {"success": False, "mode": "live", "reason": "asset_not_found", "notional": "0"}
 
         is_buy = side.lower() == "buy"
@@ -361,17 +417,17 @@ self.base_url = base_url
         if result is None:
             return {"success": False, "mode": "live", "reason": "http_error", "notional": "0"}
         if result.get("status") != "ok":
-            logger.error(f"Exchange ha rifiutato ordine per {coin}: {result}")
+            logger.error(f"Exchange rejected order for {coin}: {result}")
             return {"success": False, "mode": "live", "reason": "exchange_rejected", "notional": "0"}
 
         statuses = result.get("response", {}).get("data", {}).get("statuses", [])
         for status in statuses:
             if "error" in status:
-                logger.error(f"Stato ordine errore per {coin}: {status}")
+                logger.error(f"Order status error for {coin}: {status}")
                 return {"success": False, "mode": "live", "reason": "status_error", "notional": "0"}
 
         notional = abs(size * limit_price)
-        logger.info(f"LIVE ordine successo {coin} {side.upper()} size={size_str} limit={limit_price}")
+        logger.info(f"LIVE order success {coin} {side.upper()} size={size_str} limit={limit_price}")
         return {
             "success": True,
             "mode": "live",
