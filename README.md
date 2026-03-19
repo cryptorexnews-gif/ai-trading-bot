@@ -1,25 +1,28 @@
 # Hyperliquid Trading Bot
 
-An automated cryptocurrency trading bot for the Hyperliquid exchange, powered by AI (Claude via OpenRouter) for intelligent trading decisions. The bot analyzes real-time market data, manages risk, and executes trades with configurable parameters.
+An automated cryptocurrency trading bot for the Hyperliquid exchange, powered by **Claude Opus 4** via OpenRouter for intelligent trading decisions. All market data is sourced **exclusively from Hyperliquid API** — no external data providers.
 
 ## 🚀 Features
 
 ### ✅ Core Functionality
-- **AI-Powered Trading Decisions**: Uses Claude 3.5 Sonnet via OpenRouter for market analysis and trade recommendations
-- **Real-Time Market Data**: Fetches live data from Binance API for technical indicators (EMA, MACD, RSI, ATR)
-- **Risk Management**: Advanced risk controls including volatility-adjusted sizing, margin limits, and trade cooldowns
-- **Hyperliquid Integration**: Direct API integration with EIP-712 signing for secure order execution
-- **Portfolio Monitoring**: Real-time tracking of balances, positions, and PnL
-- **Paper Trading Mode**: Safe testing environment with simulated executions
+- **AI-Powered Trading**: Claude Opus 4 (`anthropic/claude-opus-4`) via OpenRouter analyzes market data and generates executable trading decisions
+- **Hyperliquid-Only Data**: All market data (candles, mid prices, funding rates, open interest) sourced directly from Hyperliquid API
+- **Technical Analysis**: EMA, MACD, RSI, ATR, Bollinger Bands calculated from Hyperliquid candle snapshots
+- **Risk Management**: Volatility-adjusted sizing, margin limits, trade cooldowns, and daily notional caps
+- **Secure Execution**: EIP-712 signed orders via `eth_account` for Hyperliquid mainnet
+- **Paper Trading Mode**: Safe testing with simulated executions and slippage
 - **Circuit Breakers**: Automatic failure handling for API endpoints
-- **Comprehensive Logging**: JSON-structured logs for monitoring and debugging
+- **Robust Connections**: HTTP session pooling, automatic retries, and configurable timeouts
+- **Structured Logging**: JSON-formatted logs for monitoring and debugging
 
 ### 📊 Supported Assets
-- **BTC**: Minimum 0.001 BTC (~$111)
-- **ETH**: Minimum 0.001 ETH (~$4)
-- **SOL**: Minimum 0.1 SOL (~$19)
-- **BNB**: Minimum 0.001 BNB (~$1)
-- **ADA**: Minimum 16.0 ADA (~$10.50)
+| Asset | Minimum Size | Approx. Value |
+|-------|-------------|---------------|
+| BTC   | 0.001       | ~$111         |
+| ETH   | 0.001       | ~$4           |
+| SOL   | 0.1         | ~$19          |
+| BNB   | 0.001       | ~$1           |
+| ADA   | 16.0        | ~$10.50       |
 
 ### 🛡️ Safety Features
 - **Fail-Safe Fallback**: Automatic hold/de-risk when AI is unavailable
@@ -27,13 +30,14 @@ An automated cryptocurrency trading bot for the Hyperliquid exchange, powered by
 - **Order Validation**: Pre-execution checks for price deviations and minimum sizes
 - **Circuit Breakers**: Prevents cascading failures from API outages
 - **Paper Mode**: Test strategies without real money
+- **Startup Connectivity Check**: Verifies Hyperliquid API before starting
 
 ## 📋 Requirements
 
 - Python 3.10+
 - Valid Hyperliquid wallet with private key
-- OpenRouter API key for Claude access
-- Internet connection for API calls
+- OpenRouter API key (for Claude Opus 4 access)
+- Internet connection
 
 ## 🛠️ Installation
 
@@ -65,157 +69,164 @@ An automated cryptocurrency trading bot for the Hyperliquid exchange, powered by
 ### Environment Variables (.env)
 
 ```bash
-# Required
+# === REQUIRED ===
 HYPERLIQUID_PRIVATE_KEY=your_private_key_here
 HYPERLIQUID_WALLET_ADDRESS=your_wallet_address_here
-DEEPSEEK_API_KEY=your_openrouter_api_key_here
+OPENROUTER_API_KEY=your_openrouter_api_key_here
 
-# Execution Mode
-EXECUTION_MODE=paper  # 'paper' for testing, 'live' for real trading
-ENABLE_MAINNET_TRADING=false  # Set to 'true' only for live trading
+# === Execution Mode ===
+EXECUTION_MODE=paper              # 'paper' or 'live'
+ENABLE_MAINNET_TRADING=false      # Set 'true' ONLY for live trading
 
-# AI Settings
-ALLOW_EXTERNAL_LLM=true  # Enable/disable AI trading decisions
-LLM_INCLUDE_PORTFOLIO_CONTEXT=true  # Include portfolio data in AI prompts
+# === AI / LLM Settings ===
+ALLOW_EXTERNAL_LLM=true
+LLM_INCLUDE_PORTFOLIO_CONTEXT=true
+LLM_MODEL=anthropic/claude-opus-4
+LLM_MAX_TOKENS=8192
+LLM_TEMPERATURE=0.2
 
-# Risk Management
-MAX_ORDER_MARGIN_PCT=0.1  # Max margin per trade (10%)
-HARD_MAX_LEVERAGE=10  # Maximum leverage allowed
-MIN_CONFIDENCE_OPEN=0.7  # Minimum confidence for opening positions
-MIN_CONFIDENCE_MANAGE=0.5  # Minimum confidence for managing positions
-MAX_MARGIN_USAGE=0.8  # Maximum total margin usage (80%)
-TRADE_COOLDOWN_SEC=300  # Minimum seconds between trades per coin
-DAILY_NOTIONAL_LIMIT_USD=1000  # Daily trading limit
+# === Risk Management ===
+MAX_ORDER_MARGIN_PCT=0.1          # Max 10% of balance per trade
+HARD_MAX_LEVERAGE=10              # Maximum leverage
+MIN_CONFIDENCE_OPEN=0.7           # Min confidence to open positions
+MIN_CONFIDENCE_MANAGE=0.5         # Min confidence to manage positions
+MAX_MARGIN_USAGE=0.8              # Max 80% total margin usage
+TRADE_COOLDOWN_SEC=300            # 5 min cooldown per coin
+DAILY_NOTIONAL_LIMIT_USD=1000     # Daily trading limit
 
-# Performance
-MAX_TRADES_PER_CYCLE=5  # Maximum trades per cycle
-MAX_CONSECUTIVE_FAILED_CYCLES=10  # Shutdown after this many failures
-META_CACHE_TTL_SEC=300  # Cache TTL for exchange metadata
-MAX_MARKET_DATA_AGE_SEC=300  # Maximum age for market data
-PAPER_SLIPPAGE_BPS=50  # Simulated slippage in paper mode
+# === Performance ===
+MAX_TRADES_PER_CYCLE=5
+MAX_CONSECUTIVE_FAILED_CYCLES=10
+META_CACHE_TTL_SEC=300
+MAX_MARKET_DATA_AGE_SEC=300
+PAPER_SLIPPAGE_BPS=50
+
+# === Hyperliquid API ===
+HYPERLIQUID_BASE_URL=https://api.hyperliquid.xyz
+HYPERLIQUID_INFO_TIMEOUT=15
+HYPERLIQUID_EXCHANGE_TIMEOUT=30
+
+# === Safety ===
+SAFE_FALLBACK_MODE=de_risk
+AUTO_CONFIRM_MINIMAL_ORDER=false
+
+# === Logging ===
+LOG_LEVEL=INFO
+LOG_FILE=logs/hyperliquid_bot.log
+LOG_JSON_FORMAT=true
 ```
 
-### Trading Pairs and Minimums
+### How to Get API Keys
 
-The bot trades the following pairs with these minimum sizes:
-- BTC: 0.001
-- ETH: 0.001  
-- SOL: 0.1
-- BNB: 0.001
-- ADA: 16.0
+1. **Hyperliquid Wallet**:
+   - Go to [hyperliquid.xyz](https://hyperliquid.xyz)
+   - Connect or create a wallet
+   - Export your private key (never share it!)
+
+2. **OpenRouter API Key**:
+   - Go to [openrouter.ai](https://openrouter.ai)
+   - Sign up and create an API key
+   - Add credits (~$0.01-0.05 per LLM call)
+   - The bot uses `anthropic/claude-opus-4` model
 
 ## 🚀 Usage
 
 ### Testing (Paper Mode)
 
-1. Set `EXECUTION_MODE=paper` in `.env`
-2. Run a single test cycle:
-   ```bash
-   python hyperliquid_bot_executable_orders.py --single-cycle
-   ```
+```bash
+# Single cycle test
+python hyperliquid_bot_executable_orders.py --single-cycle
 
-3. Monitor logs in `logs/hyperliquid_bot.log`
+# Continuous paper trading
+python hyperliquid_bot_executable_orders.py
+```
 
 ### Live Trading
 
-⚠️ **WARNING**: Live trading involves real money. Test thoroughly in paper mode first!
+⚠️ **WARNING**: Live trading involves real money. Test thoroughly first!
 
-1. Set `EXECUTION_MODE=live` and `ENABLE_MAINNET_TRADING=true` in `.env`
-2. Start the bot:
-   ```bash
-   python hyperliquid_bot_executable_orders.py
-   ```
+```bash
+# Set in .env:
+# EXECUTION_MODE=live
+# ENABLE_MAINNET_TRADING=true
+
+python hyperliquid_bot_executable_orders.py
+```
 
 ### Utility Scripts
 
-- **Check Positions**: `python check_current_positions.py`
-- **Close SOL Position**: `python close_sol_position.py`
-- **Test Minimal Order**: `python hyperliquid_minimal_order.py`
+```bash
+# Check positions and balances
+python check_current_positions.py
+
+# Test minimal order (with connectivity check)
+python hyperliquid_minimal_order.py
+```
+
+## 🔄 How It Works
+
+### Trading Cycle (every 60 seconds)
+
+1. **Connect**: Verify Hyperliquid API connectivity
+2. **Portfolio**: Fetch balances and positions from Hyperliquid
+3. **Market Data**: Get candle snapshots, mid prices, and funding rates from Hyperliquid
+4. **Technical Analysis**: Calculate EMA, MACD, RSI, ATR, Bollinger Bands from Hyperliquid candles
+5. **AI Decision**: Send all data to Claude Opus 4 for analysis
+6. **Risk Check**: Validate decision against risk parameters
+7. **Execute**: Place order on Hyperliquid (or simulate in paper mode)
+8. **Log**: Record results and update state
+
+### Data Flow
+
+```
+Hyperliquid API ──→ Candle Snapshots ──→ Technical Indicators ──┐
+                ──→ Mid Prices ─────────────────────────────────┤
+                ──→ Funding Rates ──────────────────────────────┤
+                ──→ Portfolio State ─────────────────────────────┤
+                                                                 ▼
+                                                    Claude Opus 4 (OpenRouter)
+                                                                 │
+                                                                 ▼
+                                                    Trading Decision (JSON)
+                                                                 │
+                                                                 ▼
+                                                    Risk Manager Validation
+                                                                 │
+                                                                 ▼
+                                                    Execution on Hyperliquid
+```
 
 ## 📊 Monitoring
 
 ### Logs
 - Main log: `logs/hyperliquid_bot.log` (JSON format)
-- State files: `state/bot_state.json`, `state/bot_metrics.json`
+- State: `state/bot_state.json`
+- Metrics: `state/bot_metrics.json`
 
 ### Key Metrics
 - Cycle duration and success rate
 - Trades executed vs. risk rejections
+- LLM call count and error rate
 - Portfolio value and margin usage
-- API error rates
-
-### Health Checks
-The bot includes circuit breakers for:
-- Hyperliquid `/info` endpoint
-- Hyperliquid `/exchange` endpoint
-- OpenRouter API
 
 ## 🔧 Troubleshooting
 
-### No Trades Executing
-
-1. **Check LLM Settings**:
-   - Verify `ALLOW_EXTERNAL_LLM=true`
-   - Ensure `DEEPSEEK_API_KEY` is valid
-   - Check OpenRouter API quota/limits
-
-2. **Review Confidence Thresholds**:
-   - `MIN_CONFIDENCE_OPEN` may be too high (default 0.7)
-   - `MIN_CONFIDENCE_MANAGE` for position management
-
-3. **Check Risk Rejections**:
-   - Review logs for risk rejection reasons
-   - Verify margin usage isn't exceeding `MAX_MARGIN_USAGE`
-   - Check trade cooldowns (`TRADE_COOLDOWN_SEC`)
-
-4. **Market Data Issues**:
-   - Ensure Binance API is reachable
-   - Check `MAX_MARKET_DATA_AGE_SEC` for stale data
-
-5. **Execution Mode**:
-   - Confirm `EXECUTION_MODE=paper` for testing
-   - For live: `EXECUTION_MODE=live` and `ENABLE_MAINNET_TRADING=true`
-
-### Common Issues
-
-- **"Circuit breaker OPEN"**: API endpoint is failing, check network and API status
-- **"Order price cannot be more than 95% away from reference price"**: Price validation failed, check reference price logic
-- **"User or API Wallet does not exist"**: Invalid wallet address or private key
-- **LLM API errors**: Check OpenRouter key and quota
-
-### Recovery Steps
-
-1. **Restart in Paper Mode**: Switch to paper trading to test
-2. **Check Balances**: Use `check_current_positions.py`
-3. **Manual Intervention**: Close positions with utility scripts if needed
-4. **Log Analysis**: Review JSON logs for detailed error information
+| Problem | Solution |
+|---------|----------|
+| No trades executing | Check `OPENROUTER_API_KEY`, lower `MIN_CONFIDENCE_OPEN` |
+| Circuit breaker OPEN | Check network, Hyperliquid API status |
+| LLM errors | Verify OpenRouter key and credits |
+| Order rejected | Check minimum sizes, price deviation limits |
+| Stale data | Check `META_CACHE_TTL_SEC`, `MAX_MARKET_DATA_AGE_SEC` |
 
 ## 🛡️ Security
 
-- **Private Keys**: Never commit `.env` file or expose private keys
-- **API Keys**: Rotate OpenRouter keys regularly
-- **Network**: Use HTTPS for all API calls
-- **Validation**: All orders validated before execution
-- **Fallback**: Safe fallback to hold when systems fail
-
-## 📈 Performance
-
-- **Cycle Time**: ~30-45 seconds per trading cycle
-- **API Calls**: Optimized with caching and circuit breakers
-- **Memory**: Lightweight, no heavy ML libraries
-- **Precision**: Decimal arithmetic for all financial calculations
-
-## 🤝 Contributing
-
-1. Fork the repository
-2. Create a feature branch
-3. Test changes in paper mode
-4. Submit a pull request
-
-## 📄 License
-
-This project is for educational and personal use. Trading cryptocurrencies involves significant risk. Use at your own discretion.
+- Private keys stored only in `.env` (never committed)
+- HTTPS for all API calls
+- EIP-712 cryptographic signing for orders
+- Circuit breakers prevent cascading failures
+- Safe fallback to hold when systems fail
 
 ## ⚠️ Disclaimer
 
-This software is provided as-is without warranty. Cryptocurrency trading is highly risky and can result in total loss of funds. Always test strategies thoroughly and never risk more than you can afford to lose. The authors are not responsible for any financial losses incurred through use of this software.
+This software is provided as-is without warranty. Cryptocurrency trading is highly risky and can result in total loss of funds. Always test thoroughly in paper mode and never risk more than you can afford to lose.

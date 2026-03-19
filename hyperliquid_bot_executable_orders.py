@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
 Hyperliquid Trading Bot - Executable Orders Version
-Main bot script with LLM-powered trading decisions.
+Main bot script with Claude Opus 4 powered trading decisions.
+All market data sourced exclusively from Hyperliquid API.
 """
 
 import logging
@@ -13,7 +14,6 @@ from typing import Any, Dict, List, Optional
 
 from dotenv import load_dotenv
 
-# Local imports
 from exchange_client import HyperliquidExchangeClient
 from execution_engine import ExecutionEngine
 from llm_engine import LLMEngine
@@ -35,7 +35,17 @@ ALLOW_EXTERNAL_LLM = os.getenv("ALLOW_EXTERNAL_LLM", "true").lower() == "true"
 LLM_INCLUDE_PORTFOLIO_CONTEXT = os.getenv("LLM_INCLUDE_PORTFOLIO_CONTEXT", "true").lower() == "true"
 HYPERLIQUID_PRIVATE_KEY = os.getenv("HYPERLIQUID_PRIVATE_KEY")
 HYPERLIQUID_WALLET_ADDRESS = os.getenv("HYPERLIQUID_WALLET_ADDRESS")
-DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")  # For LLM if needed
+HYPERLIQUID_BASE_URL = os.getenv("HYPERLIQUID_BASE_URL", "https://api.hyperliquid.xyz")
+HYPERLIQUID_INFO_TIMEOUT = int(os.getenv("HYPERLIQUID_INFO_TIMEOUT", "15"))
+HYPERLIQUID_EXCHANGE_TIMEOUT = int(os.getenv("HYPERLIQUID_EXCHANGE_TIMEOUT", "30"))
+
+# LLM Configuration
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
+LLM_MODEL = os.getenv("LLM_MODEL", "anthropic/claude-opus-4")
+LLM_MAX_TOKENS = int(os.getenv("LLM_MAX_TOKENS", "8192"))
+LLM_TEMPERATURE = float(os.getenv("LLM_TEMPERATURE", "0.2"))
+
+# Risk Management
 MAX_ORDER_MARGIN_PCT = Decimal(os.getenv("MAX_ORDER_MARGIN_PCT", "0.1"))
 HARD_MAX_LEVERAGE = Decimal(os.getenv("HARD_MAX_LEVERAGE", "10"))
 MIN_CONFIDENCE_OPEN = Decimal(os.getenv("MIN_CONFIDENCE_OPEN", "0.7"))
@@ -48,6 +58,11 @@ MAX_CONSECUTIVE_FAILED_CYCLES = int(os.getenv("MAX_CONSECUTIVE_FAILED_CYCLES", "
 META_CACHE_TTL_SEC = int(os.getenv("META_CACHE_TTL_SEC", "300"))
 MAX_MARKET_DATA_AGE_SEC = int(os.getenv("MAX_MARKET_DATA_AGE_SEC", "300"))
 PAPER_SLIPPAGE_BPS = Decimal(os.getenv("PAPER_SLIPPAGE_BPS", "50"))
+
+# Logging
+LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
+LOG_FILE = os.getenv("LOG_FILE", "logs/hyperliquid_bot.log")
+LOG_JSON_FORMAT = os.getenv("LOG_JSON_FORMAT", "true").lower() == "true"
 
 # Trading pairs
 TRADING_PAIRS = ["BTC", "ETH", "SOL", "BNB", "ADA"]
@@ -63,13 +78,13 @@ MIN_SIZE_BY_COIN = {
 
 
 class HyperliquidBot:
-    """Main trading bot class."""
+    """Main trading bot class using Claude Opus 4 and Hyperliquid-only data."""
 
     def __init__(self):
-        self._validate_config()
         self._setup_logging()
+        self._validate_config()
         self._init_components()
-        self._mask_wallet = lambda addr: f"{addr[:6]}...{addr[-4:]}" if addr else "unknown"
+        self._mask_wallet = lambda addr: f"{addr[:6]}...{addr[-4:]}" if addr and len(addr) >= 10 else "unknown"
 
     def _validate_config(self):
         """Validate configuration at startup."""
@@ -96,21 +111,40 @@ class HyperliquidBot:
 
     def _setup_logging(self):
         """Setup logging configuration."""
-        log_file = "logs/hyperliquid_bot.log"
-        os.makedirs(os.path.dirname(log_file), exist_ok=True)
-        setup_logging(log_level="INFO", json_format=True, log_file=log_file, console_output=True)
+        os.makedirs(os.path.dirname(LOG_FILE), exist_ok=True)
+        setup_logging(
+            log_level=LOG_LEVEL,
+            json_format=LOG_JSON_FORMAT,
+            log_file=LOG_FILE,
+            console_output=True
+        )
 
     def _init_components(self):
         """Initialize bot components."""
         self.exchange_client = HyperliquidExchangeClient(
-            base_url="https://api.hyperliquid.xyz",
+            base_url=HYPERLIQUID_BASE_URL,
             private_key=HYPERLIQUID_PRIVATE_KEY,
             enable_mainnet_trading=ENABLE_MAINNET_TRADING,
             execution_mode=EXECUTION_MODE,
             meta_cache_ttl_sec=META_CACHE_TTL_SEC,
-            paper_slippage_bps=PAPER_SLIPPAGE_BPS
+            paper_slippage_bps=PAPER_SLIPPAGE_BPS,
+            info_timeout=HYPERLIQUID_INFO_TIMEOUT,
+            exchange_timeout=HYPERLIQUID_EXCHANGE_TIMEOUT
         )
-        self.llm_engine = LLMEngine(api_key=DEEPSEEK_API_KEY) if ALLOW_EXTERNAL_LLM else None
+
+        if ALLOW_EXTERNAL_LLM and OPENROUTER_API_KEY:
+            self.llm_engine = LLMEngine(
+                api_key=OPENROUTER_API_KEY,
+                base_url="https://openrouter.ai/api/v1",
+                model=LLM_MODEL,
+                max_tokens=LLM_MAX_TOKENS,
+                temperature=LLM_TEMPERATURE
+            )
+            logging.info(f"LLM Engine initialized with model: {LLM_MODEL}")
+        else:
+            self.llm_engine = None
+            logging.warning("LLM Engine disabled: ALLOW_EXTERNAL_LLM=false or OPENROUTER_API_KEY missing")
+
         self.risk_manager = RiskManager(
             min_size_by_coin=MIN_SIZE_BY_COIN,
             hard_max_leverage=HARD_MAX_LEVERAGE,
@@ -127,9 +161,10 @@ class HyperliquidBot:
         self.wallet_address = HYPERLIQUID_WALLET_ADDRESS
 
     def _get_portfolio_state(self) -> PortfolioState:
-        """Fetch current portfolio state."""
+        """Fetch current portfolio state from Hyperliquid."""
         user_state = self.exchange_client.get_user_state(self.wallet_address)
         if not user_state:
+            logging.warning("Could not fetch user state from Hyperliquid")
             return PortfolioState(Decimal("0"), Decimal("0"), Decimal("0"), {})
 
         margin_summary = user_state.get("marginSummary", {})
@@ -142,23 +177,30 @@ class HyperliquidBot:
         for pos in user_state.get("assetPositions", []):
             pos_data = pos.get("position", {})
             coin = pos_data.get("coin", "")
-            if coin:
+            size = Decimal(str(pos_data.get("szi", 0)))
+            if coin and size != 0:
                 positions[coin] = {
-                    "size": Decimal(str(pos_data.get("szi", 0))),
+                    "size": size,
                     "entry_price": Decimal(str(pos_data.get("entryPx", 0))),
-                    "unrealized_pnl": Decimal(str(pos_data.get("unrealizedPnl", 0)))
+                    "unrealized_pnl": Decimal(str(pos_data.get("unrealizedPnl", 0))),
+                    "margin_used": Decimal(str(pos_data.get("marginUsed", 0)))
                 }
+
+        self.metrics.set_gauge("current_balance", total_balance)
+        self.metrics.set_gauge("available_balance", available_balance)
+        self.metrics.set_gauge("margin_usage", margin_usage)
+        self.metrics.set_gauge("open_positions_count", len(positions))
 
         return PortfolioState(total_balance, available_balance, margin_usage, positions)
 
     def _get_market_data(self, coin: str) -> Optional[MarketData]:
-        """Fetch market data for a coin."""
+        """Fetch market data for a coin exclusively from Hyperliquid."""
         tech_data = technical_fetcher.get_technical_indicators(coin)
         if not tech_data:
+            logging.warning(f"No technical data available for {coin}")
             return None
 
-        oi_funding = technical_fetcher.get_open_interest_and_funding(coin)
-        funding_rate = Decimal(oi_funding.get("funding_rate", "0.01").rstrip("%")) / 100
+        funding_rate = tech_data.get("funding_rate", Decimal("0"))
 
         return MarketData(
             coin=coin,
@@ -171,9 +213,13 @@ class HyperliquidBot:
 
     def _get_fallback_decision(self) -> Dict[str, Any]:
         """Fallback decision when LLM is disabled or fails."""
-        if SAFE_FALLBACK_MODE == "de_risk":
-            return {"action": "hold", "size": Decimal("0"), "leverage": 1, "confidence": Decimal("0.5"), "reasoning": "Fallback: hold for safety"}
-        return {"action": "hold", "size": Decimal("0"), "leverage": 1, "confidence": Decimal("0.5"), "reasoning": "Fallback: hold"}
+        return {
+            "action": "hold",
+            "size": Decimal("0"),
+            "leverage": 1,
+            "confidence": Decimal("0.5"),
+            "reasoning": f"Fallback: {SAFE_FALLBACK_MODE} mode - holding for safety"
+        }
 
     def _run_trading_cycle(self) -> bool:
         """Run a single trading cycle."""
@@ -181,32 +227,79 @@ class HyperliquidBot:
         success = True
 
         try:
+            logging.info("=" * 60)
+            logging.info("Starting new trading cycle")
+
+            # Fetch portfolio state from Hyperliquid
             portfolio_state = self._get_portfolio_state()
+            logging.info(
+                f"Portfolio: balance=${portfolio_state.total_balance}, "
+                f"available=${portfolio_state.available_balance}, "
+                f"margin_usage={float(portfolio_state.margin_usage) * 100:.1f}%, "
+                f"positions={len(portfolio_state.positions)}"
+            )
+
             state = self.state_store.load_state()
-            metrics = self.state_store.load_metrics()
+            daily_notional_used = Decimal(str(state.get("daily_notional_total", "0")))
+
+            # Get all mid prices from Hyperliquid for market overview
+            all_mids = technical_fetcher.get_all_mids()
 
             trades_executed = 0
-            daily_notional_used = Decimal(str(state.get("daily_notional_total", "0")))
 
             for coin in TRADING_PAIRS:
                 if trades_executed >= MAX_TRADES_PER_CYCLE:
+                    logging.info(f"Max trades per cycle ({MAX_TRADES_PER_CYCLE}) reached")
                     break
 
+                logging.info(f"--- Analyzing {coin} ---")
+
+                # Get market data from Hyperliquid
                 market_data = self._get_market_data(coin)
                 if not market_data:
+                    logging.warning(f"Skipping {coin}: no market data")
                     continue
 
-                # Get decision from LLM or fallback
+                logging.info(
+                    f"{coin}: price=${market_data.last_price}, "
+                    f"24h_change={float(market_data.change_24h) * 100:.2f}%, "
+                    f"funding={float(market_data.funding_rate):.6f}%"
+                )
+
+                # Get technical indicators from Hyperliquid candles
+                tech_data = technical_fetcher.get_technical_indicators(coin)
+
+                # Get funding data from Hyperliquid
+                funding_data = technical_fetcher.get_funding_for_coin(coin)
+
+                # Get decision from Claude Opus 4 or fallback
                 if self.llm_engine:
-                    decision = self.llm_engine.get_trading_decision(market_data, portfolio_state)
+                    self.metrics.increment("llm_calls_total")
+                    decision = self.llm_engine.get_trading_decision(
+                        market_data=market_data,
+                        portfolio_state=portfolio_state,
+                        technical_data=tech_data,
+                        all_mids=all_mids,
+                        funding_data=funding_data
+                    )
+                    if not decision:
+                        self.metrics.increment("llm_errors_total")
+                        decision = self._get_fallback_decision()
+                        logging.warning(f"LLM failed for {coin}, using fallback")
                 else:
                     decision = self._get_fallback_decision()
 
-                if not decision:
-                    decision = self._get_fallback_decision()
+                logging.info(
+                    f"{coin} decision: action={decision['action']}, "
+                    f"size={decision['size']}, leverage={decision['leverage']}, "
+                    f"confidence={decision['confidence']}"
+                )
 
                 # Risk check
-                volatility = Decimal("0.05")  # Placeholder; could calculate from ATR
+                volatility = Decimal("0")
+                if tech_data and tech_data.get("intraday_atr", Decimal("0")) > 0 and market_data.last_price > 0:
+                    volatility = tech_data["intraday_atr"] / market_data.last_price
+
                 risk_ok, risk_reason = self.risk_manager.check_order(
                     coin, decision, market_data.last_price, portfolio_state,
                     state.get("last_trade_timestamp_by_coin", {}),
@@ -214,30 +307,48 @@ class HyperliquidBot:
                 )
 
                 if not risk_ok:
+                    logging.info(f"{coin} risk rejected: {risk_reason}")
                     self.metrics.increment("risk_rejections_total")
                     continue
 
                 # Execute
-                result = self.execution_engine.execute(coin, decision, market_data, portfolio_state.positions)
+                result = self.execution_engine.execute(
+                    coin, decision, market_data, portfolio_state.positions
+                )
+
                 if result["success"]:
-                    trades_executed += 1
-                    daily_notional_used += Decimal(str(result["notional"]))
-                    state["last_trade_timestamp_by_coin"][coin] = time.time()
-                    self.metrics.increment("trades_executed_total")
+                    notional = Decimal(str(result["notional"]))
+                    if notional > 0:
+                        trades_executed += 1
+                        daily_notional_used += notional
+                        state.setdefault("last_trade_timestamp_by_coin", {})[coin] = time.time()
+                        self.metrics.increment("trades_executed_total")
+                        logging.info(
+                            f"{coin} executed: reason={result['reason']}, notional=${notional}"
+                        )
+                    else:
+                        self.metrics.increment("holds_total")
+                        logging.info(f"{coin}: hold (no trade)")
                 else:
                     self.metrics.increment("execution_failures_total")
+                    logging.warning(f"{coin} execution failed: {result.get('reason', 'unknown')}")
 
             # Update state
             state["daily_notional_total"] = str(daily_notional_used)
             self.state_store.save_state(state)
-            self.state_store.save_metrics(metrics)
 
             cycle_duration = time.time() - cycle_start
             self.metrics.record_histogram("cycle_duration_seconds", cycle_duration)
             self.metrics.increment("cycles_total")
 
+            logging.info(
+                f"Cycle complete: {trades_executed} trades, "
+                f"duration={cycle_duration:.1f}s, "
+                f"daily_notional=${daily_notional_used}"
+            )
+
         except Exception as e:
-            logging.error(f"Cycle failed: {e}")
+            logging.error(f"Cycle failed with exception: {type(e).__name__}: {e}")
             success = False
             self.metrics.increment("cycles_failed")
 
@@ -245,11 +356,28 @@ class HyperliquidBot:
 
     def run(self, single_cycle: bool = False):
         """Main run loop."""
-        logging.info(f"Bot initialized for wallet {self._mask_wallet(self.wallet_address)}")
+        logging.info("=" * 60)
+        logging.info("HYPERLIQUID TRADING BOT STARTING")
+        logging.info("=" * 60)
+        logging.info(f"Wallet: {self._mask_wallet(self.wallet_address)}")
         logging.info(f"Execution mode: {EXECUTION_MODE}")
+        logging.info(f"Mainnet trading: {ENABLE_MAINNET_TRADING}")
+        logging.info(f"LLM model: {LLM_MODEL}")
+        logging.info(f"LLM enabled: {self.llm_engine is not None}")
         logging.info(f"Trading pairs: {TRADING_PAIRS}")
         logging.info(f"Fallback mode: {SAFE_FALLBACK_MODE}")
-        logging.info(f"LLM enabled: {ALLOW_EXTERNAL_LLM}")
+        logging.info(f"Data source: Hyperliquid API only")
+        logging.info("=" * 60)
+
+        # Verify Hyperliquid connectivity at startup
+        meta = self.exchange_client.get_meta(force_refresh=True)
+        if meta:
+            logging.info(f"Hyperliquid connected: {len(meta.get('universe', []))} assets available")
+        else:
+            logging.error("FAILED to connect to Hyperliquid API at startup!")
+            if not single_cycle:
+                logging.error("Aborting: cannot start without Hyperliquid connectivity")
+                return
 
         consecutive_failures = 0
 
@@ -258,20 +386,25 @@ class HyperliquidBot:
                 consecutive_failures = 0
             else:
                 consecutive_failures += 1
+                logging.warning(
+                    f"Consecutive failures: {consecutive_failures}/{MAX_CONSECUTIVE_FAILED_CYCLES}"
+                )
                 if consecutive_failures >= MAX_CONSECUTIVE_FAILED_CYCLES:
                     logging.error("Too many consecutive failures, shutting down")
                     break
 
             if single_cycle:
+                logging.info("Single cycle mode: exiting")
                 break
 
-            time.sleep(60)  # Wait 1 minute between cycles
+            logging.info("Waiting 60 seconds before next cycle...")
+            time.sleep(60)
 
 
 def main():
     """Entry point."""
     import argparse
-    parser = argparse.ArgumentParser(description="Hyperliquid Trading Bot")
+    parser = argparse.ArgumentParser(description="Hyperliquid Trading Bot - Claude Opus 4")
     parser.add_argument("--single-cycle", action="store_true", help="Run single cycle and exit")
     args = parser.parse_args()
 

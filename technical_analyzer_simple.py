@@ -1,49 +1,162 @@
 import logging
-import random
+import time
 from decimal import Decimal
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import requests
 
 logger = logging.getLogger(__name__)
 
+HYPERLIQUID_BASE_URL = "https://api.hyperliquid.xyz"
 
-class SimpleTechnicalFetcher:
+
+class HyperliquidDataFetcher:
     """
-    Obtiene datos de mercado reales y calcula indicadores técnicos sin pandas.
-    Usa Decimal para precisión financiera.
+    Fetches ALL market data exclusively from Hyperliquid API.
+    No external data sources (Binance, etc.) are used.
+    Uses Decimal for all financial calculations.
     """
 
-    def __init__(self):
-        self.base_url = "https://api.binance.com/api/v3"
+    def __init__(self, base_url: str = HYPERLIQUID_BASE_URL):
+        self.base_url = base_url
+        self.session = requests.Session()
+        self.session.headers.update({"Content-Type": "application/json"})
 
-    def _d(self, value: str) -> Decimal:
+    def _d(self, value: Any) -> Decimal:
+        """Convert any value to Decimal safely."""
+        if value is None:
+            return Decimal("0")
         return Decimal(str(value))
 
-    def get_historical_klines(self, symbol: str, interval: str = "3m", limit: int = 100) -> Optional[List[Dict]]:
-        url = f"{self.base_url}/klines"
-        params = {"symbol": symbol, "interval": interval, "limit": limit}
-
-        response = requests.get(url, params=params, timeout=10)
-        if response.status_code != 200:
-            logger.error(f"Error fetching historical data for {symbol}: status={response.status_code}")
+    def _post_info(self, payload: Dict[str, Any], timeout: int = 15) -> Optional[Any]:
+        """POST to Hyperliquid /info endpoint with error handling."""
+        try:
+            response = self.session.post(
+                f"{self.base_url}/info",
+                json=payload,
+                timeout=timeout
+            )
+            if response.status_code != 200:
+                logger.error(f"Hyperliquid /info error: status={response.status_code}, type={payload.get('type', 'unknown')}")
+                return None
+            return response.json()
+        except requests.exceptions.Timeout:
+            logger.error(f"Hyperliquid /info timeout for type={payload.get('type', 'unknown')}")
+            return None
+        except requests.exceptions.ConnectionError as e:
+            logger.error(f"Hyperliquid /info connection error: {e}")
+            return None
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Hyperliquid /info request error: {e}")
             return None
 
-        data = response.json()
-        processed_data: List[Dict] = []
-        for candle in data:
-            processed_data.append({
-                "open_time": candle[0],
-                "open": self._d(candle[1]),
-                "high": self._d(candle[2]),
-                "low": self._d(candle[3]),
-                "close": self._d(candle[4]),
-                "volume": self._d(candle[5]),
-                "close_time": candle[6]
+    def get_all_mids(self) -> Optional[Dict[str, str]]:
+        """Get all mid prices from Hyperliquid."""
+        return self._post_info({"type": "allMids"})
+
+    def get_meta(self) -> Optional[Dict[str, Any]]:
+        """Get exchange metadata (universe, asset info)."""
+        return self._post_info({"type": "meta"})
+
+    def get_funding_rates(self) -> Optional[List[Dict[str, Any]]]:
+        """Get current funding rates for all assets."""
+        meta = self.get_meta()
+        if not meta:
+            return None
+
+        mids = self.get_all_mids()
+        if not mids:
+            return None
+
+        # Hyperliquid provides funding info in meta
+        universe = meta.get("universe", [])
+        funding_data = []
+        for asset in universe:
+            coin = asset.get("name", "")
+            funding_data.append({
+                "coin": coin,
+                "funding_rate": asset.get("funding", "0"),
+                "open_interest": asset.get("openInterest", "0"),
+                "max_leverage": asset.get("maxLeverage", 10),
+                "mid_price": mids.get(coin, "0")
             })
-        return processed_data
+        return funding_data
+
+    def get_funding_for_coin(self, coin: str) -> Dict[str, Any]:
+        """Get funding data for a specific coin from Hyperliquid."""
+        meta = self.get_meta()
+        if not meta:
+            return {"funding_rate": "0", "open_interest": "0", "premium": "0"}
+
+        for asset in meta.get("universe", []):
+            if asset.get("name") == coin:
+                return {
+                    "funding_rate": str(asset.get("funding", "0")),
+                    "open_interest": str(asset.get("openInterest", "0")),
+                    "premium": str(asset.get("premium", "0")),
+                    "max_leverage": int(asset.get("maxLeverage", 10))
+                }
+
+        return {"funding_rate": "0", "open_interest": "0", "premium": "0"}
+
+    def get_candle_snapshot(
+        self,
+        coin: str,
+        interval: str = "5m",
+        limit: int = 100
+    ) -> Optional[List[Dict[str, Any]]]:
+        """
+        Get candle (OHLCV) data from Hyperliquid.
+        interval: '1m', '5m', '15m', '1h', '4h', '1d'
+        """
+        now_ms = int(time.time() * 1000)
+
+        interval_ms_map = {
+            "1m": 60_000,
+            "3m": 180_000,
+            "5m": 300_000,
+            "15m": 900_000,
+            "1h": 3_600_000,
+            "4h": 14_400_000,
+            "1d": 86_400_000
+        }
+
+        interval_ms = interval_ms_map.get(interval, 300_000)
+        start_ms = now_ms - (interval_ms * limit)
+
+        payload = {
+            "type": "candleSnapshot",
+            "req": {
+                "coin": coin,
+                "interval": interval,
+                "startTime": start_ms,
+                "endTime": now_ms
+            }
+        }
+
+        data = self._post_info(payload, timeout=15)
+        if data is None:
+            return None
+
+        if not isinstance(data, list):
+            logger.error(f"Unexpected candle data format for {coin}: {type(data)}")
+            return None
+
+        candles = []
+        for candle in data:
+            candles.append({
+                "open_time": candle.get("t", 0),
+                "open": self._d(candle.get("o", "0")),
+                "high": self._d(candle.get("h", "0")),
+                "low": self._d(candle.get("l", "0")),
+                "close": self._d(candle.get("c", "0")),
+                "volume": self._d(candle.get("v", "0")),
+            })
+
+        return candles
 
     def calculate_ema(self, prices: List[Decimal], period: int) -> List[Decimal]:
+        """Calculate Exponential Moving Average."""
         if len(prices) < period:
             return [Decimal("0")] * len(prices)
 
@@ -66,6 +179,7 @@ class SimpleTechnicalFetcher:
         slow: int = 26,
         signal: int = 9
     ) -> Tuple[List[Decimal], List[Decimal], List[Decimal]]:
+        """Calculate MACD, Signal, and Histogram."""
         ema_fast = self.calculate_ema(prices, fast)
         ema_slow = self.calculate_ema(prices, slow)
         macd_line = [f - s for f, s in zip(ema_fast, ema_slow)]
@@ -74,6 +188,7 @@ class SimpleTechnicalFetcher:
         return macd_line, signal_line, histogram
 
     def calculate_rsi(self, prices: List[Decimal], period: int = 14) -> List[Decimal]:
+        """Calculate Relative Strength Index."""
         if len(prices) <= period:
             return [Decimal("50")] * len(prices)
 
@@ -103,30 +218,15 @@ class SimpleTechnicalFetcher:
 
         return rsi_values
 
-    def get_ticker_24h(self, symbol: str) -> Optional[Dict]:
-        url = f"{self.base_url}/ticker/24hr"
-        params = {"symbol": symbol}
-
-        response = requests.get(url, params=params, timeout=10)
-        if response.status_code != 200:
-            logger.error(f"Error fetching 24h ticker for {symbol}: status={response.status_code}")
-            return None
-
-        data = response.json()
-        return {
-            "price_change_percent": self._d(data.get("priceChangePercent", "0")),
-            "volume": self._d(data.get("volume", "0")),
-            "quote_volume": self._d(data.get("quoteVolume", "0"))
-        }
-
-    def _simple_atr(
+    def _calculate_atr(
         self,
         highs: List[Decimal],
         lows: List[Decimal],
         closes: List[Decimal],
         period: int
     ) -> List[Decimal]:
-        if len(highs) < period:
+        """Calculate Average True Range."""
+        if len(highs) < period + 1:
             return [Decimal("0")] * len(highs)
 
         tr_values: List[Decimal] = []
@@ -136,113 +236,167 @@ class SimpleTechnicalFetcher:
             tr3 = abs(lows[i] - closes[i - 1])
             tr_values.append(max(tr1, tr2, tr3))
 
-        atr_values = [Decimal("0")] * period
+        atr_values = [Decimal("0")] * min(period, len(tr_values))
         for i in range(period, len(tr_values)):
             atr = sum(tr_values[i - period:i]) / Decimal(str(period))
             atr_values.append(atr)
         return atr_values
 
-    def get_technical_indicators(self, coin: str) -> Optional[Dict]:
-        symbol_map = {
-            "BTC": "BTCUSDT",
-            "ETH": "ETHUSDT",
-            "SOL": "SOLUSDT",
-            "BNB": "BNBUSDT",
-            "DOGE": "DOGEUSDT",
-            "XRP": "XRPUSDT",
-            "ADA": "ADAUSDT"
-        }
+    def _calculate_bollinger_bands(
+        self,
+        prices: List[Decimal],
+        period: int = 20,
+        std_dev_mult: Decimal = Decimal("2")
+    ) -> Dict[str, List[Decimal]]:
+        """Calculate Bollinger Bands."""
+        if len(prices) < period:
+            empty = [Decimal("0")] * len(prices)
+            return {"upper": empty, "middle": empty, "lower": empty}
 
-        binance_symbol = symbol_map.get(coin)
-        if not binance_symbol:
-            logger.error(f"No symbol mapping for {coin}")
+        upper = []
+        middle = []
+        lower = []
+
+        for i in range(len(prices)):
+            if i < period - 1:
+                upper.append(Decimal("0"))
+                middle.append(Decimal("0"))
+                lower.append(Decimal("0"))
+                continue
+
+            window = prices[i - period + 1:i + 1]
+            sma = sum(window) / Decimal(str(period))
+            variance = sum((p - sma) ** 2 for p in window) / Decimal(str(period))
+            # Approximate sqrt using Newton's method
+            std_dev = self._decimal_sqrt(variance)
+
+            middle.append(sma)
+            upper.append(sma + (std_dev_mult * std_dev))
+            lower.append(sma - (std_dev_mult * std_dev))
+
+        return {"upper": upper, "middle": middle, "lower": lower}
+
+    def _decimal_sqrt(self, value: Decimal) -> Decimal:
+        """Calculate square root of a Decimal using Newton's method."""
+        if value <= 0:
+            return Decimal("0")
+        x = value
+        for _ in range(50):
+            x = (x + value / x) / Decimal("2")
+        return x
+
+    def get_technical_indicators(self, coin: str) -> Optional[Dict[str, Any]]:
+        """
+        Get comprehensive technical indicators for a coin.
+        ALL data sourced from Hyperliquid candle snapshots.
+        """
+        # Fetch intraday candles (5m)
+        intraday_candles = self.get_candle_snapshot(coin, "5m", 100)
+        if not intraday_candles or len(intraday_candles) < 10:
+            logger.warning(f"Insufficient intraday candle data for {coin}: got {len(intraday_candles) if intraday_candles else 0}")
             return None
 
-        ticker_data = self.get_ticker_24h(binance_symbol)
-        intraday_data = self.get_historical_klines(binance_symbol, "3m", 50)
-        daily_data = self.get_historical_klines(binance_symbol, "4h", 50)
-
-        if intraday_data is None or daily_data is None:
+        # Fetch longer-term candles (4h)
+        daily_candles = self.get_candle_snapshot(coin, "4h", 50)
+        if not daily_candles or len(daily_candles) < 5:
+            logger.warning(f"Insufficient 4h candle data for {coin}: got {len(daily_candles) if daily_candles else 0}")
             return None
 
-        intraday_closes = [candle["close"] for candle in intraday_data]
-        intraday_highs = [candle["high"] for candle in intraday_data]
-        intraday_lows = [candle["low"] for candle in intraday_data]
-        intraday_volumes = [candle["volume"] for candle in intraday_data]
+        # Extract price series
+        intraday_closes = [c["close"] for c in intraday_candles]
+        intraday_highs = [c["high"] for c in intraday_candles]
+        intraday_lows = [c["low"] for c in intraday_candles]
+        intraday_volumes = [c["volume"] for c in intraday_candles]
 
-        daily_closes = [candle["close"] for candle in daily_data]
-        daily_highs = [candle["high"] for candle in daily_data]
-        daily_lows = [candle["low"] for candle in daily_data]
+        daily_closes = [c["close"] for c in daily_candles]
+        daily_highs = [c["high"] for c in daily_candles]
+        daily_lows = [c["low"] for c in daily_candles]
 
+        # Calculate intraday indicators
         ema_20 = self.calculate_ema(intraday_closes, 20)
-        macd_line, signal_line, _ = self.calculate_macd(intraday_closes)
+        ema_9 = self.calculate_ema(intraday_closes, 9)
+        macd_line, signal_line, histogram = self.calculate_macd(intraday_closes)
         rsi_7 = self.calculate_rsi(intraday_closes, 7)
         rsi_14 = self.calculate_rsi(intraday_closes, 14)
+        intraday_atr = self._calculate_atr(intraday_highs, intraday_lows, intraday_closes, 14)
+        bollinger = self._calculate_bollinger_bands(intraday_closes, 20)
 
+        # Calculate longer-term indicators
         daily_ema_20 = self.calculate_ema(daily_closes, 20)
-        daily_ema_50 = self.calculate_ema(daily_closes, 50)
-        daily_macd, _, _ = self.calculate_macd(daily_closes)
+        daily_ema_50 = self.calculate_ema(daily_closes, min(50, len(daily_closes)))
+        daily_macd, daily_signal, daily_hist = self.calculate_macd(daily_closes)
         daily_rsi_14 = self.calculate_rsi(daily_closes, 14)
+        daily_atr_14 = self._calculate_atr(daily_highs, daily_lows, daily_closes, 14)
 
-        current_price = intraday_closes[-1] if intraday_closes else Decimal("0")
-        current_volume = intraday_volumes[-1] if intraday_volumes else Decimal("0")
+        # Current values
+        current_price = intraday_closes[-1]
+        current_volume = intraday_volumes[-1]
         avg_volume = (
             sum(intraday_volumes[-20:]) / Decimal(str(min(20, len(intraday_volumes))))
             if intraday_volumes else Decimal("0")
         )
 
-        intraday_atr = self._simple_atr(intraday_highs, intraday_lows, intraday_closes, 14)
-        daily_atr_3 = self._simple_atr(daily_highs, daily_lows, daily_closes, 3)
-        daily_atr_14 = self._simple_atr(daily_highs, daily_lows, daily_closes, 14)
-
-        if ticker_data:
-            change_24h = ticker_data["price_change_percent"] / Decimal("100")
-            volume_24h = ticker_data["quote_volume"]
+        # Calculate 24h change from candle data
+        if len(daily_closes) >= 2 and daily_closes[-2] != 0:
+            change_24h = (daily_closes[-1] - daily_closes[-2]) / daily_closes[-2]
+        elif len(intraday_closes) >= 2 and intraday_closes[0] != 0:
+            change_24h = (intraday_closes[-1] - intraday_closes[0]) / intraday_closes[0]
         else:
-            if len(daily_closes) >= 2 and daily_closes[0] != 0:
-                change_24h = (daily_closes[-1] - daily_closes[0]) / daily_closes[0]
-            else:
-                change_24h = Decimal("0")
-            volume_24h = current_volume * Decimal("480")
+            change_24h = Decimal("0")
+
+        # Estimate 24h volume from candle data
+        volume_24h = sum(intraday_volumes) * current_price if intraday_volumes else Decimal("0")
+
+        # Get funding data from Hyperliquid
+        funding_data = self.get_funding_for_coin(coin)
 
         return {
             "current_price": current_price,
             "change_24h": change_24h,
             "volume_24h": volume_24h,
+            "funding_rate": self._d(funding_data.get("funding_rate", "0")),
+            "open_interest": funding_data.get("open_interest", "0"),
+            "current_ema9": ema_9[-1] if ema_9 else Decimal("0"),
             "current_ema20": ema_20[-1] if ema_20 else Decimal("0"),
             "current_macd": macd_line[-1] if macd_line else Decimal("0"),
+            "current_macd_signal": signal_line[-1] if signal_line else Decimal("0"),
+            "current_macd_histogram": histogram[-1] if histogram else Decimal("0"),
             "current_rsi_7": rsi_7[-1] if rsi_7 else Decimal("50"),
             "current_rsi_14": rsi_14[-1] if rsi_14 else Decimal("50"),
+            "intraday_atr": intraday_atr[-1] if intraday_atr else Decimal("0"),
+            "bollinger_upper": bollinger["upper"][-1] if bollinger["upper"] else Decimal("0"),
+            "bollinger_middle": bollinger["middle"][-1] if bollinger["middle"] else Decimal("0"),
+            "bollinger_lower": bollinger["lower"][-1] if bollinger["lower"] else Decimal("0"),
             "intraday_series": {
-                "mid_prices": intraday_closes[-10:],
+                "closes": intraday_closes[-10:],
+                "ema_9": ema_9[-10:],
                 "ema_20": ema_20[-10:],
                 "macd": macd_line[-10:],
+                "macd_signal": signal_line[-10:],
                 "rsi_7": rsi_7[-10:],
-                "rsi_14": rsi_14[-10:]
+                "rsi_14": rsi_14[-10:],
+                "volumes": intraday_volumes[-10:]
             },
             "long_term_context": {
                 "ema_20": daily_ema_20[-1] if daily_ema_20 else Decimal("0"),
                 "ema_50": daily_ema_50[-1] if daily_ema_50 else Decimal("0"),
-                "atr_3": daily_atr_3[-1] if daily_atr_3 else Decimal("0"),
+                "macd": daily_macd[-5:],
+                "rsi_14": daily_rsi_14[-5:],
                 "atr_14": daily_atr_14[-1] if daily_atr_14 else Decimal("0"),
-                "macd": daily_macd[-10:],
-                "rsi_14": daily_rsi_14[-10:],
                 "current_volume": current_volume,
                 "avg_volume": avg_volume
-            },
-            "intraday_atr": intraday_atr[-1] if intraday_atr else Decimal("0")
+            }
         }
 
-    def get_open_interest_and_funding(self, coin: str) -> Dict:
-        base_oi = Decimal(str(1000000 + random.randint(0, 500000)))
-        market_factor = Decimal(str(random.uniform(-0.01, 0.01)))
-        funding = Decimal("0.01") + market_factor
-
+    def get_open_interest_and_funding(self, coin: str) -> Dict[str, str]:
+        """Get open interest and funding from Hyperliquid (not random data)."""
+        funding_data = self.get_funding_for_coin(coin)
         return {
-            "open_interest_latest": f"{int(base_oi):,}",
-            "open_interest_average": f"{int(base_oi * Decimal('0.95')):,}",
-            "funding_rate": f"{funding:.4f}%"
+            "open_interest_latest": str(funding_data.get("open_interest", "0")),
+            "funding_rate": str(funding_data.get("funding_rate", "0")),
+            "premium": str(funding_data.get("premium", "0"))
         }
 
 
-technical_fetcher = SimpleTechnicalFetcher()
+# Global instance
+technical_fetcher = HyperliquidDataFetcher()

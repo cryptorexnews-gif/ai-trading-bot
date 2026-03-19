@@ -1,10 +1,13 @@
 import logging
+import os
 import time
 from decimal import Decimal
 from typing import Any, Dict, Optional, Tuple
 
 import msgpack
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 from Crypto.Hash import keccak
 from eth_account import Account
 from eth_account.messages import encode_typed_data
@@ -18,9 +21,34 @@ from utils.decimals import (
     add_percentage,
     subtract_percentage
 )
-from utils.retry import retry_http, DEFAULT_RETRY_CONFIG
 
 logger = logging.getLogger(__name__)
+
+
+def _create_robust_session() -> requests.Session:
+    """Create a requests session with connection pooling and automatic retries."""
+    session = requests.Session()
+
+    retry_strategy = Retry(
+        total=3,
+        backoff_factor=1,
+        status_forcelist=[429, 500, 502, 503, 504],
+        allowed_methods=["POST", "GET"],
+        raise_on_status=False
+    )
+
+    adapter = HTTPAdapter(
+        max_retries=retry_strategy,
+        pool_connections=10,
+        pool_maxsize=10,
+        pool_block=False
+    )
+
+    session.mount("https://", adapter)
+    session.mount("http://", adapter)
+    session.headers.update({"Content-Type": "application/json"})
+
+    return session
 
 
 class HyperliquidExchangeClient:
@@ -31,7 +59,9 @@ class HyperliquidExchangeClient:
         enable_mainnet_trading: bool,
         execution_mode: str,
         meta_cache_ttl_sec: int,
-        paper_slippage_bps: Decimal
+        paper_slippage_bps: Decimal,
+        info_timeout: int = 15,
+        exchange_timeout: int = 30
     ):
         self.base_url = base_url
         self.private_key = private_key
@@ -39,13 +69,18 @@ class HyperliquidExchangeClient:
         self.execution_mode = execution_mode
         self.meta_cache_ttl_sec = meta_cache_ttl_sec
         self.paper_slippage_bps = paper_slippage_bps
+        self.info_timeout = info_timeout
+        self.exchange_timeout = exchange_timeout
 
-        self.session = requests.Session()
+        self.session = _create_robust_session()
         self.account = Account.from_key(self.private_key)
         self._meta_cache: Optional[Dict[str, Any]] = None
         self._meta_cache_at = 0.0
-        
-        # Circuit breakers for different endpoints
+        self._mids_cache: Optional[Dict[str, str]] = None
+        self._mids_cache_at = 0.0
+        self._mids_cache_ttl = 30  # 30 seconds for mid prices
+
+        # Circuit breakers
         self._info_cb = get_or_create_circuit_breaker(
             "hyperliquid_info",
             failure_threshold=5,
@@ -57,12 +92,19 @@ class HyperliquidExchangeClient:
             recovery_timeout=60.0
         )
 
+        logger.info(
+            f"Exchange client initialized: base_url={self.base_url}, "
+            f"mode={self.execution_mode}, mainnet={self.enable_mainnet_trading}"
+        )
+
     def _safe_decimal(self, value: Any, default: Decimal = Decimal("0")) -> Decimal:
-        """Use centralized decimal conversion."""
         return utils_to_decimal(value, default)
 
-    def _post_info_with_retry(self, payload: Dict[str, Any], timeout: int = 15) -> Optional[Any]:
-        """POST to /info with retry and circuit breaker."""
+    def _post_info(self, payload: Dict[str, Any], timeout: Optional[int] = None) -> Optional[Any]:
+        """POST to /info with circuit breaker and robust session."""
+        if timeout is None:
+            timeout = self.info_timeout
+
         def _do_post():
             response = self.session.post(
                 f"{self.base_url}/info",
@@ -70,21 +112,33 @@ class HyperliquidExchangeClient:
                 timeout=timeout
             )
             if response.status_code != 200:
-                logger.error(f"/info type={payload.get('type', 'unknown')} failed status={response.status_code}")
-                response.raise_for_status()  # Will trigger retry
+                logger.error(
+                    f"/info type={payload.get('type', 'unknown')} "
+                    f"failed status={response.status_code}"
+                )
+                response.raise_for_status()
             return response.json()
-        
+
         try:
             return self._info_cb.call(_do_post)
         except CircuitBreakerOpenError:
             logger.error("Circuit breaker OPEN for /info endpoint")
             return None
+        except requests.exceptions.Timeout:
+            logger.error(f"/info timeout after {timeout}s for type={payload.get('type', 'unknown')}")
+            return None
+        except requests.exceptions.ConnectionError as e:
+            logger.error(f"/info connection error: {e}")
+            return None
         except Exception as e:
-            logger.error(f"Error in _post_info_with_retry: {type(e).__name__}: {str(e)}")
+            logger.error(f"/info unexpected error: {type(e).__name__}: {str(e)}")
             return None
 
-    def _post_exchange_with_retry(self, payload: Dict[str, Any], timeout: int = 15) -> Optional[Any]:
-        """POST to /exchange with retry and circuit breaker."""
+    def _post_exchange(self, payload: Dict[str, Any], timeout: Optional[int] = None) -> Optional[Any]:
+        """POST to /exchange with circuit breaker and robust session."""
+        if timeout is None:
+            timeout = self.exchange_timeout
+
         def _do_post():
             response = self.session.post(
                 f"{self.base_url}/exchange",
@@ -96,14 +150,20 @@ class HyperliquidExchangeClient:
                 logger.error(f"/exchange failed status={response.status_code}")
                 response.raise_for_status()
             return response.json()
-        
+
         try:
             return self._exchange_cb.call(_do_post)
         except CircuitBreakerOpenError:
             logger.error("Circuit breaker OPEN for /exchange endpoint")
             return None
+        except requests.exceptions.Timeout:
+            logger.error(f"/exchange timeout after {timeout}s")
+            return None
+        except requests.exceptions.ConnectionError as e:
+            logger.error(f"/exchange connection error: {e}")
+            return None
         except Exception as e:
-            logger.error(f"Error in _post_exchange_with_retry: {type(e).__name__}: {str(e)}")
+            logger.error(f"/exchange unexpected error: {type(e).__name__}: {str(e)}")
             return None
 
     def get_meta(self, force_refresh: bool = False) -> Optional[Dict[str, Any]]:
@@ -111,16 +171,28 @@ class HyperliquidExchangeClient:
         if not force_refresh and self._meta_cache and (now - self._meta_cache_at) < self.meta_cache_ttl_sec:
             return self._meta_cache
 
-        meta = self._post_info_with_retry({"type": "meta"}, timeout=15)
+        meta = self._post_info({"type": "meta"})
         if meta is None:
-            return None
-
+            return self._meta_cache  # Return stale cache if available
         self._meta_cache = meta
         self._meta_cache_at = now
         return meta
 
+    def get_all_mids(self, force_refresh: bool = False) -> Optional[Dict[str, str]]:
+        """Get all mid prices with caching."""
+        now = time.time()
+        if not force_refresh and self._mids_cache and (now - self._mids_cache_at) < self._mids_cache_ttl:
+            return self._mids_cache
+
+        mids = self._post_info({"type": "allMids"})
+        if mids is None:
+            return self._mids_cache
+        self._mids_cache = mids
+        self._mids_cache_at = now
+        return mids
+
     def get_user_state(self, user: str) -> Optional[Dict[str, Any]]:
-        return self._post_info_with_retry({"type": "clearinghouseState", "user": user}, timeout=15)
+        return self._post_info({"type": "clearinghouseState", "user": user})
 
     def get_asset_id(self, coin: str) -> Optional[int]:
         meta = self.get_meta(force_refresh=False)
@@ -141,6 +213,10 @@ class HyperliquidExchangeClient:
         return 10
 
     def get_reference_price(self, coin: str, fallback_price: Decimal) -> Decimal:
+        mids = self.get_all_mids()
+        if mids and coin in mids:
+            return self._safe_decimal(mids[coin], fallback_price)
+
         meta = self.get_meta(force_refresh=False)
         if meta is None:
             return fallback_price
@@ -150,7 +226,7 @@ class HyperliquidExchangeClient:
         return fallback_price
 
     def get_tick_size_and_precision(self, asset_id: int) -> Tuple[Decimal, int]:
-        mids = self._post_info_with_retry({"type": "allMids"}, timeout=15)
+        mids = self.get_all_mids()
         meta = self.get_meta(force_refresh=False)
 
         if mids is not None and meta is not None:
@@ -269,7 +345,7 @@ class HyperliquidExchangeClient:
             "vaultAddress": None
         }
 
-        result = self._post_exchange_with_retry(payload, timeout=15)
+        result = self._post_exchange(payload)
         if result is None:
             return False
         if result.get("status") == "ok":
@@ -324,7 +400,6 @@ class HyperliquidExchangeClient:
         quantizer = Decimal("1").scaleb(-precision)
         limit_price = limit_price.quantize(quantizer)
 
-        # Fixed bug: Use normalized decimal string for all coins, not int truncation for ADA
         size_str = str(size.normalize())
 
         order_wire = {
@@ -347,7 +422,7 @@ class HyperliquidExchangeClient:
             "vaultAddress": None
         }
 
-        result = self._post_exchange_with_retry(payload, timeout=15)
+        result = self._post_exchange(payload)
         if result is None:
             return {"success": False, "mode": "live", "reason": "http_error", "notional": "0"}
         if result.get("status") != "ok":
