@@ -2,8 +2,6 @@
 Shared helper functions for API routes.
 """
 
-import json
-import os
 import re
 from typing import Any, Dict, Optional
 
@@ -11,18 +9,8 @@ import requests
 
 from api.config import HYPERLIQUID_BASE_URL
 
-
-# ─── File helpers ─────────────────────────────────────────────────────────────
-
-def read_json_file(path: str) -> Dict[str, Any]:
-    """Read a JSON file, returning empty dict on failure."""
-    if not os.path.exists(path):
-        return {}
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except (json.JSONDecodeError, IOError):
-        return {}
+# Re-export from shared utils so routes can import from one place
+from utils.file_io import read_json_file  # noqa: F401
 
 
 # ─── Hyperliquid proxy ────────────────────────────────────────────────────────

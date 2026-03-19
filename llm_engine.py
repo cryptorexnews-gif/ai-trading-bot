@@ -289,13 +289,11 @@ Respond with ONLY this JSON (no markdown, no extra text):
     def _parse_llm_response(self, response_text: str) -> Optional[Dict[str, Any]]:
         cleaned = response_text.strip()
 
-        # Strategy 1: Direct JSON parse
         try:
             return json.loads(cleaned)
         except json.JSONDecodeError:
             pass
 
-        # Strategy 2: Extract from markdown code blocks
         json_match = re.search(r'```(?:json)?\s*(\{.*?\})\s*```', cleaned, re.DOTALL)
         if json_match:
             try:
@@ -303,7 +301,6 @@ Respond with ONLY this JSON (no markdown, no extra text):
             except json.JSONDecodeError:
                 pass
 
-        # Strategy 3: Find first complete JSON object with brace matching
         start = cleaned.find('{')
         if start != -1:
             depth = 0
@@ -318,7 +315,6 @@ Respond with ONLY this JSON (no markdown, no extra text):
                         except json.JSONDecodeError:
                             break
 
-        # Strategy 4: Regex extraction of individual fields
         try:
             action_match = re.search(r'"action"\s*:\s*"([^"]+)"', cleaned)
             size_match = re.search(r'"size"\s*:\s*([\d.]+)', cleaned)
@@ -352,45 +348,31 @@ Respond with ONLY this JSON (no markdown, no extra text):
         if action not in valid_actions:
             logger.warning(f"Invalid action from LLM: '{action}'. Defaulting to hold.")
             return {
-                "action": "hold",
-                "size": Decimal("0"),
-                "leverage": 1,
-                "confidence": 0.0,
-                "reasoning": f"Original action '{action}' invalid, defaulting to hold."
+                "action": "hold", "size": Decimal("0"), "leverage": 1,
+                "confidence": 0.0, "reasoning": f"Original action '{action}' invalid, defaulting to hold."
             }
 
         confidence = float(parsed.get("confidence", 0))
         if not (0.0 <= confidence <= 1.0):
             confidence = max(0.0, min(1.0, confidence))
-            logger.warning(f"Confidence clamped to {confidence}")
 
         leverage = int(parsed.get("leverage", 1))
-        if leverage < 1:
-            leverage = 1
-        if leverage > 50:
-            leverage = 50
+        leverage = max(1, min(50, leverage))
 
         size = Decimal(str(parsed.get("size", 0)))
         if size < 0:
             size = Decimal("0")
 
         return {
-            "action": action,
-            "size": size,
-            "leverage": leverage,
-            "confidence": confidence,
-            "reasoning": str(parsed.get("reasoning", ""))
+            "action": action, "size": size, "leverage": leverage,
+            "confidence": confidence, "reasoning": str(parsed.get("reasoning", ""))
         }
 
     def _call_openrouter(self, prompt: str) -> Optional[str]:
-        """Call OpenRouter API with retry logic via utils/retry.py.
-        Security: Error messages never include request headers (which contain Bearer token).
-        """
+        """Call OpenRouter API. Error messages never include request headers."""
         payload = {
             "model": self.model,
-            "messages": [
-                {"role": "user", "content": prompt}
-            ],
+            "messages": [{"role": "user", "content": prompt}],
             "max_tokens": self.max_tokens,
             "temperature": self.temperature,
         }
@@ -398,20 +380,14 @@ Respond with ONLY this JSON (no markdown, no extra text):
         def _do_request():
             return self.session.post(
                 f"{self.base_url}/chat/completions",
-                json=payload,
-                timeout=self.request_timeout
+                json=payload, timeout=self.request_timeout
             )
 
         try:
             response = retry_request(
-                _do_request,
-                max_attempts=self.max_retries + 1,
-                initial_delay=2.0,
-                max_delay=30.0,
-                backoff_factor=2.0,
-                jitter=True,
-                retryable_status_codes=RETRYABLE_STATUS_CODES,
-                logger_instance=logger,
+                _do_request, max_attempts=self.max_retries + 1,
+                initial_delay=2.0, max_delay=30.0, backoff_factor=2.0, jitter=True,
+                retryable_status_codes=RETRYABLE_STATUS_CODES, logger_instance=logger,
             )
 
             if response.status_code == 200:
@@ -419,13 +395,10 @@ Respond with ONLY this JSON (no markdown, no extra text):
                 choices = data.get("choices", [])
                 if choices and choices[0].get("message", {}).get("content"):
                     return choices[0]["message"]["content"]
-                logger.error(f"OpenRouter returned empty choices")
+                logger.error("OpenRouter returned empty choices")
                 return None
 
-            # Security: Never log response headers or request headers
-            logger.error(
-                f"OpenRouter non-retryable error: HTTP {response.status_code}"
-            )
+            logger.error(f"OpenRouter non-retryable error: HTTP {response.status_code}")
             return None
 
         except requests.exceptions.Timeout:
@@ -435,8 +408,7 @@ Respond with ONLY this JSON (no markdown, no extra text):
             logger.error("OpenRouter connection error after all retries")
             return None
         except requests.exceptions.HTTPError as e:
-            # Security: Only log status code, not full exception which may contain headers
-            logger.error(f"OpenRouter HTTP error after all retries: status={getattr(e.response, 'status_code', 'unknown')}")
+            logger.error(f"OpenRouter HTTP error: status={getattr(e.response, 'status_code', 'unknown')}")
             return None
         except Exception as e:
             logger.error(f"OpenRouter unexpected error: {type(e).__name__}")
@@ -453,19 +425,11 @@ Respond with ONLY this JSON (no markdown, no extra text):
         peak_portfolio_value: Decimal = Decimal("0"),
         consecutive_losses: int = 0
     ) -> Optional[Dict[str, Any]]:
-        """
-        Get a trading decision from the LLM.
-        Returns validated decision dict or None on failure.
-        """
         prompt = self._build_prompt(
-            market_data=market_data,
-            portfolio_state=portfolio_state,
-            technical_data=technical_data,
-            all_mids=all_mids,
-            funding_data=funding_data,
-            recent_trades=recent_trades,
-            peak_portfolio_value=peak_portfolio_value,
-            consecutive_losses=consecutive_losses
+            market_data=market_data, portfolio_state=portfolio_state,
+            technical_data=technical_data, all_mids=all_mids,
+            funding_data=funding_data, recent_trades=recent_trades,
+            peak_portfolio_value=peak_portfolio_value, consecutive_losses=consecutive_losses
         )
 
         logger.info(f"Requesting LLM decision for {market_data.coin} (prompt ~{len(prompt)} chars)")
