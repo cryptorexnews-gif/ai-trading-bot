@@ -8,6 +8,12 @@ logger = logging.getLogger(__name__)
 
 
 class RiskManager:
+    """
+    Validates all trading decisions against risk parameters before execution.
+    Handles drawdown protection, margin limits, position conflicts, volatility sizing,
+    asset concentration, cooldowns, and daily notional caps.
+    """
+
     def __init__(
         self,
         min_size_by_coin: Dict[str, Decimal],
@@ -38,23 +44,20 @@ class RiskManager:
         self.allowed_actions = {action.value for action in TradingAction}
 
     def _safe_decimal(self, value: Any, default: Decimal = Decimal("0")) -> Decimal:
-        return Decimal(str(value)) if value is not None else default
+        if value is None:
+            return default
+        return Decimal(str(value))
 
     def _calculate_volatility_adjusted_size(self, base_size: Decimal, volatility: Decimal) -> Decimal:
         """
         Adjust position size based on market volatility.
         Higher volatility = smaller size to maintain consistent risk per trade.
-        Uses inverse volatility scaling with a floor to prevent zero-size orders.
         """
         if volatility <= 0:
             return base_size
-        # Normalize: if volatility is "normal" (~0.005), adjustment ≈ 1.0
-        # If volatility is 2x normal, adjustment ≈ 0.7
-        # If volatility is 0.5x normal, adjustment ≈ 1.15 (capped at 1.2)
         normal_vol = Decimal("0.005")
         ratio = volatility / normal_vol
         adjustment = Decimal("1") / (Decimal("1") + ((ratio - Decimal("1")) * self.volatility_multiplier))
-        # Clamp between 0.4 and 1.2
         adjustment = max(Decimal("0.4"), min(Decimal("1.2"), adjustment))
         return base_size * adjustment
 
@@ -73,7 +76,6 @@ class RiskManager:
                 f"(limit={float(self.max_drawdown_pct) * 100:.1f}%)"
             )
             return False, "max_drawdown_breached"
-        # Soft warning at 66% of max drawdown
         if drawdown >= self.max_drawdown_pct * Decimal("0.66"):
             logger.info(
                 f"Drawdown warning: {float(drawdown) * 100:.1f}% "
@@ -189,7 +191,7 @@ class RiskManager:
             if projected_daily > self.daily_notional_limit_usd:
                 return False, "daily_notional_cap_exceeded"
 
-            # Write the adjusted size back into the order so execution uses it
+            # Write adjusted size back into order so execution uses it
             order["size"] = adjusted_size
 
         return True, "ok"
