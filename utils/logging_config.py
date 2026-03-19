@@ -7,7 +7,7 @@ from typing import Any, Dict, Optional
 
 class JSONFormatter(logging.Formatter):
     """
-    Format log records as JSON for structured logging.
+    Formatta i record di log come JSON per logging strutturato.
     """
     
     def format(self, record: logging.LogRecord) -> str:
@@ -21,13 +21,13 @@ class JSONFormatter(logging.Formatter):
             "line": record.lineno
         }
         
-        # Add exception info if present
+        # Aggiunge info eccezione se presente
         if record.exc_info:
             log_object["exception"] = self.formatException(record.exc_info)
         if record.stack_info:
             log_object["stack"] = record.stack_info
         
-        # Add extra fields from record
+        # Aggiunge campi extra dal record
         for key, value in record.__dict__.items():
             if key not in [
                 "name", "msg", "args", "created", "filename", "funcName",
@@ -48,25 +48,25 @@ def setup_logging(
     console_output: bool = True
 ) -> None:
     """
-    Configure logging for the application.
+    Configura il logging per l'applicazione.
     
     Args:
-        log_level: Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
-        json_format: Use JSON formatting (recommended for production)
-        log_file: Optional file path for log file
-        console_output: Whether to output to console
+        log_level: Livello di logging (DEBUG, INFO, WARNING, ERROR, CRITICAL)
+        json_format: Usa formattazione JSON (raccomandato per produzione)
+        log_file: Percorso file log opzionale
+        console_output: Se output su console
     """
     level = getattr(logging, log_level.upper(), logging.INFO)
     
-    # Create root logger
+    # Crea logger radice
     root_logger = logging.getLogger()
     root_logger.setLevel(level)
     
-    # Remove existing handlers
+    # Rimuovi handler esistenti
     for handler in root_logger.handlers[:]:
         root_logger.removeHandler(handler)
     
-    # Create formatter
+    # Crea formatter
     if json_format:
         formatter = JSONFormatter()
     else:
@@ -75,14 +75,14 @@ def setup_logging(
             datefmt="%Y-%m-%d %H:%M:%S"
         )
     
-    # Console handler
+    # Handler console
     if console_output:
         console_handler = logging.StreamHandler(sys.stdout)
         console_handler.setLevel(level)
         console_handler.setFormatter(formatter)
         root_logger.addHandler(console_handler)
     
-    # File handler
+    # Handler file
     if log_file:
         import os
         os.makedirs(os.path.dirname(log_file) or ".", exist_ok=True)
@@ -91,7 +91,7 @@ def setup_logging(
         file_handler.setFormatter(formatter)
         root_logger.addHandler(file_handler)
     
-    # Configure specific loggers
+    # Configura logger specifici
     logging.getLogger("urllib3").setLevel(logging.WARNING)
     logging.getLogger("requests").setLevel(logging.WARNING)
     logging.getLogger("eth_account").setLevel(logging.WARNING)
@@ -99,6 +99,6 @@ def setup_logging(
 
 def get_logger(name: str) -> logging.Logger:
     """
-    Get a logger with the given name.
+    Ottieni un logger con il nome dato.
     """
     return logging.getLogger(name)

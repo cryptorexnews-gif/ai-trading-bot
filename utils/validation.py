@@ -15,155 +15,155 @@ from utils.decimals import (
 
 
 class ValidationError(Exception):
-    """Custom exception for validation failures."""
+    """Eccezione personalizzata per fallimenti di validazione."""
     def __init__(self, field: str, message: str, value: Any = None):
         self.field = field
         self.value = value
-        super().__init__(f"Validation error for '{field}': {message}")
+        super().__init__(f"Errore di validazione per '{field}': {message}")
 
 
 def validate_market_data(data: Dict[str, Any]) -> bool:
     """
-    Validate market data structure and values.
-    Returns True if valid, raises ValidationError if invalid.
+    Valida la struttura e i valori dei dati di mercato.
+    Restituisce True se valido, solleva ValidationError se invalido.
     """
     required_fields = ["coin", "last_price", "change_24h", "volume_24h", "timestamp"]
     
     for field in required_fields:
         if field not in data:
-            raise ValidationError(field, "missing required field")
+            raise ValidationError(field, "campo richiesto mancante")
     
-    # Validate coin
+    # Valida coin
     coin = str(data.get("coin", "")).strip().upper()
     if not coin or len(coin) < 2:
-        raise ValidationError("coin", "invalid coin symbol", coin)
+        raise ValidationError("coin", "simbolo coin invalido", coin)
     
-    # Validate price
+    # Valida prezzo
     price = to_decimal(data.get("last_price"))
     if not is_valid_price(price):
-        raise ValidationError("last_price", "price must be positive", price)
+        raise ValidationError("last_price", "il prezzo deve essere positivo", price)
     
-    # Validate timestamp
+    # Valida timestamp
     ts = data.get("timestamp")
     if not isinstance(ts, (int, float)) or ts <= 0:
-        raise ValidationError("timestamp", "invalid timestamp", ts)
+        raise ValidationError("timestamp", "timestamp invalido", ts)
     
-    # Check for stale data (age should be reasonable, e.g., < 5 minutes)
+    # Controlla dati obsoleti (età dovrebbe essere ragionevole, es. < 5 minuti)
     import time
     age = time.time() - float(ts)
-    if age > 300:  # 5 minutes
-        raise ValidationError("timestamp", f"data is stale (age={age:.1f}s)", ts)
+    if age > 300:  # 5 minuti
+        raise ValidationError("timestamp", f"dati obsoleti (età={age:.1f}s)", ts)
     
     return True
 
 
 def validate_order_request(order: Dict[str, Any], coin: str, min_size: Decimal) -> bool:
     """
-    Validate an order request before execution.
-    Returns True if valid, raises ValidationError if invalid.
+    Valida una richiesta di ordine prima dell'esecuzione.
+    Restituisce True se valido, solleva ValidationError se invalido.
     """
     required_fields = ["action", "size", "leverage"]
     
     for field in required_fields:
         if field not in order:
-            raise ValidationError(field, "missing required field")
+            raise ValidationError(field, "campo richiesto mancante")
     
-    # Validate action
+    # Valida action
     action = str(order.get("action", "")).strip().lower()
     allowed_actions = [
         "buy", "sell", "hold", "close_position", 
         "increase_position", "reduce_position", "change_leverage"
     ]
     if action not in allowed_actions:
-        raise ValidationError("action", f"invalid action '{action}'. Must be one of: {', '.join(allowed_actions)}", action)
+        raise ValidationError("action", f"azione invalida '{action}'. Deve essere una di: {', '.join(allowed_actions)}", action)
     
-    # Skip further validation for HOLD
+    # Salta ulteriore validazione per HOLD
     if action == "hold":
         return True
     
-    # Validate size (for non-hold actions)
+    # Valida size (per azioni non-hold)
     size = to_decimal(order.get("size"))
     if not is_valid_size(size):
-        raise ValidationError("size", "size must be non-negative", size)
+        raise ValidationError("size", "la dimensione deve essere non negativa", size)
     
-    # Validate minimum size for open actions
+    # Valida dimensione minima per azioni di apertura
     open_actions = ["buy", "sell", "increase_position"]
     if action in open_actions and size < min_size:
-        raise ValidationError("size", f"size {size} below minimum {min_size} for {coin}", size)
+        raise ValidationError("size", f"dimensione {size} sotto il minimo {min_size} per {coin}", size)
     
-    # Validate leverage
+    # Valida leverage
     leverage = to_decimal(order.get("leverage"))
     if leverage < 1:
-        raise ValidationError("leverage", "leverage must be >= 1", leverage)
-    if leverage > 100:  # Reasonable upper bound
-        raise ValidationError("leverage", "leverage unreasonably high (>100)", leverage)
+        raise ValidationError("leverage", "leverage deve essere >= 1", leverage)
+    if leverage > 100:  # Limite superiore ragionevole
+        raise ValidationError("leverage", "leverage irragionevolmente alto (>100)", leverage)
     
-    # Validate confidence if present
+    # Valida confidence se presente
     if "confidence" in order:
         confidence = to_decimal(order.get("confidence"))
         if not (0 <= confidence <= 1):
-            raise ValidationError("confidence", "confidence must be between 0 and 1", confidence)
+            raise ValidationError("confidence", "confidence deve essere tra 0 e 1", confidence)
     
     return True
 
 
 def validate_portfolio_state(state: Dict[str, Any]) -> bool:
     """
-    Validate portfolio state structure and values.
+    Valida la struttura e i valori dello stato del portfolio.
     """
     required_fields = ["total_balance", "available_balance", "margin_usage", "positions"]
     
     for field in required_fields:
         if field not in state:
-            raise ValidationError(field, "missing required field")
+            raise ValidationError(field, "campo richiesto mancante")
     
-    # Validate balances
+    # Valida bilanci
     total_balance = to_decimal(state.get("total_balance"))
     available_balance = to_decimal(state.get("available_balance"))
     margin_usage = to_decimal(state.get("margin_usage"))
     
     if total_balance < 0:
-        raise ValidationError("total_balance", "cannot be negative", total_balance)
+        raise ValidationError("total_balance", "non può essere negativo", total_balance)
     if available_balance < 0:
-        raise ValidationError("available_balance", "cannot be negative", available_balance)
+        raise ValidationError("available_balance", "non può essere negativo", available_balance)
     if not (0 <= margin_usage <= 1):
-        raise ValidationError("margin_usage", "must be between 0 and 1", margin_usage)
+        raise ValidationError("margin_usage", "deve essere tra 0 e 1", margin_usage)
     
-    # Validate positions structure
+    # Valida struttura posizioni
     positions = state.get("positions", {})
     if not isinstance(positions, dict):
-        raise ValidationError("positions", "must be a dictionary", positions)
+        raise ValidationError("positions", "deve essere un dizionario", positions)
     
     for coin, pos in positions.items():
         if not isinstance(pos, dict):
-            raise ValidationError(f"positions.{coin}", "must be a dictionary", pos)
+            raise ValidationError(f"positions.{coin}", "deve essere un dizionario", pos)
         
-        # Check required position fields
+        # Controlla campi richiesti per posizione
         pos_required = ["size", "entry_price", "margin_used"]
         for field in pos_required:
             if field not in pos:
-                raise ValidationError(f"positions.{coin}.{field}", "missing required field")
+                raise ValidationError(f"positions.{coin}.{field}", "campo richiesto mancante")
         
-        # Validate position values
+        # Valida valori posizione
         size = to_decimal(pos.get("size"))
         entry_price = to_decimal(pos.get("entry_price"))
         margin_used = to_decimal(pos.get("margin_used"))
         
         if size == 0:
-            raise ValidationError(f"positions.{coin}.size", "cannot be zero for open position", size)
+            raise ValidationError(f"positions.{coin}.size", "non può essere zero per posizione aperta", size)
         if entry_price <= 0:
-            raise ValidationError(f"positions.{coin}.entry_price", "must be positive", entry_price)
+            raise ValidationError(f"positions.{coin}.entry_price", "deve essere positivo", entry_price)
         if margin_used < 0:
-            raise ValidationError(f"positions.{coin}.margin_used", "cannot be negative", margin_used)
+            raise ValidationError(f"positions.{coin}.margin_used", "non può essere negativo", margin_used)
     
     return True
 
 
 def validate_configuration(config: Dict[str, Any]) -> bool:
     """
-    Validate bot configuration at startup.
+    Valida la configurazione del bot all'avvio.
     """
-    # Required environment variables
+    # Variabili d'ambiente richieste
     required_env_vars = [
         "HYPERLIQUID_WALLET_ADDRESS",
         "HYPERLIQUID_PRIVATE_KEY"
@@ -172,9 +172,9 @@ def validate_configuration(config: Dict[str, Any]) -> bool:
     import os
     missing = [var for var in required_env_vars if not os.getenv(var)]
     if missing:
-        raise ValidationError("environment", f"missing required variables: {', '.join(missing)}")
+        raise ValidationError("environment", f"variabili richieste mancanti: {', '.join(missing)}")
     
-    # Validate numeric configurations
+    # Valida configurazioni numeriche
     numeric_configs = {
         "MAX_ORDER_MARGIN_PCT": (Decimal("0"), Decimal("1")),
         "HARD_MAX_LEVERAGE": (Decimal("1"), Decimal("100")),
@@ -182,8 +182,8 @@ def validate_configuration(config: Dict[str, Any]) -> bool:
         "MIN_CONFIDENCE_MANAGE": (Decimal("0"), Decimal("1")),
         "MAX_DRAWDOWN_PCT": (Decimal("0"), Decimal("1")),
         "PAPER_SLIPPAGE_BPS": (Decimal("0"), Decimal("10000")),
-        "TRADE_COOLDOWN_SEC": (Decimal("0"), Decimal("86400")),  # 0 to 24 hours
-        "DAILY_NOTIONAL_LIMIT_USD": (Decimal("0"), None),  # No upper bound
+        "TRADE_COOLDOWN_SEC": (Decimal("0"), Decimal("86400")),  # 0 a 24 ore
+        "DAILY_NOTIONAL_LIMIT_USD": (Decimal("0"), None),  # Nessun limite superiore
         "MAX_TRADES_PER_CYCLE": (Decimal("1"), Decimal("50")),
         "MAX_CONSECUTIVE_FAILED_CYCLES": (Decimal("1"), Decimal("100")),
         "META_CACHE_TTL_SEC": (Decimal("1"), Decimal("3600")),
@@ -195,11 +195,11 @@ def validate_configuration(config: Dict[str, Any]) -> bool:
         if value is not None:
             dec_value = to_decimal(value)
             if dec_value < min_val:
-                raise ValidationError(key, f"must be >= {min_val}", dec_value)
+                raise ValidationError(key, f"deve essere >= {min_val}", dec_value)
             if max_val is not None and dec_value > max_val:
-                raise ValidationError(key, f"must be <= {max_val}", dec_value)
+                raise ValidationError(key, f"deve essere <= {max_val}", dec_value)
     
-    # Validate string enumerations
+    # Valida enumerazioni stringa
     enum_configs = {
         "EXECUTION_MODE": ["paper", "live"],
         "SAFE_FALLBACK_MODE": ["de_risk", "hold"],
@@ -211,17 +211,17 @@ def validate_configuration(config: Dict[str, Any]) -> bool:
     for key, allowed_values in enum_configs.items():
         value = str(config.get(key, "")).lower()
         if value and value not in allowed_values:
-            raise ValidationError(key, f"must be one of: {', '.join(allowed_values)}", value)
+            raise ValidationError(key, f"deve essere una di: {', '.join(allowed_values)}", value)
     
     return True
 
 
 def validate_asset_id(coin: str, asset_id: Optional[int]) -> bool:
     """
-    Validate that an asset ID is valid for a given coin.
+    Valida che un ID asset sia valido per una coin data.
     """
     if asset_id is None:
-        raise ValidationError("asset_id", "asset ID is None")
+        raise ValidationError("asset_id", "ID asset è None")
     if not isinstance(asset_id, int) or asset_id < 0:
-        raise ValidationError("asset_id", "must be a non-negative integer", asset_id)
+        raise ValidationError("asset_id", "deve essere un intero non negativo", asset_id)
     return True

@@ -1,6 +1,6 @@
 """
-Writes live bot status to a shared JSON file.
-The API server reads this file to serve real-time data.
+Scrive stato bot live su file JSON condiviso.
+Il server API legge questo file per servire dati in tempo reale.
 """
 
 import json
@@ -30,7 +30,7 @@ def write_live_status(
     last_decision: Optional[Dict[str, Any]] = None,
     error: str = ""
 ) -> None:
-    """Write current bot status to shared file for API server."""
+    """Scrivi stato corrente bot su file condiviso per server API."""
     status = {
         "is_running": is_running,
         "execution_mode": execution_mode,
@@ -53,7 +53,7 @@ def write_live_status(
 
 
 def _serialize_decision(decision: Dict[str, Any]) -> Dict[str, Any]:
-    """Serialize a decision dict, converting Decimals."""
+    """Serializza un dizionario decisione, convertendo Decimal."""
     result = {}
     for key, value in decision.items():
         if isinstance(value, Decimal):
@@ -64,7 +64,7 @@ def _serialize_decision(decision: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _serialize_portfolio(portfolio) -> Dict[str, Any]:
-    """Serialize portfolio state for JSON."""
+    """Serializza stato portfolio per JSON."""
     if portfolio is None:
         return {}
     if hasattr(portfolio, "total_balance"):

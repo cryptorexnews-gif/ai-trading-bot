@@ -6,7 +6,7 @@ from utils.decimals import to_decimal
 
 
 class HealthStatus:
-    """Health status constants."""
+    """Costanti stato salute."""
     HEALTHY = "healthy"
     DEGRADED = "degraded"
     UNHEALTHY = "unhealthy"
@@ -14,7 +14,7 @@ class HealthStatus:
 
 
 class HealthCheckResult:
-    """Result of a single health check."""
+    """Risultato di un singolo controllo salute."""
 
     def __init__(
         self,
@@ -42,7 +42,7 @@ class HealthCheckResult:
 
 class HealthMonitor:
     """
-    Monitor overall system health with multiple checks.
+    Monitora salute generale del sistema con controlli multipli.
     """
 
     def __init__(self):
@@ -58,13 +58,13 @@ class HealthMonitor:
         timeout: float = 10.0
     ) -> None:
         """
-        Add a health check.
+        Aggiungi un controllo salute.
 
         Args:
-            name: Unique name for the check
-            check_func: Function that returns HealthCheckResult
-            interval: How often to run this check (seconds)
-            timeout: Timeout for the check (seconds)
+            name: Nome unico per il controllo
+            check_func: Funzione che restituisce HealthCheckResult
+            interval: Ogni quanto eseguire questo controllo (secondi)
+            timeout: Timeout per il controllo (secondi)
         """
         self._checks.append({
             "name": name,
@@ -76,7 +76,7 @@ class HealthMonitor:
         })
 
     def run_check(self, check: Dict[str, Any]) -> HealthCheckResult:
-        """Run a single health check."""
+        """Esegui un singolo controllo salute."""
         try:
             result = check["func"]()
             check["last_result"] = result
@@ -86,7 +86,7 @@ class HealthMonitor:
             result = HealthCheckResult(
                 name=check["name"],
                 status=HealthStatus.UNHEALTHY,
-                message=f"Check failed with exception: {str(e)}",
+                message=f"Controllo fallito con eccezione: {str(e)}",
                 details={"exception": type(e).__name__, "error": str(e)}
             )
             check["last_result"] = result
@@ -95,7 +95,7 @@ class HealthMonitor:
 
     def run_all_checks(self) -> Dict[str, Any]:
         """
-        Run all health checks and return overall status.
+        Esegui tutti i controlli salute e restituisci stato generale.
         """
         results = []
         overall_status = HealthStatus.HEALTHY
@@ -125,56 +125,56 @@ class HealthMonitor:
         }
 
     def get_overall_status(self) -> str:
-        """Get the overall health status."""
+        """Ottieni stato salute generale."""
         return self._overall_status
 
     def is_healthy(self) -> bool:
-        """Check if system is fully healthy."""
+        """Controlla se sistema è completamente healthy."""
         return self._overall_status == HealthStatus.HEALTHY
 
     def is_degraded(self) -> bool:
-        """Check if system is degraded but not unhealthy."""
+        """Controlla se sistema è degradato ma non unhealthy."""
         return self._overall_status == HealthStatus.DEGRADED
 
     def is_unhealthy(self) -> bool:
-        """Check if system is unhealthy."""
+        """Controlla se sistema è unhealthy."""
         return self._overall_status == HealthStatus.UNHEALTHY
 
 
 def check_exchange_connectivity(exchange_client) -> HealthCheckResult:
-    """Check if exchange API is reachable."""
+    """Controlla se API exchange è raggiungibile."""
     try:
         meta = exchange_client.get_meta(force_refresh=True)
         if meta:
             return HealthCheckResult(
                 name="exchange_connectivity",
                 status=HealthStatus.HEALTHY,
-                message="Exchange API reachable",
+                message="API exchange raggiungibile",
                 details={"assets_count": len(meta.get("universe", []))}
             )
         return HealthCheckResult(
             name="exchange_connectivity",
             status=HealthStatus.UNHEALTHY,
-            message="Exchange API returned no metadata"
+            message="API exchange ha restituito nessun metadato"
         )
     except Exception as e:
         return HealthCheckResult(
             name="exchange_connectivity",
             status=HealthStatus.UNHEALTHY,
-            message=f"Exchange API unreachable: {str(e)}",
+            message=f"API exchange irraggiungibile: {str(e)}",
             details={"exception": type(e).__name__}
         )
 
 
 def check_wallet_balance(exchange_client, wallet_address: str) -> HealthCheckResult:
-    """Check if wallet balance is accessible and positive."""
+    """Controlla se saldo wallet è accessibile e positivo."""
     try:
         state = exchange_client.get_user_state(wallet_address)
         if state is None:
             return HealthCheckResult(
                 name="wallet_balance",
                 status=HealthStatus.UNHEALTHY,
-                message="Could not fetch wallet state"
+                message="Impossibile recuperare stato wallet"
             )
 
         margin_summary = state.get("marginSummary", {})
@@ -184,26 +184,26 @@ def check_wallet_balance(exchange_client, wallet_address: str) -> HealthCheckRes
             return HealthCheckResult(
                 name="wallet_balance",
                 status=HealthStatus.UNHEALTHY,
-                message="Wallet balance is zero or negative",
+                message="Saldo wallet zero o negativo",
                 details={"balance": str(total_balance)}
             )
 
         return HealthCheckResult(
             name="wallet_balance",
             status=HealthStatus.HEALTHY,
-            message="Wallet balance positive",
+            message="Saldo wallet positivo",
             details={"balance": str(total_balance)}
         )
     except Exception as e:
         return HealthCheckResult(
             name="wallet_balance",
             status=HealthStatus.UNHEALTHY,
-            message=f"Error fetching wallet balance: {str(e)}"
+            message=f"Errore nel recupero saldo wallet: {str(e)}"
         )
 
 
 def check_disk_space(path: str, min_free_gb: float = 1.0) -> HealthCheckResult:
-    """Check if there's enough disk space."""
+    """Controlla se c'è abbastanza spazio disco."""
     try:
         import shutil
         total, used, free = shutil.disk_usage(path)
@@ -213,26 +213,26 @@ def check_disk_space(path: str, min_free_gb: float = 1.0) -> HealthCheckResult:
             return HealthCheckResult(
                 name="disk_space",
                 status=HealthStatus.UNHEALTHY,
-                message=f"Low disk space: {free_gb:.2f} GB free (min {min_free_gb} GB)",
+                message=f"Spazio disco basso: {free_gb:.2f} GB liberi (min {min_free_gb} GB)",
                 details={"free_gb": free_gb, "total_gb": total / (1024**3), "used_gb": used / (1024**3)}
             )
 
         return HealthCheckResult(
             name="disk_space",
             status=HealthStatus.HEALTHY,
-            message=f"Sufficient disk space: {free_gb:.2f} GB free",
+            message=f"Spazio disco sufficiente: {free_gb:.2f} GB liberi",
             details={"free_gb": free_gb}
         )
     except Exception as e:
         return HealthCheckResult(
             name="disk_space",
             status=HealthStatus.UNHEALTHY,
-            message=f"Could not check disk space: {str(e)}"
+            message=f"Impossibile controllare spazio disco: {str(e)}"
         )
 
 
 def check_file_writable(path: str) -> HealthCheckResult:
-    """Check if a file/directory is writable."""
+    """Controlla se un file/directory è scrivibile."""
     try:
         import os
         test_file = os.path.join(path, ".health_check_test")
@@ -242,11 +242,11 @@ def check_file_writable(path: str) -> HealthCheckResult:
         return HealthCheckResult(
             name="file_writable",
             status=HealthStatus.HEALTHY,
-            message=f"Path {path} is writable"
+            message=f"Percorso {path} è scrivibile"
         )
     except Exception as e:
         return HealthCheckResult(
             name="file_writable",
             status=HealthStatus.UNHEALTHY,
-            message=f"Path {path} is not writable: {str(e)}"
+            message=f"Percorso {path} non è scrivibile: {str(e)}"
         )

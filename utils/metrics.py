@@ -7,13 +7,13 @@ from utils.decimals import to_decimal
 
 class MetricsCollector:
     """
-    Collect and manage application metrics.
-    Thread-safe for basic operations (not for high-frequency updates).
+    Raccoglie e gestisce metriche dell'applicazione.
+    Thread-safe per operazioni di base (non per aggiornamenti ad alta frequenza).
     """
     
     def __init__(self):
         self._metrics: Dict[str, Any] = {
-            # Counters
+            # Contatori
             "cycles_total": 0,
             "cycles_failed": 0,
             "trades_executed_total": 0,
@@ -24,36 +24,36 @@ class MetricsCollector:
             "llm_errors_total": 0,
             "api_errors_total": 0,
             
-            # Gauges
+            # Gauge
             "current_balance": Decimal("0"),
             "available_balance": Decimal("0"),
             "margin_usage": Decimal("0"),
             "open_positions_count": 0,
             "consecutive_failed_cycles": 0,
             
-            # Histograms (stored as lists for simplicity)
+            # Istogrammi (memorizzati come liste per semplicità)
             "cycle_duration_seconds": [],
             "order_sizes": [],
             "slippage_bps": [],
             
-            # Derived
+            # Derivati
             "daily_notional_total": Decimal("0"),
             "peak_portfolio_value": Decimal("0"),
             
-            # Metadata
+            # Metadati
             "started_at": datetime.utcnow().isoformat() + "Z",
             "last_updated": datetime.utcnow().isoformat() + "Z"
         }
     
     def increment(self, metric: str, value: int = 1) -> None:
-        """Increment a counter metric."""
+        """Incrementa una metrica contatore."""
         if metric not in self._metrics:
             self._metrics[metric] = 0
         self._metrics[metric] += value
         self._metrics["last_updated"] = datetime.utcnow().isoformat() + "Z"
     
     def set_gauge(self, metric: str, value: Any) -> None:
-        """Set a gauge metric."""
+        """Imposta una metrica gauge."""
         if metric in ["current_balance", "available_balance", "margin_usage", "daily_notional_total", "peak_portfolio_value"]:
             self._metrics[metric] = to_decimal(value)
         else:
@@ -61,25 +61,25 @@ class MetricsCollector:
         self._metrics["last_updated"] = datetime.utcnow().isoformat() + "Z"
     
     def record_histogram(self, metric: str, value: float) -> None:
-        """Record a histogram value (append to list)."""
+        """Registra un valore istogramma (aggiunge alla lista)."""
         if metric not in self._metrics:
             self._metrics[metric] = []
         self._metrics[metric].append(value)
-        # Keep only last 1000 samples to prevent memory growth
+        # Mantieni solo gli ultimi 1000 campioni per evitare crescita memoria
         if len(self._metrics[metric]) > 1000:
             self._metrics[metric] = self._metrics[metric][-1000:]
         self._metrics["last_updated"] = datetime.utcnow().isoformat() + "Z"
     
     def get_metric(self, metric: str, default: Any = None) -> Any:
-        """Get a metric value."""
+        """Ottieni un valore metrica."""
         return self._metrics.get(metric, default)
     
     def get_all_metrics(self) -> Dict[str, Any]:
-        """Get all metrics as a dictionary."""
+        """Ottieni tutte le metriche come dizionario."""
         return self._metrics.copy()
     
     def reset_counters(self) -> None:
-        """Reset counter metrics to zero (but keep gauges and histograms)."""
+        """Resetta metriche contatore a zero (ma mantiene gauge e istogrammi)."""
         counters = [
             "cycles_total", "cycles_failed", "trades_executed_total",
             "holds_total", "risk_rejections_total", "execution_failures_total",
@@ -91,21 +91,21 @@ class MetricsCollector:
     
     def to_prometheus_format(self) -> str:
         """
-        Export metrics in Prometheus text format.
+        Esporta metriche in formato testo Prometheus.
         """
         lines = []
         
-        # Counters
+        # Contatori
         counters = [
-            ("cycles_total", "Total number of trading cycles"),
-            ("cycles_failed", "Total number of failed trading cycles"),
-            ("trades_executed_total", "Total number of trades executed"),
-            ("holds_total", "Total number of hold decisions"),
-            ("risk_rejections_total", "Total number of risk manager rejections"),
-            ("execution_failures_total", "Total number of execution failures"),
-            ("llm_calls_total", "Total number of LLM API calls"),
-            ("llm_errors_total", "Total number of LLM API errors"),
-            ("api_errors_total", "Total number of API errors (all sources)")
+            ("cycles_total", "Numero totale di cicli di trading"),
+            ("cycles_failed", "Numero totale di cicli di trading falliti"),
+            ("trades_executed_total", "Numero totale di trade eseguiti"),
+            ("holds_total", "Numero totale di decisioni hold"),
+            ("risk_rejections_total", "Numero totale di rifiuti del risk manager"),
+            ("execution_failures_total", "Numero totale di fallimenti esecuzione"),
+            ("llm_calls_total", "Numero totale di chiamate API LLM"),
+            ("llm_errors_total", "Numero totale di errori API LLM"),
+            ("api_errors_total", "Numero totale di errori API (tutte le fonti)")
         ]
         
         for metric, help_text in counters:
@@ -114,15 +114,15 @@ class MetricsCollector:
             lines.append(f"# TYPE {metric} counter")
             lines.append(f"{metric} {value}")
         
-        # Gauges
+        # Gauge
         gauges = [
-            ("current_balance", "Current total balance in USD", "gauge"),
-            ("available_balance", "Current available balance in USD", "gauge"),
-            ("margin_usage", "Current margin usage as ratio (0-1)", "gauge"),
-            ("open_positions_count", "Number of open positions", "gauge"),
-            ("consecutive_failed_cycles", "Current consecutive failed cycles", "gauge"),
-            ("daily_notional_total", "Total notional traded today in USD", "gauge"),
-            ("peak_portfolio_value", "Peak portfolio value in USD", "gauge")
+            ("current_balance", "Saldo totale corrente in USD", "gauge"),
+            ("available_balance", "Saldo disponibile corrente in USD", "gauge"),
+            ("margin_usage", "Uso margine corrente come rapporto (0-1)", "gauge"),
+            ("open_positions_count", "Numero di posizioni aperte", "gauge"),
+            ("consecutive_failed_cycles", "Cicli falliti consecutivi correnti", "gauge"),
+            ("daily_notional_total", "Totale notionale scambiato oggi in USD", "gauge"),
+            ("peak_portfolio_value", "Valore portfolio di picco in USD", "gauge")
         ]
         
         for metric, help_text, mtype in gauges:
@@ -131,11 +131,11 @@ class MetricsCollector:
             lines.append(f"# TYPE {metric} {mtype}")
             lines.append(f"{metric} {float(value)}")
         
-        # Histograms (summarized as summary)
+        # Istogrammi (riassunti come summary)
         histograms = [
-            ("cycle_duration_seconds", "Trading cycle duration in seconds"),
-            ("order_sizes", "Order sizes in USD"),
-            ("slippage_bps", "Slippage in basis points")
+            ("cycle_duration_seconds", "Durata ciclo di trading in secondi"),
+            ("order_sizes", "Dimensioni ordini in USD"),
+            ("slippage_bps", "Slippage in punti base")
         ]
         
         for metric, help_text in histograms:

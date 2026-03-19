@@ -1,4 +1,4 @@
-# Environment variables
+# Variabili d'ambiente
 .env
 
 # Python
@@ -24,7 +24,7 @@ wheels/
 *.egg
 MANIFEST
 
-# Logs
+# Log
 *.log
 logs/
 
@@ -34,10 +34,10 @@ logs/
 *.swp
 *.swo
 
-# OS
+# Sistema operativo
 .DS_Store
 Thumbs.db
 
-# Temporary files
+# File temporanei
 *.tmp
 *.temp

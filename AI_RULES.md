@@ -1,69 +1,69 @@
-# AI Rules for Hyperliquid Trading Bot
+# Regole AI per Bot Trading Hyperliquid
 
-## Tech Stack
-- **Python 3.10+**: Core language for the bot, leveraging type hints (`typing`), dataclasses, and enums for structured code.
-- **requests**: Primary HTTP client for all API interactions (Hyperliquid, OpenRouter).
-- **eth_account**: Handles EIP-712 signing for Hyperliquid orders using `Account.from_key()` and `encode_typed_data`.
-- **pycryptodome (Crypto.Hash.keccak)**: Keccak-256 hashing for Hyperliquid action signatures.
-- **msgpack**: Binary serialization for Hyperliquid payloads (`msgpack.packb`).
-- **decimal.Decimal**: Precise arithmetic for all financial calculations (prices, sizes, margins, PnL).
-- **python-dotenv**: Environment variable loading for secrets (private keys, API keys).
-- **logging**: Built-in module for structured JSON logging to files and console.
+## Stack Tecnologico
+- **Python 3.10+**: Linguaggio core per il bot, sfruttando type hints (`typing`), dataclasses, e enums per codice strutturato.
+- **requests**: Client HTTP primario per tutte le interazioni API (Hyperliquid, OpenRouter).
+- **eth_account**: Gestisce firma EIP-712 per ordini Hyperliquid usando `Account.from_key()` e `encode_typed_data`.
+- **pycryptodome (Crypto.Hash.keccak)**: Hashing Keccak-256 per firme azioni Hyperliquid.
+- **msgpack**: Serializzazione binaria per payload Hyperliquid (`msgpack.packb`).
+- **decimal.Decimal**: Aritmetica precisa per tutti i calcoli finanziari (prezzi, dimensioni, margini, PnL).
+- **python-dotenv**: Caricamento variabili d'ambiente per segreti (chiavi private, API keys).
+- **logging**: Modulo built-in per logging strutturato JSON su file e console.
 
-## LLM Configuration
-- **Model**: `anthropic/claude-opus-4.6` via OpenRouter (`https://openrouter.ai/api/v1`)
-- **API Key**: `OPENROUTER_API_KEY` environment variable
-- **Timeout**: 90 seconds (Claude Opus 4.6 can take longer than smaller models)
-- **Retries**: 2 retries on 429/500/502/503/504 with exponential backoff
-- **Temperature**: 0.2 (low for deterministic trading decisions)
+## Configurazione LLM
+- **Modello**: `anthropic/claude-opus-4.6` via OpenRouter (`https://openrouter.ai/api/v1`)
+- **Chiave API**: Variabile d'ambiente `OPENROUTER_API_KEY`
+- **Timeout**: 90 secondi (Claude Opus 4.6 può richiedere più tempo rispetto a modelli più piccoli)
+- **Retry**: 2 retry su 429/500/502/503/504 con backoff esponenziale
+- **Temperatura**: 0.2 (bassa per decisioni di trading deterministiche)
 
-## Data Sources
-- **ALL market data comes from Hyperliquid API exclusively**
-- No Binance, CoinGecko, or other external data sources
-- Candle snapshots, mid prices, funding rates, open interest — all from Hyperliquid `/info`
-- Technical indicators (EMA, MACD, RSI, ATR, Bollinger Bands) calculated from Hyperliquid candles
+## Fonti Dati
+- **TUTTI i dati di mercato provengono esclusivamente dall'API Hyperliquid**
+- Nessun Binance, CoinGecko, o altre fonti dati esterne
+- Snapshot candele, prezzi mid, tassi funding, interesse aperto — tutti da Hyperliquid `/info`
+- Indicatori tecnici (EMA, MACD, RSI, ATR, Bande di Bollinger) calcolati da candele Hyperliquid
 
-## Library Usage Rules
-Follow these rules strictly to avoid precision errors, API incompatibilities, and security issues:
+## Regole Uso Librerie
+Segui queste regole rigorosamente per evitare errori di precisione, incompatibilità API, e problemi di sicurezza:
 
-### HTTP & API Clients
-- **Use `requests` exclusively** for all synchronous HTTP calls (Hyperliquid `/info`, `/exchange`, OpenRouter completions). Never use `urllib`, `aiohttp`, or `httpx`.
-- Set `timeout=15-90s` on all requests. Always use `json=payload` for POST and handle `response.json()` with status checks.
-- For Hyperliquid: Use `Content-Type: application/json` headers only; sign payloads with EIP-712 via `eth_account`.
+### HTTP & Client API
+- **Usa `requests` esclusivamente** per tutte le chiamate HTTP sincrone (Hyperliquid `/info`, `/exchange`, completamenti OpenRouter). Mai usare `urllib`, `aiohttp`, o `httpx`.
+- Imposta `timeout=15-90s` su tutte le richieste. Usa sempre `json=payload` per POST e gestisci `response.json()` con controlli status.
+- Per Hyperliquid: Usa header `Content-Type: application/json` solo; firma payload con EIP-712 via `eth_account`.
 
-### Crypto & Signing
-- **EIP-712 signing: `eth_account` only**. Use `Account.from_key(private_key)` and `sign_l1_action_exact` pattern from `exchange_client.py`. Never implement manual signing.
-- **Hashing: `Crypto.Hash.keccak` exclusively** for action hashes. Import as `from Crypto.Hash import keccak`.
-- **Msgpack: Use `msgpack.packb`** for Hyperliquid action data before hashing. Never use JSON for signed payloads.
+### Crypto & Firma
+- **Firma EIP-712: `eth_account` solo**. Usa `Account.from_key(private_key)` e pattern `sign_l1_action_exact` da `exchange_client.py`. Mai implementare firma manuale.
+- **Hashing: `Crypto.Hash.keccak` esclusivamente** per hash azioni. Importa come `from Crypto.Hash import keccak`.
+- **Msgpack: Usa `msgpack.packb`** per dati azione Hyperliquid prima dell'hashing. Mai usare JSON per payload firmati.
 
-### Financial Precision
-- **All money/math: `decimal.Decimal(str(value))`**. Convert floats/JSON to Decimal immediately. Never use `float` for prices, sizes, margins, or PnL.
-- Round prices to tick sizes dynamically via `get_tick_size_and_precision`. Use `max_leverage` from `/meta` API.
+### Precisione Finanziaria
+- **Tutti i soldi/matematica: `decimal.Decimal(str(value))`**. Converti float/JSON a Decimal immediatamente. Mai usare `float` per prezzi, dimensioni, margini, o PnL.
+- Arrotonda prezzi a tick sizes dinamicamente via `get_tick_size_and_precision`. Usa `max_leverage` da API `/meta`.
 
-### Configuration & Secrets
-- **Env vars: `dotenv.load_dotenv()` at module top**. Access via `os.getenv('KEY')`. Document in `.env.example`.
-- Update `requirements.txt` for any new libs.
+### Configurazione & Segreti
+- **Var ambiente: `dotenv.load_dotenv()` all'inizio modulo**. Accedi via `os.getenv('KEY')`. Documenta in `.env.example`.
+- Aggiorna `requirements.txt` per nuove lib.
 
-### Data & Logging
-- **Structured data: `dataclass` and `Dict[str, Any]`**. Use `Enum` for actions (e.g., `TradingAction`).
-- **Logging: structured JSON format** with file+console handlers. Use `logger.info/error` at INFO level. No `print` for production logic.
-- **JSON parsing: `json.loads` with regex extraction if LLM responses are messy**. Validate schemas before execution.
+### Dati & Logging
+- **Dati strutturati: `dataclass` e `Dict[str, Any]`**. Usa `Enum` per azioni (es. `TradingAction`).
+- **Logging: formato JSON strutturato** con handler file+console. Usa `logger.info/error` a livello INFO. Nessun `print` per logica produzione.
+- **Parsing JSON: `json.loads` con estrazione regex se risposte LLM sono disordinate**. Valida schemi prima dell'esecuzione.
 
-### State Management
-- **Atomic writes**: State files use write-to-temp-then-rename pattern to prevent corruption.
-- **Daily notional tracking**: Uses per-day keys with automatic 7-day cleanup.
-- **Graceful shutdown**: Signal handlers (SIGINT/SIGTERM) save state before exit.
+### Gestione Stato
+- **Scritture atomiche**: File stato usano pattern write-to-temp-then-rename per evitare corruzione.
+- **Tracking notionale giornaliero**: Usa chiavi per-giorno con pulizia automatica 7 giorni.
+- **Shutdown graceful**: Handler segnali (SIGINT/SIGTERM) salvano stato prima dell'uscita.
 
-### Circuit Breakers
-- **OPEN -> HALF_OPEN transition**: Based on `recovery_timeout` elapsed time.
-- **HALF_OPEN -> CLOSED**: On first successful call.
-- **HALF_OPEN -> OPEN**: On failure during half-open.
+### Circuit Breaker
+- **OPEN -> HALF_OPEN transizione**: Basata su `recovery_timeout` trascorso.
+- **HALF_OPEN -> CLOSED**: Alla prima chiamata riuscita.
+- **HALF_OPEN -> OPEN**: Al fallimento durante half-open.
 
-### Prohibitions
-- No async code (`asyncio`, `aiohttp`) unless explicitly requested.
-- No new ML/data libs (e.g., pandas, numpy) – keep lightweight.
-- No float in trading logic – causes Hyperliquid rejections.
-- No external data sources (Binance, CoinGecko, etc.) – Hyperliquid only.
-- Test all changes with `--single-cycle` before continuous runs.
+### Proibizioni
+- Nessun codice async (`asyncio`, `aiohttp`) a meno che non richiesto esplicitamente.
+- Nessuna nuova lib ML/dati (es. pandas, numpy) – mantieni leggero.
+- Nessun float in logica trading – causa rifiuti Hyperliquid.
+- Nessuna fonte dati esterna (Binance, CoinGecko, ecc.) – solo Hyperliquid.
+- Testa tutti i cambiamenti con `--single-cycle` prima di run continui.
 
-**Enforced by AI Editor**: All future changes must follow these rules. Violations will be rejected.
+**Applicato da AI Editor**: Tutti i futuri cambiamenti devono seguire queste regole. Violazioni saranno rifiutate.

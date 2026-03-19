@@ -9,7 +9,7 @@ logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
 
-# Default retry configuration
+# Configurazione di retry predefinita
 DEFAULT_RETRY_CONFIG = {
     "max_attempts": 3,
     "initial_delay": 1.0,
@@ -26,7 +26,7 @@ DEFAULT_RETRY_CONFIG = {
 
 
 class RetryableHTTPError(Exception):
-    """Custom exception for retryable HTTP errors."""
+    """Eccezione personalizzata per errori HTTP retryable."""
     def __init__(self, status_code: int, message: str):
         self.status_code = status_code
         super().__init__(f"HTTP {status_code}: {message}")
@@ -34,7 +34,7 @@ class RetryableHTTPError(Exception):
 
 def should_retry_response(response: requests.Response) -> bool:
     """
-    Determine if a response should trigger a retry.
+    Determina se una risposta dovrebbe attivare un retry.
     """
     if response.status_code in DEFAULT_RETRY_CONFIG["retry_on_status_codes"]:
         return True
@@ -43,7 +43,7 @@ def should_retry_response(response: requests.Response) -> bool:
 
 def should_retry_exception(exception: Exception) -> bool:
     """
-    Determine if an exception should trigger a retry.
+    Determina se un'eccezione dovrebbe attivare un retry.
     """
     for exc_type in DEFAULT_RETRY_CONFIG["retry_on_exceptions"]:
         if isinstance(exception, exc_type):
@@ -53,15 +53,15 @@ def should_retry_exception(exception: Exception) -> bool:
 
 def calculate_backoff(attempt: int, config: Dict) -> float:
     """
-    Calculate backoff delay for a given attempt.
-    Includes jitter to avoid thundering herd.
+    Calcola il ritardo di backoff per un tentativo specifico.
+    Include jitter per evitare thundering herd.
     """
     delay = min(
         config["initial_delay"] * (config["backoff_factor"] ** attempt),
         config["max_delay"]
     )
     if config["jitter"]:
-        # Add jitter: random value between 0.5 * delay and 1.5 * delay
+        # Aggiunge jitter: valore casuale tra 0.5 * delay e 1.5 * delay
         delay = delay * (0.5 + random.random())
     return delay
 
@@ -74,20 +74,20 @@ def retry_http(
     **kwargs
 ) -> T:
     """
-    Retry an HTTP function with exponential backoff.
+    Riprova una funzione HTTP con backoff esponenziale.
     
     Args:
-        func: Function to retry (should return requests.Response or raise)
-        *args: Arguments to pass to func
-        config: Retry configuration (uses DEFAULT_RETRY_CONFIG if None)
-        logger_instance: Logger to use (uses module logger if None)
-        **kwargs: Keyword arguments to pass to func
+        func: Funzione da riprovare (dovrebbe restituire requests.Response o sollevare)
+        *args: Argomenti da passare a func
+        config: Configurazione di retry (usa DEFAULT_RETRY_CONFIG se None)
+        logger_instance: Logger da usare (usa logger del modulo se None)
+        **kwargs: Argomenti chiave da passare a func
         
     Returns:
-        Result of successful function call
+        Risultato della chiamata di funzione riuscita
         
     Raises:
-        Last exception if all retries fail
+        Ultima eccezione se tutti i retry falliscono
     """
     if config is None:
         config = DEFAULT_RETRY_CONFIG
@@ -101,22 +101,22 @@ def retry_http(
         try:
             response = func(*args, **kwargs)
             
-            # If we got a response, check if it's retryable
+            # Se abbiamo ricevuto una risposta, controlla se è retryable
             if isinstance(response, requests.Response):
                 last_response = response
                 if should_retry_response(response):
                     if attempt < config["max_attempts"] - 1:
                         delay = calculate_backoff(attempt, config)
                         logger_instance.warning(
-                            f"Retryable HTTP {response.status_code} on attempt {attempt + 1}/{config['max_attempts']}. "
-                            f"Retrying in {delay:.2f}s"
+                            f"Risposta retryable HTTP {response.status_code} al tentativo {attempt + 1}/{config['max_attempts']}. "
+                            f"Riprovo tra {delay:.2f}s"
                         )
                         time.sleep(delay)
                         continue
                     else:
                         raise RetryableHTTPError(
                             response.status_code,
-                            f"Max retries ({config['max_attempts']}) exceeded for HTTP {response.status_code}"
+                            f"Massimo numero di tentativi ({config['max_attempts']}) superato per HTTP {response.status_code}"
                         )
                 return response
             return response
@@ -127,24 +127,24 @@ def retry_http(
                 if attempt < config["max_attempts"] - 1:
                     delay = calculate_backoff(attempt, config)
                     logger_instance.warning(
-                        f"Retryable exception {type(e).__name__}: {str(e)} on attempt {attempt + 1}/{config['max_attempts']}. "
-                        f"Retrying in {delay:.2f}s"
+                        f"Eccezione retryable {type(e).__name__}: {str(e)} al tentativo {attempt + 1}/{config['max_attempts']}. "
+                        f"Riprovo tra {delay:.2f}s"
                     )
                     time.sleep(delay)
                     continue
                 else:
                     logger_instance.error(
-                        f"Max retries ({config['max_attempts']}) exceeded for exception {type(e).__name__}: {str(e)}"
+                        f"Massimo numero di tentativi ({config['max_attempts']}) superato per eccezione {type(e).__name__}: {str(e)}"
                     )
-            # If not retryable or max retries reached, re-raise
+            # Se non è retryable o massimo tentativi raggiunto, rilancia
             raise
     
-    # Should not reach here, but just in case
+    # Non dovrebbe raggiungere qui, ma per sicurezza
     if last_exception:
         raise last_exception
     if last_response:
         raise RetryableHTTPError(
             last_response.status_code,
-            f"Max retries exceeded without successful response"
+            f"Massimo numero di tentativi superato senza risposta riuscita"
         )
-    raise RuntimeError("Retry logic completed without result or exception")
+    raise RuntimeError("Logica di retry completata senza risultato o eccezione")

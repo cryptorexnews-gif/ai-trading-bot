@@ -1,1 +1,1 @@
-# Utils package for Hyperliquid Trading Bot
+# Pacchetto utils per Hyperliquid Trading Bot

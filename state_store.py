@@ -35,7 +35,7 @@ class StateStore:
         }
 
     def _atomic_write(self, path: str, data: Dict[str, Any]) -> None:
-        """Write to a temp file then rename for crash safety."""
+        """Scrivi su file temp poi rinomina per sicurezza crash."""
         os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
         tmp_path = path + ".tmp"
         with open(tmp_path, "w", encoding="utf-8") as file_obj:
@@ -50,7 +50,7 @@ class StateStore:
         try:
             with open(self.state_path, "r", encoding="utf-8") as file_obj:
                 data = json.load(file_obj)
-                # Ensure all default keys exist (migration safety)
+                # Assicura che tutte le chiavi predefinite esistano (sicurezza migrazione)
                 defaults = self._default_state()
                 for key, value in defaults.items():
                     if key not in data:
@@ -96,21 +96,21 @@ class StateStore:
         state: Dict[str, Any],
         trade: Dict[str, Any]
     ) -> None:
-        """Add a trade record to history, keeping last 100 trades."""
+        """Aggiungi record trade alla storia, mantieni ultimi 100 trade."""
         history = state.get("trade_history", [])
         history.append(trade)
-        # Keep only last 100 trades to prevent unbounded growth
+        # Mantieni solo ultimi 100 trade per evitare crescita illimitata
         if len(history) > 100:
             history = history[-100:]
         state["trade_history"] = history
 
     def get_recent_trades(self, state: Dict[str, Any], count: int = 5) -> List[Dict[str, Any]]:
-        """Get the most recent trades."""
+        """Ottieni i trade più recenti."""
         history = state.get("trade_history", [])
         return history[-count:] if history else []
 
     def get_performance_summary(self, state: Dict[str, Any]) -> Dict[str, Any]:
-        """Calculate performance summary from trade history."""
+        """Calcola riepilogo performance dalla storia trade."""
         history = state.get("trade_history", [])
         if not history:
             return {"total_trades": 0, "win_rate": 0.0, "total_pnl": "0"}

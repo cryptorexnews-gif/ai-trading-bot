@@ -4,8 +4,8 @@ from typing import Any, Optional
 
 def to_decimal(value: Any, default: Optional[Decimal] = None) -> Decimal:
     """
-    Convert any value to Decimal with proper error handling.
-    Returns default if conversion fails, or Decimal(0) if no default.
+    Converte qualsiasi valore in Decimal con gestione degli errori appropriata.
+    Restituisce il valore predefinito se la conversione fallisce, o Decimal(0) se non è specificato.
     """
     if value is None:
         return default if default is not None else Decimal("0")
@@ -17,7 +17,7 @@ def to_decimal(value: Any, default: Optional[Decimal] = None) -> Decimal:
 
 def to_int(value: Any, default: Optional[int] = None) -> int:
     """
-    Convert to int with proper error handling.
+    Converte in int con gestione degli errori appropriata.
     """
     if value is None:
         return default if default is not None else 0
@@ -29,15 +29,15 @@ def to_int(value: Any, default: Optional[int] = None) -> int:
 
 def normalize_decimal(value: Decimal) -> Decimal:
     """
-    Normalize a Decimal to remove trailing zeros and scientific notation.
-    Useful for consistent serialization and comparison.
+    Normalizza un Decimal rimuovendo zeri finali e notazione scientifica.
+    Utile per una serializzazione e confronto coerenti.
     """
     return value.normalize() if value is not None else Decimal("0")
 
 
 def quantize_price(price: Decimal, tick_size: Decimal) -> Decimal:
     """
-    Round price to the nearest tick size.
+    Arrotonda il prezzo al tick size più vicino.
     """
     if tick_size <= 0:
         return price
@@ -46,7 +46,7 @@ def quantize_price(price: Decimal, tick_size: Decimal) -> Decimal:
 
 def quantize_with_precision(value: Decimal, precision: int) -> Decimal:
     """
-    Round value to a specific number of decimal places.
+    Arrotonda il valore a un numero specifico di posizioni decimali.
     """
     if precision < 0:
         return value
@@ -56,7 +56,7 @@ def quantize_with_precision(value: Decimal, precision: int) -> Decimal:
 
 def calculate_margin(size: Decimal, price: Decimal, leverage: Decimal) -> Decimal:
     """
-    Calculate required margin for a position.
+    Calcola il margine richiesto per una posizione.
     """
     if leverage <= 0:
         return Decimal("0")
@@ -65,14 +65,14 @@ def calculate_margin(size: Decimal, price: Decimal, leverage: Decimal) -> Decima
 
 def calculate_position_value(size: Decimal, price: Decimal) -> Decimal:
     """
-    Calculate total position value (notional).
+    Calcola il valore totale della posizione (notionale).
     """
     return abs(size * price)
 
 
 def calculate_pnl_percentage(entry_price: Decimal, current_price: Decimal, is_long: bool) -> Decimal:
     """
-    Calculate unrealized PnL percentage.
+    Calcola la percentuale di PnL non realizzata.
     """
     if entry_price == 0:
         return Decimal("0")
@@ -84,44 +84,44 @@ def calculate_pnl_percentage(entry_price: Decimal, current_price: Decimal, is_lo
 
 def is_valid_price(price: Decimal, min_price: Decimal = Decimal("0")) -> bool:
     """
-    Check if price is valid (positive and above minimum).
+    Verifica se il prezzo è valido (positivo e sopra il minimo).
     """
     return price > min_price
 
 
 def is_valid_size(size: Decimal, min_size: Decimal = Decimal("0")) -> bool:
     """
-    Check if size is valid (positive and above minimum).
+    Verifica se la dimensione è valida (positiva e sopra il minimo).
     """
     return size >= min_size
 
 
 def clamp(value: Decimal, min_val: Decimal, max_val: Decimal) -> Decimal:
     """
-    Clamp a value between min and max.
+    Limita un valore tra min e max.
     """
     return max(min_val, min(value, max_val))
 
 
 def percentage_of(value: Decimal, percent: Decimal) -> Decimal:
     """
-    Calculate percentage of a value.
-    percent should be in decimal form (e.g., 0.05 for 5%).
+    Calcola la percentuale di un valore.
+    percent dovrebbe essere in forma decimale (es. 0.05 per 5%).
     """
     return value * percent
 
 
 def add_percentage(value: Decimal, percent: Decimal) -> Decimal:
     """
-    Add percentage to a value.
-    percent should be in decimal form (e.g., 0.05 for 5%).
+    Aggiunge una percentuale a un valore.
+    percent dovrebbe essere in forma decimale (es. 0.05 per 5%).
     """
     return value * (Decimal("1") + percent)
 
 
 def subtract_percentage(value: Decimal, percent: Decimal) -> Decimal:
     """
-    Subtract percentage from a value.
-    percent should be in decimal form (e.g., 0.05 for 5%).
+    Sottrae una percentuale da un valore.
+    percent dovrebbe essere in forma decimale (es. 0.05 per 5%).
     """
     return value * (Decimal("1") - percent)
