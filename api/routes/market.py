@@ -64,10 +64,8 @@ def candles():
 @market_bp.route("/api/orderbook", methods=["GET"])
 @require_api_key
 def orderbook():
-    """Get L2 order book from Hyperliquid."""
+    """Get L2 order book from Hyperliquid. Returns ALL available levels."""
     coin = request.args.get("coin", "BTC").upper()
-    nlevels = request.args.get("levels", 30, type=int)
-    nlevels = min(nlevels, 50)
 
     data = post_hyperliquid_info({
         "type": "l2Book",
@@ -81,8 +79,9 @@ def orderbook():
     bids_raw = levels[0] if len(levels) > 0 else []
     asks_raw = levels[1] if len(levels) > 1 else []
 
+    # Pass ALL levels — no artificial cap
     bids = []
-    for b in bids_raw[:nlevels]:
+    for b in bids_raw:
         bids.append({
             "price": float(b.get("px", 0)),
             "size": float(b.get("sz", 0)),
@@ -90,7 +89,7 @@ def orderbook():
         })
 
     asks = []
-    for a in asks_raw[:nlevels]:
+    for a in asks_raw:
         asks.append({
             "price": float(a.get("px", 0)),
             "size": float(a.get("sz", 0)),
@@ -112,5 +111,7 @@ def orderbook():
         "coin": coin,
         "spread": round(spread, 6),
         "spread_pct": round(spread_pct, 4),
+        "bid_levels": len(bids),
+        "ask_levels": len(asks),
         "timestamp": time.time()
     })

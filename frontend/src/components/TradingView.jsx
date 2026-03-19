@@ -23,7 +23,7 @@ export default function TradingView({ tradingPairs }) {
   const [obLoading, setObLoading] = useState(true)
   const [lastPrice, setLastPrice] = useState(null)
   const [stats24h, setStats24h] = useState(null)
-  const [obLevels, setObLevels] = useState(15)
+  const [obLevels, setObLevels] = useState(25)
   const [tickSize, setTickSize] = useState(0)
   const mountedRef = useRef(true)
   const prevBidsRef = useRef({})
@@ -71,10 +71,10 @@ export default function TradingView({ tradingPairs }) {
     } catch { setChartLoading(false) }
   }, [selectedCoin, interval])
 
-  // ─── Fetch order book (request 30 levels to support 25-level display) ──
+  // ─── Fetch ALL order book levels ───────────────────────────────────────
   const fetchOrderBook = useCallback(async () => {
     try {
-      const res = await fetch(`/api/orderbook?coin=${selectedCoin}&levels=30`, { headers: getHeaders() })
+      const res = await fetch(`/api/orderbook?coin=${selectedCoin}`, { headers: getHeaders() })
       if (!res.ok) return
       const data = await res.json()
       if (!mountedRef.current) return
@@ -112,6 +112,10 @@ export default function TradingView({ tradingPairs }) {
 
   const isPositive = stats24h ? stats24h.change >= 0 : true
   const changePct = stats24h ? stats24h.change.toFixed(2) : null
+
+  // Total available levels for the "All" option
+  const totalBidLevels = bids.length
+  const totalAskLevels = asks.length
 
   return (
     <div className="bg-gray-900 rounded-xl border border-gray-800 overflow-hidden">
@@ -172,6 +176,8 @@ export default function TradingView({ tradingPairs }) {
           prevBids={prevBidsRef.current}
           prevAsks={prevAsksRef.current}
           panelHeight={PANEL_HEIGHT}
+          totalBidLevels={totalBidLevels}
+          totalAskLevels={totalAskLevels}
         />
       </div>
     </div>
