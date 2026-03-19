@@ -6,7 +6,7 @@ WORKDIR /app
 COPY package.json ./
 COPY frontend/ ./frontend/
 
-# Install frontend dependencies
+# Install frontend dependencies with npm
 WORKDIR /app/frontend
 RUN npm install
 
