@@ -2,15 +2,18 @@ import json
 import logging
 import os
 import re
+import time
 from decimal import Decimal
 from typing import Any, Dict, List, Optional
 
 import requests
 
 from models import MarketData, PortfolioState, TradingAction
-from utils.retry import retry_http
 
 logger = logging.getLogger(__name__)
+
+# Status codes that are retryable
+RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
 
 
 class LLMEngine:
@@ -32,6 +35,8 @@ class LLMEngine:
         self.model = model
         self.max_tokens = max_tokens
         self.temperature = temperature
+        self.request_timeout = 90  # Claude Opus 4.6 can take longer
+        self.max_retries = 2
         self.session = requests.Session()
         self.session.headers.update({
             "Authorization": f"Bearer {self.api_key}",
@@ -39,7 +44,7 @@ class LLMEngine:
             "HTTP-Referer": "https://github.com/hyperliquid-trading-bot",
             "X-Title": "Hyperliquid Trading Bot"
         })
-        logger.info(f"LLM Engine initialized with model={self.model}")
+        logger.info(f"LLM Engine initialized with model={self.model}, timeout={self.request_timeout}s")
 
     def _format_positions(self, positions: Dict[str, Dict[str, Any]]) -> str:
         """Format positions for the prompt."""
@@ -202,7 +207,7 @@ Respond with this exact JSON structure:
         except (ValueError, AttributeError):
             pass
 
-        logger.error(f"All JSON parsing strategies failed. Response preview: {cleaned[:300]}...")
+        logger.error(f"All JSON parsing strategies failed. Response preview: {cleaned[:500]}...")
         return None
 
     def _validate_decision(self, parsed: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -248,6 +253,64 @@ Respond with this exact JSON structure:
             "reasoning": str(parsed.get("reasoning", ""))
         }
 
+    def _call_openrouter(self, payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Call OpenRouter API with retry logic for transient errors."""
+        last_error = None
+
+        for attempt in range(self.max_retries + 1):
+            try:
+                response = self.session.post(
+                    f"{self.base_url}/chat/completions",
+                    json=payload,
+                    timeout=self.request_timeout
+                )
+
+                if response.status_code == 200:
+                    return response.json()
+
+                if response.status_code in RETRYABLE_STATUS_CODES:
+                    body_preview = response.text[:200] if response.text else "empty"
+                    logger.warning(
+                        f"OpenRouter retryable error: status={response.status_code}, "
+                        f"attempt={attempt + 1}/{self.max_retries + 1}, body={body_preview}"
+                    )
+                    if attempt < self.max_retries:
+                        wait = (attempt + 1) * 3
+                        time.sleep(wait)
+                        continue
+                    last_error = f"HTTP {response.status_code} after {self.max_retries + 1} attempts"
+                else:
+                    body_preview = response.text[:300] if response.text else "empty"
+                    logger.error(
+                        f"OpenRouter non-retryable error: status={response.status_code}, body={body_preview}"
+                    )
+                    return None
+
+            except requests.exceptions.Timeout:
+                logger.warning(
+                    f"OpenRouter timeout ({self.request_timeout}s), "
+                    f"attempt={attempt + 1}/{self.max_retries + 1}"
+                )
+                last_error = "timeout"
+                if attempt < self.max_retries:
+                    time.sleep(2)
+                    continue
+            except requests.exceptions.ConnectionError as e:
+                logger.warning(
+                    f"OpenRouter connection error: {e}, "
+                    f"attempt={attempt + 1}/{self.max_retries + 1}"
+                )
+                last_error = str(e)
+                if attempt < self.max_retries:
+                    time.sleep(2)
+                    continue
+            except requests.exceptions.RequestException as e:
+                logger.error(f"OpenRouter request failed (non-retryable): {e}")
+                return None
+
+        logger.error(f"OpenRouter all retries exhausted. Last error: {last_error}")
+        return None
+
     def get_trading_decision(
         self,
         market_data: MarketData,
@@ -283,71 +346,46 @@ Respond with this exact JSON structure:
             "stream": False
         }
 
-        try:
-            response = self.session.post(
-                f"{self.base_url}/chat/completions",
-                json=payload,
-                timeout=60
+        data = self._call_openrouter(payload)
+        if data is None:
+            return None
+
+        # Check for API-level errors
+        if "error" in data:
+            logger.error(f"OpenRouter returned error: {data['error']}")
+            return None
+
+        choices = data.get("choices", [])
+        if not choices:
+            logger.error("OpenRouter returned empty choices")
+            return None
+
+        message = choices[0].get("message", {})
+        content = message.get("content", "")
+
+        if not content:
+            logger.error("Empty content in LLM response")
+            return None
+
+        # Log usage info
+        usage = data.get("usage", {})
+        if usage:
+            logger.info(
+                f"LLM usage: prompt_tokens={usage.get('prompt_tokens', 0)}, "
+                f"completion_tokens={usage.get('completion_tokens', 0)}, "
+                f"total_tokens={usage.get('total_tokens', 0)}"
             )
 
-            if response.status_code == 429:
-                logger.warning("OpenRouter rate limited. Returning None.")
-                return None
-
-            if response.status_code != 200:
-                logger.error(
-                    f"OpenRouter API error: status={response.status_code}"
-                )
-                return None
-
-            data = response.json()
-
-            # Check for API-level errors
-            if "error" in data:
-                logger.error(f"OpenRouter returned error: {data['error']}")
-                return None
-
-            choices = data.get("choices", [])
-            if not choices:
-                logger.error("OpenRouter returned empty choices")
-                return None
-
-            message = choices[0].get("message", {})
-            content = message.get("content", "")
-
-            if not content:
-                logger.error("Empty content in LLM response")
-                return None
-
-            # Log usage info
-            usage = data.get("usage", {})
-            if usage:
-                logger.info(
-                    f"LLM usage: prompt_tokens={usage.get('prompt_tokens', 0)}, "
-                    f"completion_tokens={usage.get('completion_tokens', 0)}, "
-                    f"total_tokens={usage.get('total_tokens', 0)}"
-                )
-
-            parsed = self._parse_llm_response(content)
-            if not parsed:
-                logger.error("Failed to parse LLM response")
-                return None
-
-            validated = self._validate_decision(parsed)
-            if validated:
-                logger.info(
-                    f"LLM decision for {market_data.coin}: "
-                    f"action={validated['action']}, size={validated['size']}, "
-                    f"leverage={validated['leverage']}, confidence={validated['confidence']}"
-                )
-            return validated
-
-        except requests.exceptions.Timeout:
-            logger.error("LLM API request timed out (60s)")
+        parsed = self._parse_llm_response(content)
+        if not parsed:
+            logger.error("Failed to parse LLM response")
             return None
-        except requests.exceptions.ConnectionError as e:
-            logger.error(f"LLM API connection error: {e}")
-            return None
-        except requests.exceptions.RequestException as e:
-            logger.error(f"LLM API request failed: {e}")
-            return None
+
+        validated = self._validate_decision(parsed)
+        if validated:
+            logger.info(
+                f"LLM decision for {market_data.coin}: "
+                f"action={validated['action']}, size={validated['size']}, "
+                f"leverage={validated['leverage']}, confidence={validated['confidence']}"
+            )
+        return validated

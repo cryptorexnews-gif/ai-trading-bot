@@ -15,7 +15,7 @@ class RiskManager:
         max_order_margin_pct: Decimal,
         trade_cooldown_sec: int,
         daily_notional_limit_usd: Decimal,
-        volatility_multiplier: Decimal = Decimal("1.5")  # New: adjust size based on volatility
+        volatility_multiplier: Decimal = Decimal("1.5")
     ):
         self.min_size_by_coin = min_size_by_coin
         self.hard_max_leverage = hard_max_leverage
@@ -47,7 +47,7 @@ class RiskManager:
         last_trade_timestamp_by_coin: Dict[str, float],
         daily_notional_used: Decimal,
         now_ts: float,
-        volatility: Decimal = Decimal("0")  # New param for volatility
+        volatility: Decimal = Decimal("0")
     ) -> Tuple[bool, str]:
         action = str(order.get("action", "")).strip().lower()
         size = self._safe_decimal(order.get("size", 0))
@@ -89,7 +89,9 @@ class RiskManager:
 
             # Apply volatility adjustment to size
             adjusted_size = self._calculate_volatility_adjusted_size(size, volatility)
-            if adjusted_size < self.min_size_by_coin.get(coin, Decimal("0")):
+
+            min_size = self.min_size_by_coin.get(coin, Decimal("0"))
+            if adjusted_size < min_size:
                 return False, "adjusted_size_below_min"
 
             required_margin = (adjusted_size * market_price) / leverage
@@ -106,5 +108,8 @@ class RiskManager:
             projected_daily = daily_notional_used + (adjusted_size * market_price)
             if projected_daily > self.daily_notional_limit_usd:
                 return False, "daily_notional_cap_exceeded"
+
+            # Write the adjusted size back into the order so execution uses it
+            order["size"] = adjusted_size
 
         return True, "ok"

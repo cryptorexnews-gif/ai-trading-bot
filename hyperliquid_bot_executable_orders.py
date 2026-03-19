@@ -7,6 +7,7 @@ All market data sourced exclusively from Hyperliquid API.
 
 import logging
 import os
+import signal
 import sys
 import time
 from decimal import Decimal
@@ -81,10 +82,23 @@ class HyperliquidBot:
     """Main trading bot class using Claude Opus 4.6 and Hyperliquid-only data."""
 
     def __init__(self):
+        self._shutdown_requested = False
         self._setup_logging()
         self._validate_config()
         self._init_components()
+        self._setup_signal_handlers()
         self._mask_wallet = lambda addr: f"{addr[:6]}...{addr[-4:]}" if addr and len(addr) >= 10 else "unknown"
+
+    def _setup_signal_handlers(self):
+        """Setup graceful shutdown on SIGINT/SIGTERM."""
+        signal.signal(signal.SIGINT, self._handle_shutdown)
+        signal.signal(signal.SIGTERM, self._handle_shutdown)
+
+    def _handle_shutdown(self, signum, frame):
+        """Handle shutdown signal gracefully."""
+        sig_name = signal.Signals(signum).name
+        logging.info(f"Received {sig_name}, initiating graceful shutdown...")
+        self._shutdown_requested = True
 
     def _validate_config(self):
         """Validate configuration at startup."""
@@ -193,16 +207,19 @@ class HyperliquidBot:
 
         return PortfolioState(total_balance, available_balance, margin_usage, positions)
 
-    def _get_market_data(self, coin: str) -> Optional[MarketData]:
-        """Fetch market data for a coin exclusively from Hyperliquid."""
+    def _get_market_data_and_technicals(self, coin: str):
+        """
+        Fetch market data and technical indicators for a coin in a single call.
+        Returns (MarketData, tech_data_dict) or (None, None) on failure.
+        """
         tech_data = technical_fetcher.get_technical_indicators(coin)
         if not tech_data:
             logging.warning(f"No technical data available for {coin}")
-            return None
+            return None, None
 
         funding_rate = tech_data.get("funding_rate", Decimal("0"))
 
-        return MarketData(
+        market_data = MarketData(
             coin=coin,
             last_price=tech_data["current_price"],
             change_24h=tech_data["change_24h"],
@@ -210,6 +227,8 @@ class HyperliquidBot:
             funding_rate=funding_rate,
             timestamp=time.time()
         )
+
+        return market_data, tech_data
 
     def _get_fallback_decision(self) -> Dict[str, Any]:
         """Fallback decision when LLM is disabled or fails."""
@@ -220,6 +239,12 @@ class HyperliquidBot:
             "confidence": Decimal("0.5"),
             "reasoning": f"Fallback: {SAFE_FALLBACK_MODE} mode - holding for safety"
         }
+
+    def _get_daily_notional_used(self, state: Dict[str, Any]) -> Decimal:
+        """Get today's notional usage, resetting if it's a new day."""
+        today_key = self.state_store.day_key(time.time())
+        daily_by_day = state.get("daily_notional_by_day", {})
+        return Decimal(str(daily_by_day.get(today_key, "0")))
 
     def _run_trading_cycle(self) -> bool:
         """Run a single trading cycle."""
@@ -239,8 +264,12 @@ class HyperliquidBot:
                 f"positions={len(portfolio_state.positions)}"
             )
 
+            if portfolio_state.total_balance <= 0:
+                logging.warning("Portfolio balance is zero or negative, skipping cycle")
+                return True
+
             state = self.state_store.load_state()
-            daily_notional_used = Decimal(str(state.get("daily_notional_total", "0")))
+            daily_notional_used = self._get_daily_notional_used(state)
 
             # Get all mid prices from Hyperliquid for market overview
             all_mids = technical_fetcher.get_all_mids()
@@ -248,14 +277,18 @@ class HyperliquidBot:
             trades_executed = 0
 
             for coin in TRADING_PAIRS:
+                if self._shutdown_requested:
+                    logging.info("Shutdown requested, stopping coin analysis")
+                    break
+
                 if trades_executed >= MAX_TRADES_PER_CYCLE:
                     logging.info(f"Max trades per cycle ({MAX_TRADES_PER_CYCLE}) reached")
                     break
 
                 logging.info(f"--- Analyzing {coin} ---")
 
-                # Get market data from Hyperliquid
-                market_data = self._get_market_data(coin)
+                # Get market data AND technical indicators in one call (no duplicate)
+                market_data, tech_data = self._get_market_data_and_technicals(coin)
                 if not market_data:
                     logging.warning(f"Skipping {coin}: no market data")
                     continue
@@ -265,9 +298,6 @@ class HyperliquidBot:
                     f"24h_change={float(market_data.change_24h) * 100:.2f}%, "
                     f"funding={float(market_data.funding_rate):.6f}%"
                 )
-
-                # Get technical indicators from Hyperliquid candles
-                tech_data = technical_fetcher.get_technical_indicators(coin)
 
                 # Get funding data from Hyperliquid
                 funding_data = technical_fetcher.get_funding_for_coin(coin)
@@ -295,7 +325,7 @@ class HyperliquidBot:
                     f"confidence={decision['confidence']}"
                 )
 
-                # Risk check
+                # Risk check (may adjust size in-place for volatility)
                 volatility = Decimal("0")
                 if tech_data and tech_data.get("intraday_atr", Decimal("0")) > 0 and market_data.last_price > 0:
                     volatility = tech_data["intraday_atr"] / market_data.last_price
@@ -311,7 +341,7 @@ class HyperliquidBot:
                     self.metrics.increment("risk_rejections_total")
                     continue
 
-                # Execute
+                # Execute (decision['size'] may have been adjusted by risk manager)
                 result = self.execution_engine.execute(
                     coin, decision, market_data, portfolio_state.positions
                 )
@@ -333,8 +363,19 @@ class HyperliquidBot:
                     self.metrics.increment("execution_failures_total")
                     logging.warning(f"{coin} execution failed: {result.get('reason', 'unknown')}")
 
-            # Update state
-            state["daily_notional_total"] = str(daily_notional_used)
+            # Update state with proper daily tracking
+            state["daily_notional_by_day"] = self.state_store.add_daily_notional(
+                state.get("daily_notional_by_day", {}),
+                time.time(),
+                daily_notional_used - self._get_daily_notional_used(state)
+            )
+            # Update peak portfolio value
+            peak = Decimal(str(state.get("peak_portfolio_value", "0")))
+            if portfolio_state.total_balance > peak:
+                state["peak_portfolio_value"] = str(portfolio_state.total_balance)
+                self.metrics.set_gauge("peak_portfolio_value", portfolio_state.total_balance)
+
+            state["consecutive_failed_cycles"] = 0
             self.state_store.save_state(state)
 
             cycle_duration = time.time() - cycle_start
@@ -348,9 +389,14 @@ class HyperliquidBot:
             )
 
         except Exception as e:
-            logging.error(f"Cycle failed with exception: {type(e).__name__}: {e}")
+            logging.error(f"Cycle failed with exception: {type(e).__name__}: {e}", exc_info=True)
             success = False
             self.metrics.increment("cycles_failed")
+
+            # Track consecutive failures in state
+            state = self.state_store.load_state()
+            state["consecutive_failed_cycles"] = state.get("consecutive_failed_cycles", 0) + 1
+            self.state_store.save_state(state)
 
         return success
 
@@ -381,7 +427,7 @@ class HyperliquidBot:
 
         consecutive_failures = 0
 
-        while True:
+        while not self._shutdown_requested:
             if self._run_trading_cycle():
                 consecutive_failures = 0
             else:
@@ -397,8 +443,20 @@ class HyperliquidBot:
                 logging.info("Single cycle mode: exiting")
                 break
 
+            # Interruptible sleep
             logging.info("Waiting 60 seconds before next cycle...")
-            time.sleep(60)
+            for _ in range(60):
+                if self._shutdown_requested:
+                    break
+                time.sleep(1)
+
+        # Graceful shutdown
+        logging.info("=" * 60)
+        logging.info("BOT SHUTTING DOWN GRACEFULLY")
+        state = self.state_store.load_state()
+        self.state_store.save_state(state)
+        logging.info("State saved. Goodbye.")
+        logging.info("=" * 60)
 
 
 def main():

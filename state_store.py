@@ -30,27 +30,39 @@ class StateStore:
             "daily_notional_total": "0"
         }
 
+    def _atomic_write(self, path: str, data: Dict[str, Any]) -> None:
+        """Write to a temp file then rename for crash safety."""
+        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+        tmp_path = path + ".tmp"
+        with open(tmp_path, "w", encoding="utf-8") as file_obj:
+            json.dump(data, file_obj, ensure_ascii=False, indent=2)
+            file_obj.flush()
+            os.fsync(file_obj.fileno())
+        os.replace(tmp_path, path)
+
     def load_state(self) -> Dict[str, Any]:
         if not os.path.exists(self.state_path):
             return self._default_state()
-        with open(self.state_path, "r", encoding="utf-8") as file_obj:
-            return json.load(file_obj)
+        try:
+            with open(self.state_path, "r", encoding="utf-8") as file_obj:
+                return json.load(file_obj)
+        except (json.JSONDecodeError, IOError):
+            return self._default_state()
 
     def save_state(self, state: Dict[str, Any]) -> None:
-        os.makedirs(os.path.dirname(self.state_path) or ".", exist_ok=True)
-        with open(self.state_path, "w", encoding="utf-8") as file_obj:
-            json.dump(state, file_obj, ensure_ascii=False, indent=2)
+        self._atomic_write(self.state_path, state)
 
     def load_metrics(self) -> Dict[str, Any]:
         if not os.path.exists(self.metrics_path):
             return self._default_metrics()
-        with open(self.metrics_path, "r", encoding="utf-8") as file_obj:
-            return json.load(file_obj)
+        try:
+            with open(self.metrics_path, "r", encoding="utf-8") as file_obj:
+                return json.load(file_obj)
+        except (json.JSONDecodeError, IOError):
+            return self._default_metrics()
 
     def save_metrics(self, metrics: Dict[str, Any]) -> None:
-        os.makedirs(os.path.dirname(self.metrics_path) or ".", exist_ok=True)
-        with open(self.metrics_path, "w", encoding="utf-8") as file_obj:
-            json.dump(metrics, file_obj, ensure_ascii=False, indent=2)
+        self._atomic_write(self.metrics_path, metrics)
 
     def day_key(self, ts: float) -> str:
         return time.strftime("%Y-%m-%d", time.gmtime(ts))

@@ -1,7 +1,6 @@
-requests==2.31.0
-eth-account==0.8.0
-pycryptodome==3.19.0
-msgpack==1.0.7
-python-decimal==1.0.0
-python-dotenv==1.0.0
-web3==6.11.0
+requests>=2.31.0,<3.0.0
+eth-account>=0.11.0,<1.0.0
+pycryptodome>=3.19.0,<4.0.0
+msgpack>=1.0.7,<2.0.0
+python-dotenv>=1.0.0,<2.0.0
+web3>=6.15.0,<7.0.0

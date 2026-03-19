@@ -11,7 +11,9 @@ class ExecutionEngine:
         self.allowed_actions = {action.value for action in TradingAction}
 
     def _safe_decimal(self, value: Any, default: Decimal = Decimal("0")) -> Decimal:
-        return Decimal(str(value)) if value is not None else default
+        if value is None:
+            return default
+        return Decimal(str(value))
 
     def execute(
         self,
@@ -22,7 +24,7 @@ class ExecutionEngine:
     ) -> Dict[str, Any]:
         action = str(order.get("action", "")).strip().lower()
         size = self._safe_decimal(order.get("size", 0))
-        leverage = int(order.get("leverage", 1))
+        leverage = int(self._safe_decimal(order.get("leverage", 1)))
 
         if action not in self.allowed_actions:
             return {"success": False, "notional": Decimal("0"), "reason": "unknown_action"}
