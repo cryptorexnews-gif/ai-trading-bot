@@ -4,7 +4,6 @@ import { fmtPrice } from './formatters'
 
 /**
  * Group order book levels by tick size.
- * E.g. tick=10 groups prices into buckets of 10 ($87,410, $87,420, etc.)
  */
 function groupLevels(levels, tickSize, side) {
   if (!tickSize || tickSize <= 0) return levels
@@ -33,6 +32,22 @@ function groupLevels(levels, tickSize, side) {
   return result
 }
 
+const DEPTH_OPTIONS = [
+  { value: 1, label: '±1%' },
+  { value: 5, label: '±5%' },
+  { value: 10, label: '±10%' },
+  { value: 25, label: '±25%' },
+  { value: 50, label: '±50%' },
+]
+
+const LEVEL_OPTIONS = [
+  { value: 10, label: '10' },
+  { value: 25, label: '25' },
+  { value: 50, label: '50' },
+  { value: 100, label: '100' },
+  { value: 0, label: 'All' },
+]
+
 export default function OrderBookPanel({
   bids,
   asks,
@@ -45,6 +60,8 @@ export default function OrderBookPanel({
   tickSize,
   setTickSize,
   tickOptions,
+  depthPct,
+  setDepthPct,
   loading,
   prevBids,
   prevAsks,
@@ -76,60 +93,66 @@ export default function OrderBookPanel({
   const bidPct = totalBidSize + totalAskSize > 0 ? Math.round((totalBidSize / (totalBidSize + totalAskSize)) * 100) : 50
   const delta = bidPct - 50
 
-  // Calculate heights for asks/bids sections
-  const overhead = 130
+  // Calculate heights
+  const overhead = 160 // header + depth selector + col headers + spread + imbalance
   const availableHeight = panelHeight - overhead
   const halfHeight = Math.max(80, Math.floor(availableHeight / 2))
 
-  // Level options: 10, 25, 50, 100, All
-  const levelOptions = [
-    { value: 10, label: '10' },
-    { value: 25, label: '25' },
-    { value: 50, label: '50' },
-    { value: 100, label: '100' },
-    { value: 0, label: 'All' },
-  ]
-
   return (
     <div className="w-full lg:w-[290px] border-t lg:border-t-0 lg:border-l border-gray-800 flex flex-col" style={{ height: panelHeight }}>
-      {/* Header */}
-      <div className="flex items-center justify-between px-3 py-1.5 border-b border-gray-800 bg-gray-900/50">
+      {/* Header row 1: Title + level count */}
+      <div className="flex items-center justify-between px-3 py-1 border-b border-gray-800 bg-gray-900/50">
         <div className="flex items-center gap-1.5">
           <span className="text-[10px] text-gray-500 uppercase tracking-wider font-semibold">Order Book</span>
           <span className="text-[9px] text-gray-600">
             ({totalBidLevels}b/{totalAskLevels}a)
           </span>
         </div>
-        <div className="flex items-center gap-1.5">
-          {/* Tick size selector */}
-          <div className="flex gap-0.5">
-            {tickOptions.map(t => (
-              <button
-                key={t}
-                onClick={() => setTickSize(t)}
-                className={`text-[9px] px-1.5 py-0.5 rounded transition-colors ${
-                  tickSize === t ? 'bg-yellow-600 text-white' : 'text-gray-500 hover:text-gray-300 bg-gray-800'
-                }`}
-              >
-                {t === 0 ? 'Raw' : t}
-              </button>
-            ))}
-          </div>
-          <div className="w-px h-3 bg-gray-700" />
-          {/* Levels selector */}
-          <div className="flex gap-0.5">
-            {levelOptions.map(opt => (
-              <button
-                key={opt.value}
-                onClick={() => setObLevels(opt.value)}
-                className={`text-[9px] px-1.5 py-0.5 rounded transition-colors ${
-                  obLevels === opt.value ? 'bg-blue-600 text-white' : 'text-gray-500 hover:text-gray-300 bg-gray-800'
-                }`}
-              >
-                {opt.label}
-              </button>
-            ))}
-          </div>
+        {/* Depth % selector */}
+        <div className="flex gap-0.5">
+          {DEPTH_OPTIONS.map(d => (
+            <button
+              key={d.value}
+              onClick={() => setDepthPct(d.value)}
+              className={`text-[8px] px-1 py-0.5 rounded transition-colors ${
+                depthPct === d.value ? 'bg-purple-600 text-white' : 'text-gray-500 hover:text-gray-300 bg-gray-800'
+              }`}
+            >
+              {d.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Header row 2: Tick size + Levels */}
+      <div className="flex items-center justify-between px-3 py-1 border-b border-gray-800/70">
+        <div className="flex items-center gap-1">
+          <span className="text-[8px] text-gray-600 mr-0.5">Group:</span>
+          {tickOptions.map(t => (
+            <button
+              key={t}
+              onClick={() => setTickSize(t)}
+              className={`text-[8px] px-1 py-0.5 rounded transition-colors ${
+                tickSize === t ? 'bg-yellow-600 text-white' : 'text-gray-500 hover:text-gray-300 bg-gray-800'
+              }`}
+            >
+              {t === 0 ? 'Raw' : t}
+            </button>
+          ))}
+        </div>
+        <div className="flex items-center gap-1">
+          <span className="text-[8px] text-gray-600 mr-0.5">Show:</span>
+          {LEVEL_OPTIONS.map(opt => (
+            <button
+              key={opt.value}
+              onClick={() => setObLevels(opt.value)}
+              className={`text-[8px] px-1 py-0.5 rounded transition-colors ${
+                obLevels === opt.value ? 'bg-blue-600 text-white' : 'text-gray-500 hover:text-gray-300 bg-gray-800'
+              }`}
+            >
+              {opt.label}
+            </button>
+          ))}
         </div>
       </div>
 

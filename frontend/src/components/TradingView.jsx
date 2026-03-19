@@ -25,6 +25,7 @@ export default function TradingView({ tradingPairs }) {
   const [stats24h, setStats24h] = useState(null)
   const [obLevels, setObLevels] = useState(25)
   const [tickSize, setTickSize] = useState(0)
+  const [depthPct, setDepthPct] = useState(10)
   const mountedRef = useRef(true)
   const prevBidsRef = useRef({})
   const prevAsksRef = useRef({})
@@ -71,10 +72,10 @@ export default function TradingView({ tradingPairs }) {
     } catch { setChartLoading(false) }
   }, [selectedCoin, interval])
 
-  // ─── Fetch ALL order book levels ───────────────────────────────────────
+  // ─── Fetch ALL order book levels with depth filter ─────────────────────
   const fetchOrderBook = useCallback(async () => {
     try {
-      const res = await fetch(`/api/orderbook?coin=${selectedCoin}`, { headers: getHeaders() })
+      const res = await fetch(`/api/orderbook?coin=${selectedCoin}&depth_pct=${depthPct}`, { headers: getHeaders() })
       if (!res.ok) return
       const data = await res.json()
       if (!mountedRef.current) return
@@ -93,7 +94,7 @@ export default function TradingView({ tradingPairs }) {
       setSpreadPct(data.spread_pct || 0)
       setObLoading(false)
     } catch { setObLoading(false) }
-  }, [selectedCoin, bids, asks])
+  }, [selectedCoin, depthPct, bids, asks])
 
   useEffect(() => {
     mountedRef.current = true
@@ -108,12 +109,12 @@ export default function TradingView({ tradingPairs }) {
       window.clearInterval(chartTimer)
       window.clearInterval(obTimer)
     }
-  }, [selectedCoin, interval])
+  }, [selectedCoin, interval, depthPct])
 
   const isPositive = stats24h ? stats24h.change >= 0 : true
   const changePct = stats24h ? stats24h.change.toFixed(2) : null
 
-  // Total available levels for the "All" option
+  // Total available levels
   const totalBidLevels = bids.length
   const totalAskLevels = asks.length
 
@@ -172,6 +173,8 @@ export default function TradingView({ tradingPairs }) {
           tickSize={tickSize}
           setTickSize={setTickSize}
           tickOptions={tickOptions}
+          depthPct={depthPct}
+          setDepthPct={setDepthPct}
           loading={obLoading}
           prevBids={prevBidsRef.current}
           prevAsks={prevAsksRef.current}

@@ -67,32 +67,17 @@ def orderbook():
     """
     Get L2 order book from Hyperliquid with maximum depth.
     
-    Hyperliquid l2Book returns limited levels by default.
-    Using nSigFigs=5 gives us the most granular price levels.
-    We also try nSigFigs=2 for aggregated deep levels.
-    The two are merged to give both precision near the spread
-    and depth far from it.
+    Requests multiple nSigFigs levels (2,3,4,5) and merges them
+    to get both precision near the spread and depth far from it.
+    
+    Query params:
+      - coin: asset symbol (default: BTC)
+      - depth_pct: max distance from mid price as percentage (default: 50)
     """
     coin = request.args.get("coin", "BTC").upper()
+    depth_pct = request.args.get("depth_pct", 50, type=float)
+    depth_pct = min(max(depth_pct, 1), 50)  # Clamp 1-50%
 
-    # Request 1: High precision near the spread (nSigFigs=5)
-    data_precise = post_hyperliquid_info({
-        "type": "l2Book",
-        "coin": coin,
-        "nSigFigs": 5,
-    })
-
-    # Request 2: Aggregated deep levels (nSigFigs=2) for wider view
-    data_deep = post_hyperliquid_info({
-        "type": "l2Book",
-        "coin": coin,
-        "nSigFigs": 2,
-    })
-
-    if data_precise is None and data_deep is None:
-        return jsonify({"bids": [], "asks": [], "coin": coin, "timestamp": time.time()})
-
-    # Merge levels: use precise data as base, add deep levels not already present
     def parse_levels(raw_levels):
         result = []
         for level in (raw_levels or []):
@@ -103,47 +88,73 @@ def orderbook():
                 result.append({"price": px, "size": sz, "orders": n})
         return result
 
-    # Parse precise levels
-    precise_levels = data_precise.get("levels", [[], []]) if data_precise else [[], []]
-    bids_precise = parse_levels(precise_levels[0] if len(precise_levels) > 0 else [])
-    asks_precise = parse_levels(precise_levels[1] if len(precise_levels) > 1 else [])
+    # Request multiple aggregation levels for maximum depth
+    all_bids = {}
+    all_asks = {}
 
-    # Parse deep levels
-    deep_levels = data_deep.get("levels", [[], []]) if data_deep else [[], []]
-    bids_deep = parse_levels(deep_levels[0] if len(deep_levels) > 0 else [])
-    asks_deep = parse_levels(deep_levels[1] if len(deep_levels) > 1 else [])
+    for sig_figs in [2, 3, 4, 5]:
+        data = post_hyperliquid_info({
+            "type": "l2Book",
+            "coin": coin,
+            "nSigFigs": sig_figs,
+        })
+        if data is None:
+            continue
 
-    # Merge: precise levels take priority, add deep levels for prices not in precise
-    def merge_levels(precise, deep, sort_desc=True):
-        prices_seen = {level["price"] for level in precise}
-        merged = list(precise)
-        for level in deep:
-            if level["price"] not in prices_seen:
-                merged.append(level)
-                prices_seen.add(level["price"])
-        merged.sort(key=lambda x: x["price"], reverse=sort_desc)
-        return merged
+        levels = data.get("levels", [[], []])
+        raw_bids = parse_levels(levels[0] if len(levels) > 0 else [])
+        raw_asks = parse_levels(levels[1] if len(levels) > 1 else [])
 
-    bids = merge_levels(bids_precise, bids_deep, sort_desc=True)
-    asks = merge_levels(asks_precise, asks_deep, sort_desc=False)
+        # Higher nSigFigs = more precise = takes priority for same price
+        for b in raw_bids:
+            px = b["price"]
+            if px not in all_bids or sig_figs >= 4:
+                all_bids[px] = b
+
+        for a in raw_asks:
+            px = a["price"]
+            if px not in all_asks or sig_figs >= 4:
+                all_asks[px] = a
+
+    # Sort: bids descending, asks ascending
+    bids_sorted = sorted(all_bids.values(), key=lambda x: x["price"], reverse=True)
+    asks_sorted = sorted(all_asks.values(), key=lambda x: x["price"])
+
+    # Calculate mid price for depth filtering
+    mid_price = 0
+    if bids_sorted and asks_sorted:
+        mid_price = (bids_sorted[0]["price"] + asks_sorted[0]["price"]) / 2
+    elif bids_sorted:
+        mid_price = bids_sorted[0]["price"]
+    elif asks_sorted:
+        mid_price = asks_sorted[0]["price"]
+
+    # Filter by depth percentage from mid price
+    if mid_price > 0:
+        lower_bound = mid_price * (1 - depth_pct / 100)
+        upper_bound = mid_price * (1 + depth_pct / 100)
+        bids_sorted = [b for b in bids_sorted if b["price"] >= lower_bound]
+        asks_sorted = [a for a in asks_sorted if a["price"] <= upper_bound]
 
     # Calculate spread
     spread = 0
     spread_pct = 0
-    if bids and asks:
-        best_bid = bids[0]["price"]
-        best_ask = asks[0]["price"]
+    if bids_sorted and asks_sorted:
+        best_bid = bids_sorted[0]["price"]
+        best_ask = asks_sorted[0]["price"]
         spread = best_ask - best_bid
         mid = (best_ask + best_bid) / 2
         spread_pct = (spread / mid * 100) if mid > 0 else 0
 
     return jsonify({
-        "bids": bids,
-        "asks": asks,
+        "bids": bids_sorted,
+        "asks": asks_sorted,
         "coin": coin,
         "spread": round(spread, 6),
         "spread_pct": round(spread_pct, 4),
-        "bid_levels": len(bids),
-        "ask_levels": len(asks),
+        "bid_levels": len(bids_sorted),
+        "ask_levels": len(asks_sorted),
+        "mid_price": round(mid_price, 2),
+        "depth_pct": depth_pct,
         "timestamp": time.time()
     })
