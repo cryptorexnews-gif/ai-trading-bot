@@ -15,6 +15,7 @@ from typing import Any, Dict, List, Optional
 
 from dotenv import load_dotenv
 
+from bot_live_writer import write_live_status
 from exchange_client import HyperliquidExchangeClient
 from execution_engine import ExecutionEngine
 from llm_engine import LLMEngine
@@ -84,6 +85,9 @@ class HyperliquidBot:
 
     def __init__(self):
         self._shutdown_requested = False
+        self._cycle_count = 0
+        self._last_cycle_duration = 0.0
+        self._last_portfolio_state = None
         self._setup_logging()
         self._validate_config()
         self._init_components()
@@ -285,23 +289,50 @@ class HyperliquidBot:
                 f"consecutive_losses={summary['consecutive_losses']}"
             )
 
+    def _persist_metrics(self):
+        """Save current metrics to disk."""
+        metrics_data = self.metrics.get_all_metrics()
+        # Convert Decimals for JSON serialization
+        serializable = {}
+        for key, value in metrics_data.items():
+            if isinstance(value, Decimal):
+                serializable[key] = str(value)
+            elif isinstance(value, list):
+                serializable[key] = [float(v) if isinstance(v, (Decimal, float)) else v for v in value]
+            else:
+                serializable[key] = value
+        self.state_store.save_metrics(serializable)
+
     def _run_trading_cycle(self) -> bool:
         """Run a single trading cycle."""
         cycle_start = time.time()
+        self._cycle_count += 1
         success = True
 
         try:
             logging.info("=" * 60)
-            logging.info("Starting new trading cycle")
+            logging.info(f"Starting trading cycle #{self._cycle_count}")
 
             # Fetch portfolio state from Hyperliquid
             portfolio_state = self._get_portfolio_state()
+            self._last_portfolio_state = portfolio_state
+
             logging.info(
                 f"Portfolio: balance=${portfolio_state.total_balance}, "
                 f"available=${portfolio_state.available_balance}, "
                 f"margin_usage={float(portfolio_state.margin_usage) * 100:.1f}%, "
                 f"positions={len(portfolio_state.positions)}, "
                 f"unrealized_pnl=${portfolio_state.get_total_unrealized_pnl()}"
+            )
+
+            # Write live status for API server
+            write_live_status(
+                is_running=True,
+                execution_mode=EXECUTION_MODE,
+                cycle_count=self._cycle_count,
+                last_cycle_duration=self._last_cycle_duration,
+                portfolio=portfolio_state,
+                current_coin="scanning..."
             )
 
             if portfolio_state.total_balance <= 0:
@@ -317,8 +348,8 @@ class HyperliquidBot:
             if self.risk_manager.check_emergency_derisk(portfolio_state):
                 logging.warning("EMERGENCY: Margin usage critical, attempting de-risk")
                 self._handle_emergency_derisk(portfolio_state)
-                # Re-fetch portfolio after emergency action
                 portfolio_state = self._get_portfolio_state()
+                self._last_portfolio_state = portfolio_state
 
             # Get all mid prices from Hyperliquid for market overview
             all_mids = technical_fetcher.get_all_mids()
@@ -338,6 +369,16 @@ class HyperliquidBot:
                     break
 
                 logging.info(f"--- Analyzing {coin} ---")
+
+                # Update live status with current coin
+                write_live_status(
+                    is_running=True,
+                    execution_mode=EXECUTION_MODE,
+                    cycle_count=self._cycle_count,
+                    last_cycle_duration=self._last_cycle_duration,
+                    portfolio=portfolio_state,
+                    current_coin=coin
+                )
 
                 # Get market data AND technical indicators in one call
                 market_data, tech_data = self._get_market_data_and_technicals(coin)
@@ -425,7 +466,6 @@ class HyperliquidBot:
                         daily_notional_used += notional
                         state.setdefault("last_trade_timestamp_by_coin", {})[coin] = time.time()
                         self.metrics.increment("trades_executed_total")
-                        # Reset consecutive losses on successful trade
                         state["consecutive_losses"] = 0
                         logging.info(
                             f"{coin} executed: reason={result['reason']}, notional=${notional}"
@@ -454,14 +494,28 @@ class HyperliquidBot:
             self.state_store.save_state(state)
 
             cycle_duration = time.time() - cycle_start
+            self._last_cycle_duration = cycle_duration
             self.metrics.record_histogram("cycle_duration_seconds", cycle_duration)
             self.metrics.increment("cycles_total")
+
+            # Persist metrics to disk
+            self._persist_metrics()
 
             # Log performance summary
             self._log_performance_summary(state)
 
+            # Update live status after cycle
+            write_live_status(
+                is_running=True,
+                execution_mode=EXECUTION_MODE,
+                cycle_count=self._cycle_count,
+                last_cycle_duration=cycle_duration,
+                portfolio=portfolio_state,
+                current_coin="idle"
+            )
+
             logging.info(
-                f"Cycle complete: {trades_executed} trades, "
+                f"Cycle #{self._cycle_count} complete: {trades_executed} trades, "
                 f"duration={cycle_duration:.1f}s, "
                 f"daily_notional=${daily_notional_used}"
             )
@@ -470,6 +524,15 @@ class HyperliquidBot:
             logging.error(f"Cycle failed with exception: {type(e).__name__}: {e}", exc_info=True)
             success = False
             self.metrics.increment("cycles_failed")
+
+            write_live_status(
+                is_running=True,
+                execution_mode=EXECUTION_MODE,
+                cycle_count=self._cycle_count,
+                last_cycle_duration=self._last_cycle_duration,
+                portfolio=self._last_portfolio_state,
+                error=f"{type(e).__name__}: {str(e)[:200]}"
+            )
 
             # Track consecutive failures in state
             state = self.state_store.load_state()
@@ -494,6 +557,15 @@ class HyperliquidBot:
         logging.info(f"Data source: Hyperliquid API only")
         logging.info("=" * 60)
 
+        # Write initial status
+        write_live_status(
+            is_running=True,
+            execution_mode=EXECUTION_MODE,
+            cycle_count=0,
+            last_cycle_duration=0.0,
+            current_coin="starting..."
+        )
+
         # Verify Hyperliquid connectivity at startup
         meta = self.exchange_client.get_meta(force_refresh=True)
         if meta:
@@ -502,6 +574,13 @@ class HyperliquidBot:
             logging.error("FAILED to connect to Hyperliquid API at startup!")
             if not single_cycle:
                 logging.error("Aborting: cannot start without Hyperliquid connectivity")
+                write_live_status(
+                    is_running=False,
+                    execution_mode=EXECUTION_MODE,
+                    cycle_count=0,
+                    last_cycle_duration=0.0,
+                    error="Failed to connect to Hyperliquid API"
+                )
                 return
 
         consecutive_failures = 0
@@ -535,6 +614,15 @@ class HyperliquidBot:
         state = self.state_store.load_state()
         self._log_performance_summary(state)
         self.state_store.save_state(state)
+        self._persist_metrics()
+        write_live_status(
+            is_running=False,
+            execution_mode=EXECUTION_MODE,
+            cycle_count=self._cycle_count,
+            last_cycle_duration=self._last_cycle_duration,
+            portfolio=self._last_portfolio_state,
+            current_coin="stopped"
+        )
         logging.info("State saved. Goodbye.")
         logging.info("=" * 60)
 
