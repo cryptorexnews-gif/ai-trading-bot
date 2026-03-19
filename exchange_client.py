@@ -324,10 +324,8 @@ class HyperliquidExchangeClient:
         quantizer = Decimal("1").scaleb(-precision)
         limit_price = limit_price.quantize(quantizer)
 
-        if coin == "ADA":
-            size_str = str(int(size))
-        else:
-            size_str = str(size.normalize())
+        # Fixed bug: Use normalized decimal string for all coins, not int truncation for ADA
+        size_str = str(size.normalize())
 
         order_wire = {
             "a": asset_id,
@@ -353,11 +351,13 @@ class HyperliquidExchangeClient:
         if result is None:
             return {"success": False, "mode": "live", "reason": "http_error", "notional": "0"}
         if result.get("status") != "ok":
+            logger.error(f"Exchange rejected order for {coin}: {result}")
             return {"success": False, "mode": "live", "reason": "exchange_rejected", "notional": "0"}
 
         statuses = result.get("response", {}).get("data", {}).get("statuses", [])
         for status in statuses:
             if "error" in status:
+                logger.error(f"Order status error for {coin}: {status}")
                 return {"success": False, "mode": "live", "reason": "status_error", "notional": "0"}
 
         notional = abs(size * limit_price)
