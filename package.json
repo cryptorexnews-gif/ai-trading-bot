@@ -1,0 +1,13 @@
+{
+  "name": "hyperliquid-trading-bot",
+  "private": true,
+  "version": "1.0.0",
+  "scripts": {
+    "dev": "cd frontend && npm run dev",
+    "build": "cd frontend && npm run build",
+    "preview": "cd frontend && npm run preview",
+    "install:frontend": "cd frontend && npm install"
+  },
+  "dependencies": {},
+  "devDependencies": {}
+}

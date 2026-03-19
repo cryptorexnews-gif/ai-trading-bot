@@ -24,20 +24,36 @@ wheels/
 *.egg
 MANIFEST
 
+# Virtual environment
+venv/
+.venv/
+ENV/
+
 # Log
 *.log
 logs/
+
+# Stato runtime
+state/
 
 # IDE
 .vscode/
 .idea/
 *.swp
 *.swo
+*.sln
+*.suo
 
 # Sistema operativo
 .DS_Store
 Thumbs.db
 
+# Node
+node_modules/
+
 # File temporanei
 *.tmp
 *.temp
+
+# Dyad
+.dyad/
