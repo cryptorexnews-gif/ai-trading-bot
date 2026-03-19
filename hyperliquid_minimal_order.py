@@ -17,6 +17,7 @@ load_dotenv()
 PRIVATE_KEY = os.getenv("HYPERLIQUID_PRIVATE_KEY")
 WALLET_ADDRESS = os.getenv("HYPERLIQUID_WALLET_ADDRESS")
 ENABLE_MAINNET_TRADING = os.getenv("ENABLE_MAINNET_TRADING", "false").lower() == "true"
+AUTO_CONFIRM_MINIMAL_ORDER = os.getenv("AUTO_CONFIRM_MINIMAL_ORDER", "false").lower() == "true"
 BASE_URL = "https://api.hyperliquid.xyz"
 
 
@@ -239,16 +240,11 @@ if __name__ == "__main__":
 
     verify_wallet_balance()
 
-    if ENABLE_MAINNET_TRADING:
-        expected_suffix = WALLET_ADDRESS[-4:] if WALLET_ADDRESS else ""
-        typed_suffix = input(f"\nEscribe los últimos 4 caracteres de tu wallet ({mask_wallet(WALLET_ADDRESS)}) para confirmar: ").strip()
-
-        if typed_suffix != expected_suffix:
-            print("🛑 Confirmación fallida. Orden cancelada.")
-        elif input("¿Enviar orden mínima REAL a Hyperliquid? (y/n): ").lower() == 'y':
-            print("\n" + "=" * 30)
-            send_minimal_order()
-        else:
-            print("\n📋 Orden preparada pero no enviada")
+    if ENABLE_MAINNET_TRADING and AUTO_CONFIRM_MINIMAL_ORDER:
+        print("✅ AUTO_CONFIRM_MINIMAL_ORDER=true: envío automático habilitado.")
+        print("\n" + "=" * 30)
+        send_minimal_order()
+    elif ENABLE_MAINNET_TRADING and not AUTO_CONFIRM_MINIMAL_ORDER:
+        print("\n🛑 AUTO_CONFIRM_MINIMAL_ORDER=false: ejecución automática deshabilitada por seguridad.")
     else:
-        print("\n📋 Script en modo seguro: no se enviarán órdenes reales")
+        print("\n📋 Script en modo seguro: no se enviarán órdenes reales.")
