@@ -4,9 +4,8 @@ import ChartToolbar from './trading/ChartToolbar'
 import StatsBar from './trading/StatsBar'
 import CandlestickChart from './trading/CandlestickChart'
 import ChartSkeleton from './trading/ChartSkeleton'
-import OrderBook from './trading/OrderBook'
 
-const DEFAULT_SAFE_COINS = ['BTC', 'ETH']  // Always backend-safe
+const DEFAULT_SAFE_COINS = ['BTC', 'ETH']
 const CHART_HEIGHT = 500
 
 function safeNum(v, fallback = 0) {
@@ -23,16 +22,14 @@ export default function TradingView({ tradingPairs }) {
   const [fetchError, setFetchError] = useState(null)
   const [lastPrice, setLastPrice] = useState(null)
   const [stats24h, setStats24h] = useState(null)
-  const [orderBook, setOrderBook] = useState(null)
   const mountedRef = useRef(true)
   const apiBase = getApiBase()
 
-  // Fetch coins list from backend
   useEffect(() => {
     const fetchConfig = async () => {
       try {
-        const res = await fetch(`${apiBase}/config`, { 
-          headers: getHeaders(), 
+        const res = await fetch(`${apiBase}/config`, {
+          headers: getHeaders(),
           credentials: 'same-origin',
           signal: AbortSignal.timeout(10000)
         })
@@ -53,15 +50,15 @@ export default function TradingView({ tradingPairs }) {
   }, [apiBase, selectedCoin])
 
   const fetchCandles = useCallback(async () => {
-    console.log(`Fetching candles for ${selectedCoin} ${interval}`) // Debug log
+    console.log(`Fetching candles for ${selectedCoin} ${interval}`)
     let candleData = null
     setFetchError(null)
 
     try {
       const res = await fetch(
         `${apiBase}/candles?coin=${selectedCoin}&interval=${interval}&limit=300`,
-        { 
-          headers: getHeaders(), 
+        {
+          headers: getHeaders(),
           credentials: 'same-origin',
           signal: AbortSignal.timeout(15000)
         }
@@ -71,7 +68,6 @@ export default function TradingView({ tradingPairs }) {
         if (res.status === 400) {
           console.warn(`Coin ${selectedCoin} not supported, trying BTC fallback`)
           setFetchError(`Coin ${selectedCoin} non supportata. Prova BTC/ETH.`)
-          // Fallback to BTC
           if (selectedCoin !== 'BTC') {
             setSelectedCoin('BTC')
             return
@@ -127,25 +123,6 @@ export default function TradingView({ tradingPairs }) {
     setChartLoading(false)
   }, [apiBase, selectedCoin, interval])
 
-  const fetchOrderBook = useCallback(async () => {
-    try {
-      const res = await fetch(
-        `${apiBase}/orderbook?coin=${selectedCoin}&nSigFigs=5`,
-        { 
-          headers: getHeaders(), 
-          credentials: 'same-origin',
-          signal: AbortSignal.timeout(10000)
-        }
-      )
-      if (res.ok) {
-        const json = await res.json()
-        setOrderBook(json)
-      }
-    } catch (err) {
-      console.warn(`Orderbook fetch failed for ${selectedCoin}:`, err.message)
-    }
-  }, [apiBase, selectedCoin])
-
   useEffect(() => {
     mountedRef.current = true
     setChartLoading(true)
@@ -153,20 +130,15 @@ export default function TradingView({ tradingPairs }) {
     setStats24h(null)
     setLastPrice(null)
     setFetchError(null)
-    setOrderBook(null)
 
     fetchCandles()
-    fetchOrderBook()
-    
     const candleTimer = window.setInterval(fetchCandles, 30000)
-    const obTimer = window.setInterval(fetchOrderBook, 10000)
 
     return () => {
       mountedRef.current = false
       window.clearInterval(candleTimer)
-      window.clearInterval(obTimer)
     }
-  }, [fetchCandles, fetchOrderBook])
+  }, [fetchCandles])
 
   const change = stats24h ? safeNum(stats24h.change, 0) : 0
   const isPositive = change >= 0
@@ -189,40 +161,33 @@ export default function TradingView({ tradingPairs }) {
 
       <StatsBar stats24h={stats24h} />
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-0">
-        <div className="lg:col-span-2">
-          {chartLoading ? (
-            <ChartSkeleton height={CHART_HEIGHT} />
-          ) : candles.length === 0 ? (
-            <div className="flex items-center justify-center text-gray-500 p-12" style={{ height: CHART_HEIGHT }}>
-              <div className="text-center">
-                <div className="text-4xl mb-4">📊</div>
-                <p className="text-sm font-medium mb-1">No chart data for {selectedCoin}</p>
-                {fetchError ? (
-                  <p className="text-xs text-red-400 bg-red-900/30 px-2 py-1 rounded mt-2">
-                    {fetchError}
-                  </p>
-                ) : (
-                  <p className="text-xs text-gray-600 mt-1">
-                    Prova un altro timeframe/coin o verifica backend API
-                  </p>
-                )}
-              </div>
-            </div>
-          ) : (
-            <CandlestickChart
-              key={chartKey}
-              candles={candles}
-              height={CHART_HEIGHT}
-              selectedCoin={selectedCoin}
-              interval={interval}
-            />
-          )}
+      {chartLoading ? (
+        <ChartSkeleton height={CHART_HEIGHT} />
+      ) : candles.length === 0 ? (
+        <div className="flex items-center justify-center text-gray-500 p-12" style={{ height: CHART_HEIGHT }}>
+          <div className="text-center">
+            <div className="text-4xl mb-4">📊</div>
+            <p className="text-sm font-medium mb-1">No chart data for {selectedCoin}</p>
+            {fetchError ? (
+              <p className="text-xs text-red-400 bg-red-900/30 px-2 py-1 rounded mt-2">
+                {fetchError}
+              </p>
+            ) : (
+              <p className="text-xs text-gray-600 mt-1">
+                Prova un altro timeframe/coin o verifica backend API
+              </p>
+            )}
+          </div>
         </div>
-        <div className="lg:col-span-1 border-l border-gray-800">
-          <OrderBook orderBook={orderBook} coin={selectedCoin} />
-        </div>
-      </div>
+      ) : (
+        <CandlestickChart
+          key={chartKey}
+          candles={candles}
+          height={CHART_HEIGHT}
+          selectedCoin={selectedCoin}
+          interval={interval}
+        />
+      )}
     </div>
   )
 }
