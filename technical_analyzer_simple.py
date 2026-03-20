@@ -30,6 +30,19 @@ class TechnicalAnalyzer:
         from decimal import Decimal
         return self.trend_analyzer.is_trend_confirmed(coin, Decimal(str(volume_threshold)))
 
+    # Compatibility pass-throughs expected by orchestrator/engines
+    def get_all_mids(self, force_refresh: bool = False):
+        return self.data_fetcher.get_all_mids(force_refresh=force_refresh)
+
+    def get_meta(self, force_refresh: bool = False):
+        return self.data_fetcher.get_meta(force_refresh=force_refresh)
+
+    def get_funding_for_coin(self, coin: str):
+        return self.data_fetcher.get_funding_for_coin(coin)
+
+    def get_candle_snapshot(self, coin: str, interval: str = "5m", limit: int = 100):
+        return self.data_fetcher.get_candle_snapshot(coin, interval, limit)
+
 
 # Global instance for backward compatibility
 technical_fetcher = TechnicalAnalyzer()
