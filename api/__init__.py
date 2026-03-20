@@ -14,8 +14,6 @@ from api.routes.trading import trading_bp
 from api.routes.market import market_bp
 from api.routes.logs import logs_bp
 from api.routes.metrics import metrics_bp
-from api.routes.openrouter import openrouter_bp
-from api.routes.hyperliquid import hyperliquid_bp
 
 
 def create_app() -> Flask:
@@ -36,7 +34,5 @@ def create_app() -> Flask:
     app.register_blueprint(market_bp)
     app.register_blueprint(logs_bp)
     app.register_blueprint(metrics_bp)
-    app.register_blueprint(openrouter_bp)
-    app.register_blueprint(hyperliquid_bp)
 
     return app
