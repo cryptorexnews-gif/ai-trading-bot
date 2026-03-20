@@ -74,7 +74,7 @@ cd frontend && npm run dev
 |---------|-----------|
 | **Stats** | Balance • PnL • Margin • Win Rate |
 | **Drawdown** | Barra rossa >8% (stop automatico 12%) |
-| **TradingView** | Candele live + Orderbook |
+| **TradingView** | Candele live + Orderbook (default 4H) |
 | **Equity** | Curva portfolio reale |
 | **Risk Mgmt** | SL/TP/Trailing/BE attivi |
 | **Trades** | Storia + AI reasoning + CSV Export |
@@ -90,9 +90,19 @@ ENABLE_MAINNET_TRADING=false  # ⚠️ true = SOLDI VERTI!
 MAX_DRAWDOWN_PCT=0.12    # Stop 12%
 DAILY_NOTIONAL_LIMIT_USD=500
 
-# R:R
-DEFAULT_SL_PCT=0.03      # Stop Loss 3%
-DEFAULT_TP_PCT=0.05      # Take Profit 5%
+# STRATEGIA TREND 4H/1D
+PRIMARY_TIMEFRAME=4h     # Trend primario
+SECONDARY_TIMEFRAME=1d   # Trend principale
+ENTRY_TIMEFRAME=1h       # Timing entrata
+MIN_TREND_DURATION_HOURS=24  # Durata minima trend
+VOLUME_CONFIRMATION_THRESHOLD=1.5  # Conferma volume
+MAX_TREND_POSITIONS=2    # Max posizioni trend
+TREND_POSITION_SIZE_PCT=0.03  # 3% portfolio per posizione
+TREND_SL_PCT=0.05        # Stop Loss 5%
+TREND_TP_PCT=0.10        # Take Profit 10%
+TREND_BREAK_EVEN_ACTIVATION_PCT=0.03  # BE @ +3%
+TREND_TRAILING_ACTIVATION_PCT=0.05    # Trailing @ +5%
+TREND_TRAILING_CALLBACK=0.03  # Callback 3%
 ```
 
 **Completa**: `.env.example`

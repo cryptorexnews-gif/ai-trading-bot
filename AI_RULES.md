@@ -23,6 +23,17 @@
 - Snapshot candele, prezzi mid, tassi funding, interesse aperto — tutti da Hyperliquid `/info`
 - Indicatori tecnici (EMA, MACD, RSI, ATR, Bande di Bollinger) calcolati da candele Hyperliquid
 
+## Strategia Trend 4H/1D
+- **Timeframe Primario**: 4H per identificazione trend principale
+- **Timeframe Secondario**: 1D per conferma trend a lungo termine
+- **Timeframe Entrata**: 1H per timing preciso di entrata
+- **Criteri Entrata**: EMA9 > EMA21 > EMA50 su 4H, conferma 1D, pullback su 1H
+- **Volume**: Ratio > 1.5 per conferma breakout/breakdown
+- **RSI**: 30-40 per long, 60-70 per short su pullback
+- **SL/TP**: 5%/10% (R:R 1:2), Break-even @ +3%, Trailing @ +5%
+- **Max Posizioni**: 2 posizioni trend simultanee
+- **Size**: 3% portfolio per posizione trend
+
 ## Regole Uso Librerie
 Segui queste regole rigorosamente per evitare errori di precisione, incompatibilità API, e problemi di sicurezza:
 
