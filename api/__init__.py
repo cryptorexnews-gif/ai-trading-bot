@@ -6,7 +6,7 @@ Assembles Flask app from modular route blueprints.
 from flask import Flask
 from flask_cors import CORS
 
-from api.config import CORS_ORIGINS
+from api.config import CORS_ORIGINS, SECURITY_HEADERS
 from api.json_provider import CustomJSONProvider
 from api.routes.health import health_bp
 from api.routes.bot import bot_bp
@@ -26,6 +26,13 @@ def create_app() -> Flask:
     # Custom JSON provider for Decimal serialization
     app.json_provider_class = CustomJSONProvider
     app.json = CustomJSONProvider(app)
+
+    # Security headers
+    @app.after_request
+    def add_security_headers(response):
+        for header, value in SECURITY_HEADERS.items():
+            response.headers[header] = value
+        return response
 
     # Register blueprints
     app.register_blueprint(health_bp)

@@ -55,6 +55,16 @@ def _validate_cors_origins(raw: str) -> list:
 
 CORS_ORIGINS = _validate_cors_origins(_raw_cors)
 
+# Security headers
+SECURITY_HEADERS = {
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "DENY",
+    "X-XSS-Protection": "1; mode=block",
+    "Strict-Transport-Security": "max-age=31536000; includeSubDomains",
+    "Content-Security-Policy": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline';",
+    "Referrer-Policy": "strict-origin-when-cross-origin",
+}
+
 # State file paths
 STATE_PATH = "state/bot_state.json"
 METRICS_PATH = "state/bot_metrics.json"

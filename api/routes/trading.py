@@ -1,7 +1,3 @@
-"""
-Trade history, performance summary, and CSV export endpoints.
-"""
-
 import csv
 import io
 import time
@@ -21,7 +17,8 @@ _state_store = StateStore(STATE_PATH, METRICS_PATH)
 @require_api_key
 def trades():
     limit = request.args.get("limit", 50, type=int)
-    limit = max(1, min(limit, 500))
+    if limit < 1 or limit > 500:
+        return jsonify({"error": "limit must be between 1 and 500"}), 400
     state = _state_store.load_state()
     history = state.get("trade_history", [])
     recent = list(reversed(history[-limit:]))

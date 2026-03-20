@@ -1,9 +1,3 @@
-"""
-API key authentication for dashboard endpoints.
-Uses hmac.compare_digest for timing-safe comparison.
-Enforces authentication when EXECUTION_MODE=live.
-"""
-
 import hmac
 import os
 from functools import wraps
@@ -14,9 +8,13 @@ from api.config import API_AUTH_KEY
 
 
 def require_api_key(f):
-    """Decorator to require X-API-Key header on protected endpoints."""
+    """Decorator to require X-API-Key header on protected endpoints, except for localhost."""
     @wraps(f)
     def decorated(*args, **kwargs):
+        # Allow localhost requests without key for dashboard
+        if request.remote_addr in ['127.0.0.1', '::1'] or request.headers.get('X-Forwarded-For') in ['127.0.0.1', '::1']:
+            return f(*args, **kwargs)
+
         if not API_AUTH_KEY:
             # In live mode, refuse to run without an API key
             execution_mode = os.getenv("EXECUTION_MODE", "paper").lower()

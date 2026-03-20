@@ -1,10 +1,5 @@
-"""
-Market data endpoints — proxies Hyperliquid API for candles and order book.
-All coin parameters are validated against known patterns.
-"""
-
 import logging
-import time
+import re
 
 from flask import Blueprint, jsonify, request
 
@@ -23,7 +18,7 @@ _VALID_INTERVALS = {"1m", "3m", "5m", "15m", "1h", "4h", "1d"}
 def _validate_coin(coin_raw: str) -> str:
     """Validate and sanitize coin parameter. Returns uppercased coin or empty string if invalid."""
     coin = coin_raw.strip().upper()
-    if not COIN_PATTERN.match(coin):
+    if not COIN_PATTERN.match(coin) or coin not in KNOWN_TRADING_PAIRS:
         return ""
     return coin
 
@@ -32,7 +27,7 @@ def _validate_coin(coin_raw: str) -> str:
 @require_api_key
 def candles():
     """Get candlestick data from Hyperliquid for price chart."""
-    coin = _validate_coin(request.args.get("coin", "BTC"))
+    coin = _validate_coin(request.args.get("coin", ""))
     if not coin:
         return jsonify({"error": "invalid coin parameter"}), 400
 
@@ -41,7 +36,8 @@ def candles():
         return jsonify({"error": f"invalid interval, must be one of: {', '.join(sorted(_VALID_INTERVALS))}"}), 400
 
     limit = request.args.get("limit", 100, type=int)
-    limit = max(1, min(limit, 500))
+    if limit < 1 or limit > 500:
+        return jsonify({"error": "limit must be between 1 and 500"}), 400
 
     interval_ms_map = {
         "1m": 60_000, "3m": 180_000, "5m": 300_000, "15m": 900_000,
@@ -90,12 +86,13 @@ def orderbook():
     Get L2 order book from Hyperliquid.
     Uses nSigFigs for price grouping (2-5, matching Hyperliquid UI).
     """
-    coin = _validate_coin(request.args.get("coin", "BTC"))
+    coin = _validate_coin(request.args.get("coin", ""))
     if not coin:
         return jsonify({"error": "invalid coin parameter"}), 400
 
     n_sig_figs = request.args.get("nSigFigs", 5, type=int)
-    n_sig_figs = max(2, min(5, n_sig_figs))
+    if n_sig_figs < 2 or n_sig_figs > 5:
+        return jsonify({"error": "nSigFigs must be between 2 and 5"}), 400
 
     logger.info(f"Fetching order book for {coin} with nSigFigs={n_sig_figs}")
 
@@ -166,7 +163,7 @@ def orderbook():
 @require_api_key
 def orderbook_debug():
     """Debug endpoint — returns raw Hyperliquid L2 response. Requires API key."""
-    coin = _validate_coin(request.args.get("coin", "BTC"))
+    coin = _validate_coin(request.args.get("coin", ""))
     if not coin:
         return jsonify({"error": "invalid coin parameter"}), 400
 
