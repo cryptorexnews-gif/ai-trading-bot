@@ -18,7 +18,7 @@ class HyperliquidDataFetcher:
     Fetches ALL market data exclusively from Hyperliquid API.
     No external data sources (Binance, CoinGecko, etc.) are used.
     Uses Decimal for all financial calculations.
-    Supports multi-timeframe analysis (5m, 1h, 4h, 1d).
+    Supports multi-timeframe analysis (1h, 4h, 1d) for trend trading.
     """
 
     def __init__(self, base_url: str = HYPERLIQUID_BASE_URL):
@@ -263,7 +263,7 @@ class HyperliquidDataFetcher:
             return {"volatility_level": "low", "suggested_cycle_sec": 120, "atr_pct": float(atr_pct)}
 
     def get_technical_indicators(self, coin: str) -> Optional[Dict[str, Any]]:
-        """Get complete technical indicators for a coin. Multi-timeframe: 5m, 1h, 4h, 1d."""
+        """Get complete technical indicators for a coin. Multi-timeframe: 1h, 4h, 1d for trend trading."""
         # Timeframes per trend 4h/1d strategy
         intraday_candles = self.get_candle_snapshot(coin, "1h", 100)  # 1h per entry timing
         hourly_candles = self.get_candle_snapshot(coin, "4h", 50)      # 4h per trend primario
@@ -395,7 +395,7 @@ class HyperliquidDataFetcher:
             "current_ema9": ema_9_1h[-1] if ema_9_1h else Decimal("0"),
             "current_ema21": ema_21_1h[-1] if ema_21_1h else Decimal("0"),
             "current_ema50": ema_50_1h[-1] if ema_50_1h else Decimal("0"),
-            "current_macd": macd_line_1h[-1] if macd_line_1h[-1] if macd_line_1h else Decimal("0"),
+            "current_macd": macd_line_1h[-1] if macd_line_1h else Decimal("0"),
             "current_macd_signal": signal_line_1h[-1] if signal_line_1h else Decimal("0"),
             "current_macd_histogram": histogram_1h[-1] if histogram_1h else Decimal("0"),
             "current_rsi_14": rsi_14_1h[-1] if rsi_14_1h else Decimal("50"),
