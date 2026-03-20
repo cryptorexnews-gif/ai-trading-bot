@@ -179,6 +179,7 @@ def config():
             "default_tp_pct": os.getenv("TREND_TP_PCT", "0.08"),
             "enable_trailing_stop": os.getenv("ENABLE_TRAILING_STOP", "true"),
             "break_even_activation_pct": os.getenv("TREND_BREAK_EVEN_ACTIVATION_PCT", "0.02"),
+            "max_order_notional_usd": os.getenv("MAX_ORDER_NOTIONAL_USD", "0"),
             "trading_pairs": trading_pairs,
             "trading_pairs_count": len(trading_pairs),
             "timestamp": time.time()

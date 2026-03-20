@@ -49,6 +49,7 @@ class BotConfig:
         self.min_confidence_manage = _env_decimal("MIN_CONFIDENCE_MANAGE", "0.50")
         self.max_margin_usage = _env_decimal("MAX_MARGIN_USAGE", "0.8")
         self.max_order_margin_pct = _env_decimal("MAX_ORDER_MARGIN_PCT", "0.1")
+        self.max_order_notional_usd = _env_decimal("MAX_ORDER_NOTIONAL_USD", "0")
         self.trade_cooldown_sec = _env_int("TRADE_COOLDOWN_SEC", 300)
         self.daily_notional_limit_usd = _env_decimal("DAILY_NOTIONAL_LIMIT_USD", "1000")
         self.volatility_multiplier = _env_decimal("VOLATILITY_MULTIPLIER", "1.2")
@@ -157,6 +158,11 @@ class BotConfig:
             warnings.append(f"DEFAULT_CYCLE_SEC={self.default_cycle_sec} is very short (<5 minutes)")
         if self.default_cycle_sec > 3600:
             warnings.append(f"DEFAULT_CYCLE_SEC={self.default_cycle_sec} is very long (>60 minutes)")
+
+        if self.max_order_notional_usd < 0:
+            warnings.append("MAX_ORDER_NOTIONAL_USD < 0 is invalid; it should be 0 (disabled) or positive")
+        if self.max_order_notional_usd > 0 and self.max_order_notional_usd < Decimal("10"):
+            warnings.append("MAX_ORDER_NOTIONAL_USD is very low; trades may be frequently rejected")
 
         return warnings
 

@@ -21,6 +21,7 @@ class RiskManager:
         min_confidence_manage: Decimal = Decimal("0.50"),
         max_margin_usage: Decimal = Decimal("0.8"),
         max_order_margin_pct: Decimal = Decimal("0.1"),
+        max_order_notional_usd: Decimal = Decimal("0"),
         trade_cooldown_sec: int = 300,
         daily_notional_limit_usd: Decimal = Decimal("1000"),
         volatility_multiplier: Decimal = Decimal("1.2"),
@@ -34,6 +35,7 @@ class RiskManager:
         self.min_confidence_manage = min_confidence_manage
         self.max_margin_usage = max_margin_usage
         self.max_order_margin_pct = max_order_margin_pct
+        self.max_order_notional_usd = max_order_notional_usd
         self.trade_cooldown_sec = trade_cooldown_sec
         self.daily_notional_limit_usd = daily_notional_limit_usd
         self.volatility_multiplier = volatility_multiplier
@@ -133,6 +135,9 @@ class RiskManager:
         if action in open_actions:
             notional = size * current_price
             margin_needed = notional / leverage if leverage > 0 else Decimal("0")
+
+            if self.max_order_notional_usd > 0 and notional > self.max_order_notional_usd:
+                return False, "max_order_notional_exceeded"
 
             if margin_needed > portfolio.available_balance:
                 return False, "insufficient_available_balance"

@@ -90,6 +90,7 @@ class HyperliquidBot:
                 min_confidence_manage=self.cfg.min_confidence_manage,
                 max_margin_usage=self.cfg.max_margin_usage,
                 max_order_margin_pct=self.cfg.max_order_margin_pct,
+                max_order_notional_usd=self.cfg.max_order_notional_usd,
                 trade_cooldown_sec=self.cfg.trade_cooldown_sec,
                 daily_notional_limit_usd=self.cfg.daily_notional_limit_usd,
                 volatility_multiplier=self.cfg.volatility_multiplier,
