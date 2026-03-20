@@ -7,7 +7,7 @@
 ### 1. Installa
 ```bash
 pip install -r requirements.txt
-cd frontend && npm install && cd ..
+npm install
 ```
 
 ### 2. Configura .env (COPIA E MODIFICA)
@@ -45,7 +45,7 @@ python hyperliquid_bot_executable_orders.py
 python api_server.py
 
 # TERMINALE 3: DASHBOARD
-cd frontend && npm run dev
+npm run dev
 ```
 
 ✅ **Dashboard**: [http://localhost:3000](http://localhost:3000)
@@ -141,7 +141,7 @@ python check_current_positions.py     # Vedi posizioni
 ```bash
 nohup python hyperliquid_bot_executable_orders.py > bot.log 2>&1 &
 python api_server.py
-cd frontend && npm run dev
+npm run dev
 ```
 
 **Stop**: `Ctrl+C` o `kill -SIGTERM <pid>`
