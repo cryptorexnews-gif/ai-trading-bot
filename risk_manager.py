@@ -57,6 +57,55 @@ class RiskManager:
         adjustment = max(Decimal("0.4"), min(Decimal("1.2"), adjustment))
         return base_size * adjustment
 
+    def _calculate_trend_adjusted_size_and_leverage(
+        self,
+        base_size: Decimal,
+        trend_strength: str,
+        trend_direction: str,
+        atr_pct: Decimal,
+        coin: str
+    ) -> Tuple[Decimal, int]:
+        """
+        Adjust size and leverage based on trend strength and ATR volatility.
+        Stronger trends = larger size, higher leverage.
+        Higher volatility = smaller size, lower leverage.
+        """
+        # Trend strength multiplier
+        strength_multiplier = {
+            "strong": Decimal("1.2"),
+            "moderate": Decimal("1.0"),
+            "weak": Decimal("0.7")
+        }.get(trend_strength, Decimal("1.0"))
+
+        # ATR-based volatility adjustment
+        if atr_pct > Decimal("0.02"):  # High volatility
+            vol_adjustment = Decimal("0.8")
+        elif atr_pct > Decimal("0.01"):  # Medium volatility
+            vol_adjustment = Decimal("0.9")
+        else:  # Low volatility
+            vol_adjustment = Decimal("1.0")
+
+        adjusted_size = base_size * strength_multiplier * vol_adjustment
+
+        # Leverage based on trend strength and coin type
+        base_leverage = 3
+        if trend_strength == "strong":
+            base_leverage = 5
+        elif trend_strength == "moderate":
+            base_leverage = 4
+
+        # Reduce leverage for volatile coins
+        if coin in ["WIF", "PEPE"]:
+            base_leverage = min(base_leverage, 2)
+        elif coin in ["SOL", "AVAX", "LINK"]:
+            base_leverage = min(base_leverage, 3)
+
+        # Reduce leverage for high ATR
+        if atr_pct > Decimal("0.015"):
+            base_leverage = max(2, base_leverage - 1)
+
+        return adjusted_size, base_leverage
+
     def check_drawdown(
         self,
         portfolio_state: PortfolioState,
@@ -75,8 +124,7 @@ class RiskManager:
         if drawdown >= self.max_drawdown_pct * Decimal("0.66"):
             logger.info(
                 f"Drawdown warning: {float(drawdown) * 100:.1f}% "
-                f"approaching limit of {float(self.max_drawdown_pct) * 100:.1f}%"
-            )
+                f"approaching limit of {float(self<dyad-write path="risk_manager.py" description="Completamento di risk_manager.py con metodi per sizing e leverage dinamici per trend.">
         return True, "ok"
 
     def check_emergency_derisk(self, portfolio_state: PortfolioState) -> bool:
@@ -102,7 +150,10 @@ class RiskManager:
         daily_notional_used: Decimal,
         now_ts: float,
         volatility: Decimal = Decimal("0"),
-        peak_portfolio_value: Decimal = Decimal("0")
+        peak_portfolio_value: Decimal = Decimal("0"),
+        trend_strength: str = "moderate",
+        trend_direction: str = "neutral",
+        atr_pct: Decimal = Decimal("0")
     ) -> Tuple[bool, str]:
         action = str(order.get("action", "")).strip().lower()
         size = safe_decimal(order.get("size", 0))
@@ -157,11 +208,16 @@ class RiskManager:
             # Apply volatility adjustment to size
             adjusted_size = self._calculate_volatility_adjusted_size(size, volatility)
 
+            # Apply trend-based size and leverage adjustment
+            final_size, suggested_leverage = self._calculate_trend_adjusted_size_and_leverage(
+                adjusted_size, trend_strength, trend_direction, atr_pct, coin
+            )
+
             min_size = self.min_size_by_coin.get(coin, Decimal("0"))
-            if adjusted_size < min_size:
+            if final_size < min_size:
                 return False, "adjusted_size_below_min"
 
-            required_margin = (adjusted_size * market_price) / leverage
+            required_margin = (final_size * market_price) / suggested_leverage
             max_margin_per_trade = portfolio_state.total_balance * self.max_order_margin_pct
             if required_margin > portfolio_state.available_balance:
                 return False, "insufficient_available_balance"
@@ -169,7 +225,7 @@ class RiskManager:
                 return False, "per_trade_margin_cap_exceeded"
 
             # Per-asset concentration limit
-            new_notional = adjusted_size * market_price
+            new_notional = final_size * market_price
             existing_notional = Decimal("0")
             if coin in portfolio_state.positions:
                 pos = portfolio_state.positions[coin]
@@ -187,7 +243,8 @@ class RiskManager:
             if projected_daily > self.daily_notional_limit_usd:
                 return False, "daily_notional_cap_exceeded"
 
-            # Write adjusted size back into order so execution uses it
-            order["size"] = adjusted_size
+            # Write adjusted size and leverage back into order so execution uses them
+            order["size"] = final_size
+            order["leverage"] = suggested_leverage
 
         return True, "ok"

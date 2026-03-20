@@ -13,6 +13,7 @@ class Notifier:
     """
     Invia notifiche via Telegram.
     Supporta avvisi trade, trigger SL/TP/trailing, errori, e riepiloghi giornalieri.
+    Aggiunto supporto per notifiche trend e KPI dashboard.
 
     Security: The Telegram bot token is stored in a closure-like pattern.
     It is never exposed via __repr__, __str__, logging, or stored in a URL string.
@@ -195,3 +196,34 @@ class Notifier:
     def notify_bot_stopped(self, reason: str = "manuale") -> None:
         message = f"🔴 <b>BOT FERMO</b>\n\nRagione: {reason}"
         self._send(message, force=True)
+
+    # New trend-specific notifications
+    def notify_trend_confirmed(self, coin: str, trend_direction: str, trend_strength: int) -> None:
+        strength_emoji = "🟢" if trend_strength == 3 else "🟡" if trend_strength == 2 else "🔴"
+        message = (
+            f"{strength_emoji} <b>TREND CONFERMATO</b>\n\n"
+            f"Coin: <b>{coin}</b>\n"
+            f"Direzione: {trend_direction.upper()}\n"
+            f"Forza: {trend_strength}/3 timeframes allineati\n"
+            f"✅ Pronto per entrata trend-following"
+        )
+        self._send(message)
+
+    def notify_trend_reversal(self, coin: str, old_trend: str, new_trend: str) -> None:
+        message = (
+            f"🔄 <b>TREND INVERTITO</b>\n\n"
+            f"Coin: <b>{coin}</b>\n"
+            f"Da: {old_trend.upper()} → A: {new_trend.upper()}\n"
+            f"⚠️ Chiudere posizioni esistenti"
+        )
+        self._send(message, force=True)
+
+    def notify_trend_kpi_summary(self, trend_win_rate: float, total_trend_trades: int) -> None:
+        emoji = "🎯" if trend_win_rate >= 60 else "⚠️" if trend_win_rate >= 50 else "🚨"
+        message = (
+            f"{emoji} <b>KPI TREND STRATEGY</b>\n\n"
+            f"Trade Trend Totali: {total_trend_trades}\n"
+            f"Win Rate Trend: {trend_win_rate:.1f}%\n"
+            f"Target: >60% per trend following"
+        )
+        self._send(message)

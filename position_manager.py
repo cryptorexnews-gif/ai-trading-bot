@@ -254,6 +254,7 @@ class PositionManager:
         sl_pct: Optional[Decimal] = None,
         tp_pct: Optional[Decimal] = None,
         trailing: Optional[bool] = None,
+        is_trend: bool = False,  # New parameter for trend positions
     ) -> None:
         """Register a new position with risk management."""
         if entry_price <= 0:
@@ -286,8 +287,9 @@ class PositionManager:
             ),
         )
         self._save_state()
+        position_type = "TREND" if is_trend else "GENERAL"
         logger.info(
-            f"Registered managed position: {coin} {'LONG' if is_long else 'SHORT'} "
+            f"Registered {position_type} position: {coin} {'LONG' if is_long else 'SHORT'} "
             f"size={size} entry=${entry_price} SL={float(sl_pct)*100}% TP={float(tp_pct)*100}% "
             f"BE@{float(self.break_even_activation_pct)*100}%"
         )
@@ -331,3 +333,45 @@ class PositionManager:
                 "opened_at": pos.opened_at,
             })
         return statuses
+
+    def check_trend_positions_against_current_trend(
+        self,
+        current_prices: Dict[str, Decimal],
+        technical_fetcher
+    ) -> List[Dict[str, Any]]:
+        """
+        Check trend positions against current trend direction.
+        Close positions if trend has reversed on 1D timeframe.
+        """
+        actions = []
+
+        for coin, managed in self._managed.items():
+            if coin not in current_prices:
+                continue
+
+            # Get current 1D trend
+            tech_data = technical_fetcher.get_technical_indicators(coin)
+            if not tech_data:
+                continue
+
+            lt_context = tech_data.get("long_term_context", {})
+            current_1d_trend = lt_context.get("trend", "neutral")
+
+            # Determine position direction
+            position_trend = "bullish" if managed.is_long else "bearish"
+
+            # If trend has reversed, close the position
+            if current_1d_trend != position_trend and current_1d_trend in ["bullish", "bearish"]:
+                logger.warning(
+                    f"Trend reversal detected for {coin}: position {position_trend} vs current 1D {current_1d_trend}. "
+                    f"Closing position."
+                )
+                actions.append({
+                    "coin": coin, "trigger": "trend_reversal", "action": "close_position",
+                    "size": managed.size, "is_long": managed.is_long,
+                    "current_price": current_prices[coin], "trigger_price": current_prices[coin],
+                    "entry_price": managed.entry_price,
+                    "reasoning": f"Trend reversal on 1D: {position_trend} → {current_1d_trend}"
+                })
+
+        return actions
