@@ -6,10 +6,19 @@ function getApiKey() {
   if (typeof window !== 'undefined' && window.__DASHBOARD_API_KEY__) {
     return window.__DASHBOARD_API_KEY__
   }
+
+  if (import.meta.env.VITE_DASHBOARD_API_KEY) {
+    return import.meta.env.VITE_DASHBOARD_API_KEY
+  }
+
   const meta = document.querySelector('meta[name="dashboard-api-key"]')
   if (meta) {
-    return meta.getAttribute('content')
+    const content = meta.getAttribute('content') || ''
+    if (content && content !== '%VITE_DASHBOARD_API_KEY%') {
+      return content
+    }
   }
+
   return ''
 }
 
@@ -44,7 +53,6 @@ export function useApi(endpoint, intervalMs = 5000) {
       }
       const json = await response.json()
 
-      // Guard against race conditions: only apply if this is still the latest fetch
       if (mountedRef.current && currentFetchId === fetchIdRef.current) {
         setData(json)
         setError(null)
