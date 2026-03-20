@@ -44,6 +44,29 @@ function computeRSI(closes, period = 14) {
   return rsi
 }
 
+function computeVWAP(highs, lows, closes, volumes) {
+  if (!highs.length) return []
+  const typicals = highs.map((h, i) => (h + lows[i] + closes[i]) / 3)
+  const tpVol = typicals.map((t, i) => t * volumes[i])
+  let cumTPVol = 0
+  let cumVol = 0
+  return typicals.map((t, i) => {
+    cumTPVol += tpVol[i]
+    cumVol += volumes[i]
+    return cumVol > 0 ? cumTPVol / cumVol : t
+  })
+}
+
+function computeMACD(closes, fast = 12, slow = 26, signal = 9) {
+  if (closes.length < slow) return { macd: [], signal: [], histogram: [] }
+  const emaFast = computeEMA(closes, fast)
+  const emaSlow = computeEMA(closes, slow)
+  const macd = emaFast.map((f, i) => f - (emaSlow[i] || 0))
+  const signalLine = computeEMA(macd, signal)
+  const histogram = macd.map((m, i) => m - (signalLine[i] || 0))
+  return { macd, signal: signalLine, histogram }
+}
+
 export default function CandlestickChart({ candles, height = 500, selectedCoin = '—', interval = '4h' }) {
   const chartContainerRef = useRef(null)
   const chartRef = useRef(null)
@@ -51,7 +74,9 @@ export default function CandlestickChart({ candles, height = 500, selectedCoin =
   const volumeSeriesRef = useRef(null)
   const ema9SeriesRef = useRef(null)
   const ema21SeriesRef = useRef(null)
+  const vwapSeriesRef = useRef(null)
   const rsiSeriesRef = useRef(null)
+  const macdSeriesRef = useRef(null)
 
   const [hoverData, setHoverData] = useState(null)
   const retryCountRef = useRef(0)
@@ -59,7 +84,7 @@ export default function CandlestickChart({ candles, height = 500, selectedCoin =
 
   const candleData = useMemo(() => {
     if (!candles?.length) return []
-    return candles.map(c => ({
+    return candles.slice(-1000).map(c => ({
       time: Math.floor(c.time / 1000),
       open: Number(c.open),
       high: Number(c.high),
@@ -69,14 +94,30 @@ export default function CandlestickChart({ candles, height = 500, selectedCoin =
   }, [candles])
 
   const indicatorData = useMemo(() => {
-    if (candleData.length < 50) return { ema9: [], ema21: [], rsi: [] }
+    if (candleData.length < 50) return { ema9: [], ema21: [], vwap: [], rsi: [], macd: { macd: [], signal: [], histogram: [] } }
     
     const closes = candleData.map(c => c.close)
+    const highs = candleData.map(c => c.high)
+    const lows = candleData.map(c => c.low)
+    const volumes = candleData.map(c => c.volume || 0)
+    
     const ema9 = computeEMA(closes, 9).map((v, i) => ({ time: candleData[i]?.time, value: v }))
     const ema21 = computeEMA(closes, 21).map((v, i) => ({ time: candleData[i]?.time, value: v }))
+    const vwap = computeVWAP(highs, lows, closes, volumes).map((v, i) => ({ time: candleData[i]?.time, value: v }))
     const rsi = computeRSI(closes).map((v, i) => ({ time: candleData[i + 1]?.time, value: v }))
+    const macd = computeMACD(closes)
     
-    return { ema9: ema9.slice(-candleData.length), ema21: ema21.slice(-candleData.length), rsi }
+    return { 
+      ema9: ema9.slice(-candleData.length), 
+      ema21: ema21.slice(-candleData.length), 
+      vwap: vwap.slice(-candleData.length),
+      rsi,
+      macd: {
+        macd: macd.macd.slice(-candleData.length).map((v, i) => ({ time: candleData[i + 1]?.time, value: v })),
+        signal: macd.signal.slice(-candleData.length).map((v, i) => ({ time: candleData[i + 1]?.time, value: v })),
+        histogram: macd.histogram.slice(-candleData.length).map((v, i) => ({ time: candleData[i + 1]?.time, value: v, color: v >= 0 ? '#10b981' : '#ef4444' }))
+      }
+    }
   }, [candleData])
 
   const volumeData = useMemo(() => {
@@ -87,24 +128,6 @@ export default function CandlestickChart({ candles, height = 500, selectedCoin =
       color: c.close >= c.open ? '#10b98135' : '#ef444435',
     }))
   }, [candleData])
-
-  // Retry logic
-  const fetchWithRetry = useCallback(async (url, retries = maxRetries) => {
-    for (let i = 0; i < retries; i++) {
-      try {
-        const res = await fetch(url, { 
-          headers: getHeaders(), 
-          credentials: 'same-origin',
-          signal: AbortSignal.timeout(10000)
-        })
-        if (res.ok) return await res.json()
-        throw new Error(`HTTP ${res.status}`)
-      } catch (err) {
-        if (i === retries - 1) throw err
-        await new Promise(r => setTimeout(r, 1000 * (i + 1)))
-      }
-    }
-  }, [])
 
   useEffect(() => {
     if (!chartContainerRef.current) return
@@ -149,7 +172,6 @@ export default function CandlestickChart({ candles, height = 500, selectedCoin =
       handleScale: true,
     })
 
-    // Main candle series
     const candleSeries = chart.addCandlestickSeries({
       upColor: '#10b98166',
       downColor: '#ef444466',
@@ -159,14 +181,12 @@ export default function CandlestickChart({ candles, height = 500, selectedCoin =
       wickDownColor: '#ef4444',
     })
 
-    // Volume
     const volumeSeries = chart.addHistogramSeries({
       priceFormat: { type: 'volume' },
       priceScaleId: '',
       color: '#10b98120',
     })
 
-    // EMAs
     const ema9Series = chart.addLineSeries({
       color: '#10b981',
       lineWidth: 2,
@@ -177,8 +197,12 @@ export default function CandlestickChart({ candles, height = 500, selectedCoin =
       lineWidth: 2,
       lineStyle: LineStyle.Solid,
     })
+    const vwapSeries = chart.addLineSeries({
+      color: '#facc15',
+      lineWidth: 2,
+      lineStyle: LineStyle.Dashed,
+    })
 
-    // RSI subchart
     const rsiPriceScale = chart.priceScale('right', {
       scaleMargins: { top: 0.8, bottom: 0 },
       borderColor: '#374151',
@@ -188,8 +212,6 @@ export default function CandlestickChart({ candles, height = 500, selectedCoin =
       lineWidth: 2,
       priceScaleId: rsiPriceScale.id(),
     })
-
-    // Overbought/oversold lines
     const rsiOverbought = chart.addLineSeries({
       color: '#ef4444',
       lineWidth: 1,
@@ -206,12 +228,35 @@ export default function CandlestickChart({ candles, height = 500, selectedCoin =
     rsiOverbought.setData([{ time: candleData[0]?.time || 0, value: 70 }, { time: candleData[candleData.length - 1]?.time || 0, value: 70 }])
     rsiOversold.setData([{ time: candleData[0]?.time || 0, value: 30 }, { time: candleData[candleData.length - 1]?.time || 0, value: 30 }])
 
+    const macdPriceScale = chart.priceScale('right', {
+      scaleMargins: { top: 0.8, bottom: 0 },
+      borderColor: '#374151',
+    })
+    const macdSeries = chart.addLineSeries({
+      color: '#3b82f6',
+      lineWidth: 2,
+      priceScaleId: macdPriceScale.id(),
+    })
+    const macdSignalSeries = chart.addLineSeries({
+      color: '#f59e0b',
+      lineWidth: 2,
+      lineStyle: LineStyle.Dashed,
+      priceScaleId: macdPriceScale.id(),
+    })
+    const macdHistogramSeries = chart.addHistogramSeries({
+      color: '#10b981',
+      priceFormat: { type: 'price' },
+      priceScaleId: macdPriceScale.id(),
+    })
+
     chartRef.current = chart
     candleSeriesRef.current = candleSeries
     volumeSeriesRef.current = volumeSeries
     ema9SeriesRef.current = ema9Series
     ema21SeriesRef.current = ema21Series
+    vwapSeriesRef.current = vwapSeries
     rsiSeriesRef.current = rsiSeries
+    macdSeriesRef.current = macdSeries
 
     const handleResize = () => {
       chart.applyOptions({ width: chartContainerRef.current.clientWidth })
@@ -226,15 +271,19 @@ export default function CandlestickChart({ candles, height = 500, selectedCoin =
 
   useEffect(() => {
     if (!candleSeriesRef.current || !volumeSeriesRef.current || !ema9SeriesRef.current || 
-        !ema21SeriesRef.current || !rsiSeriesRef.current || !candleData.length) return
+        !ema21SeriesRef.current || !vwapSeriesRef.current || !rsiSeriesRef.current || 
+        !macdSeriesRef.current || !candleData.length) return
 
     candleSeriesRef.current.setData(candleData)
     volumeSeriesRef.current.setData(volumeData)
     ema9SeriesRef.current.setData(indicatorData.ema9)
     ema21SeriesRef.current.setData(indicatorData.ema21)
+    vwapSeriesRef.current.setData(indicatorData.vwap)
     rsiSeriesRef.current.setData(indicatorData.rsi)
+    macdSeriesRef.current.setData(indicatorData.macd.macd)
+    macdSeriesRef.current.setData(indicatorData.macd.signal)
+    macdSeriesRef.current.setData(indicatorData.macd.histogram)
 
-    // Auto-scroll to end
     if (chartRef.current) {
       const timeScale = chartRef.current.timeScale()
       timeScale.scrollToRealTime()
@@ -255,7 +304,9 @@ export default function CandlestickChart({ candles, height = 500, selectedCoin =
 
     const ema9Data = param.seriesData.get(ema9SeriesRef.current)
     const ema21Data = param.seriesData.get(ema21SeriesRef.current)
+    const vwapData = param.seriesData.get(vwapSeriesRef.current)
     const rsiData = param.seriesData.get(rsiSeriesRef.current)
+    const macdData = param.seriesData.get(macdSeriesRef.current)
 
     setHoverData({
       o: candleData.openValue,
@@ -265,7 +316,9 @@ export default function CandlestickChart({ candles, height = 500, selectedCoin =
       v: volumeData.find(d => d.time === candleData.time)?.value || 0,
       ema9: ema9Data?.value || 0,
       ema21: ema21Data?.value || 0,
+      vwap: vwapData?.value || 0,
       rsi: rsiData?.value || 50,
+      macd: macdData?.value || 0,
       time: candleData.time,
     })
   }, [volumeData])
@@ -325,6 +378,10 @@ export default function CandlestickChart({ candles, height = 500, selectedCoin =
                 <div className="font-bold text-blue-400">{fmtPrice(hoverData.rsi)}</div>
               </div>
               <div>
+                <div className="text-gray-400 mb-1">MACD</div>
+                <div className="font-bold text-blue-400">{fmtPrice(hoverData.macd)}</div>
+              </div>
+              <div>
                 <div className="text-gray-400 mb-1">Vol</div>
                 <div className="font-bold">${(hoverData.v / 1e6).toFixed(1)}M</div>
               </div>
@@ -335,6 +392,10 @@ export default function CandlestickChart({ candles, height = 500, selectedCoin =
               <div>
                 <div className="text-gray-400 mb-1">EMA21</div>
                 <div className="font-bold text-orange-400">{fmtPrice(hoverData.ema21)}</div>
+              </div>
+              <div>
+                <div className="text-gray-400 mb-1">VWAP</div>
+                <div className="font-bold text-yellow-400">{fmtPrice(hoverData.vwap)}</div>
               </div>
             </div>
           </div>

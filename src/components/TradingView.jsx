@@ -4,8 +4,9 @@ import ChartToolbar from './trading/ChartToolbar'
 import StatsBar from './trading/StatsBar'
 import CandlestickChart from './trading/CandlestickChart'
 import ChartSkeleton from './trading/ChartSkeleton'
+import OrderBook from './trading/OrderBook'
 
-const DEFAULT_COINS = ['BTC', 'ETH', 'SOL', 'BNB', 'XRP', 'ADA', 'DOGE', 'AVAX', 'LINK', 'SUI']
+const DEFAULT_SAFE_COINS = ['BTC', 'ETH']  // Always backend-safe
 const CHART_HEIGHT = 500
 
 function safeNum(v, fallback = 0) {
@@ -14,16 +15,42 @@ function safeNum(v, fallback = 0) {
 }
 
 export default function TradingView({ tradingPairs }) {
-  const coins = tradingPairs && tradingPairs.length > 0 ? tradingPairs : DEFAULT_COINS
-  const [selectedCoin, setSelectedCoin] = useState(coins[0])
+  const [coins, setCoins] = useState(DEFAULT_SAFE_COINS)
+  const [selectedCoin, setSelectedCoin] = useState(DEFAULT_SAFE_COINS[0])
   const [interval, setInterval_] = useState('4h')
   const [candles, setCandles] = useState([])
   const [chartLoading, setChartLoading] = useState(true)
   const [fetchError, setFetchError] = useState(null)
   const [lastPrice, setLastPrice] = useState(null)
   const [stats24h, setStats24h] = useState(null)
+  const [orderBook, setOrderBook] = useState(null)
   const mountedRef = useRef(true)
   const apiBase = getApiBase()
+
+  // Fetch coins list from backend
+  useEffect(() => {
+    const fetchConfig = async () => {
+      try {
+        const res = await fetch(`${apiBase}/config`, { 
+          headers: getHeaders(), 
+          credentials: 'same-origin',
+          signal: AbortSignal.timeout(10000)
+        })
+        if (res.ok) {
+          const json = await res.json()
+          if (json.trading_pairs && json.trading_pairs.length > 0) {
+            setCoins(json.trading_pairs)
+            if (!json.trading_pairs.includes(selectedCoin)) {
+              setSelectedCoin(json.trading_pairs[0])
+            }
+          }
+        }
+      } catch (err) {
+        console.warn('Config fetch failed, using defaults:', err.message)
+      }
+    }
+    fetchConfig()
+  }, [apiBase, selectedCoin])
 
   const fetchCandles = useCallback(async () => {
     console.log(`Fetching candles for ${selectedCoin} ${interval}`) // Debug log
@@ -32,15 +59,24 @@ export default function TradingView({ tradingPairs }) {
 
     try {
       const res = await fetch(
-        `${apiBase}/candles?coin=${selectedCoin}&interval=${interval}&limit=300`, // Increased limit for sparse data
+        `${apiBase}/candles?coin=${selectedCoin}&interval=${interval}&limit=300`,
         { 
           headers: getHeaders(), 
           credentials: 'same-origin',
-          signal: AbortSignal.timeout(15000) // 15s timeout
+          signal: AbortSignal.timeout(15000)
         }
       )
 
       if (!res.ok) {
+        if (res.status === 400) {
+          console.warn(`Coin ${selectedCoin} not supported, trying BTC fallback`)
+          setFetchError(`Coin ${selectedCoin} non supportata. Prova BTC/ETH.`)
+          // Fallback to BTC
+          if (selectedCoin !== 'BTC') {
+            setSelectedCoin('BTC')
+            return
+          }
+        }
         throw new Error(`HTTP ${res.status}: ${res.statusText}`)
       }
 
@@ -54,7 +90,7 @@ export default function TradingView({ tradingPairs }) {
           close: parseFloat(c.close || 0),
           volume: parseFloat(c.volume || 0),
         }))
-        console.log(`${selectedCoin}: Loaded ${candleData.length} candles`) // Debug
+        console.log(`${selectedCoin}: Loaded ${candleData.length} candles`)
       }
     } catch (err) {
       console.warn(`Fetch error ${selectedCoin} ${interval}:`, err.message)
@@ -91,6 +127,25 @@ export default function TradingView({ tradingPairs }) {
     setChartLoading(false)
   }, [apiBase, selectedCoin, interval])
 
+  const fetchOrderBook = useCallback(async () => {
+    try {
+      const res = await fetch(
+        `${apiBase}/orderbook?coin=${selectedCoin}&nSigFigs=5`,
+        { 
+          headers: getHeaders(), 
+          credentials: 'same-origin',
+          signal: AbortSignal.timeout(10000)
+        }
+      )
+      if (res.ok) {
+        const json = await res.json()
+        setOrderBook(json)
+      }
+    } catch (err) {
+      console.warn(`Orderbook fetch failed for ${selectedCoin}:`, err.message)
+    }
+  }, [apiBase, selectedCoin])
+
   useEffect(() => {
     mountedRef.current = true
     setChartLoading(true)
@@ -98,21 +153,26 @@ export default function TradingView({ tradingPairs }) {
     setStats24h(null)
     setLastPrice(null)
     setFetchError(null)
+    setOrderBook(null)
 
     fetchCandles()
-    const timer = window.setInterval(fetchCandles, 30000)
+    fetchOrderBook()
+    
+    const candleTimer = window.setInterval(fetchCandles, 30000)
+    const obTimer = window.setInterval(fetchOrderBook, 10000)
 
     return () => {
       mountedRef.current = false
-      window.clearInterval(timer)
+      window.clearInterval(candleTimer)
+      window.clearInterval(obTimer)
     }
-  }, [fetchCandles])
+  }, [fetchCandles, fetchOrderBook])
 
   const change = stats24h ? safeNum(stats24h.change, 0) : 0
   const isPositive = change >= 0
   const changePct = stats24h ? change.toFixed(2) : null
 
-  const chartKey = `${selectedCoin}-${interval}` // Force re-mount
+  const chartKey = `${selectedCoin}-${interval}`
 
   return (
     <div className="bg-gray-900 rounded-xl border border-gray-800 overflow-hidden">
@@ -129,33 +189,40 @@ export default function TradingView({ tradingPairs }) {
 
       <StatsBar stats24h={stats24h} />
 
-      {chartLoading ? (
-        <ChartSkeleton height={CHART_HEIGHT} />
-      ) : candles.length === 0 ? (
-        <div className="flex items-center justify-center text-gray-500 p-12" style={{ height: CHART_HEIGHT }}>
-          <div className="text-center">
-            <div className="text-4xl mb-4">📊</div>
-            <p className="text-sm font-medium mb-1">No chart data for {selectedCoin}</p>
-            {fetchError ? (
-              <p className="text-xs text-red-400 bg-red-900/30 px-2 py-1 rounded mt-2">
-                Errore: {fetchError}
-              </p>
-            ) : (
-              <p className="text-xs text-gray-600 mt-1">
-                Prova un altro timeframe/coin o verifica backend API
-              </p>
-            )}
-          </div>
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-0">
+        <div className="lg:col-span-2">
+          {chartLoading ? (
+            <ChartSkeleton height={CHART_HEIGHT} />
+          ) : candles.length === 0 ? (
+            <div className="flex items-center justify-center text-gray-500 p-12" style={{ height: CHART_HEIGHT }}>
+              <div className="text-center">
+                <div className="text-4xl mb-4">📊</div>
+                <p className="text-sm font-medium mb-1">No chart data for {selectedCoin}</p>
+                {fetchError ? (
+                  <p className="text-xs text-red-400 bg-red-900/30 px-2 py-1 rounded mt-2">
+                    {fetchError}
+                  </p>
+                ) : (
+                  <p className="text-xs text-gray-600 mt-1">
+                    Prova un altro timeframe/coin o verifica backend API
+                  </p>
+                )}
+              </div>
+            </div>
+          ) : (
+            <CandlestickChart
+              key={chartKey}
+              candles={candles}
+              height={CHART_HEIGHT}
+              selectedCoin={selectedCoin}
+              interval={interval}
+            />
+          )}
         </div>
-      ) : (
-        <CandlestickChart
-          key={chartKey}  // Force re-mount on coin/interval change
-          candles={candles}
-          height={CHART_HEIGHT}
-          selectedCoin={selectedCoin}
-          interval={interval}
-        />
-      )}
+        <div className="lg:col-span-1 border-l border-gray-800">
+          <OrderBook orderBook={orderBook} coin={selectedCoin} />
+        </div>
+      </div>
     </div>
   )
 }
