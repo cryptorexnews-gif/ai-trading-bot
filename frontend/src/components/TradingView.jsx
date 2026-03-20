@@ -7,11 +7,21 @@ import OrderBookPanel from './trading/OrderBookPanel'
 
 const DEFAULT_COINS = ['BTC', 'ETH', 'SOL', 'BNB', 'XRP', 'ADA', 'DOGE', 'AVAX', 'LINK', 'SUI']
 const PANEL_HEIGHT = 520
-const HYPERLIQUID_API = 'https://api.hyperliquid.xyz/info'
+const HYPERLIQUID_INFO_URL = 'https://api.hyperliquid.xyz/info'
 
 function safeNum(v, fallback = 0) {
   if (v == null || isNaN(v)) return fallback
   return v
+}
+
+async function fetchFromHyperliquid(payload) {
+  const res = await fetch(HYPERLIQUID_INFO_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+  if (!res.ok) return null
+  return res.json()
 }
 
 export default function TradingView({ tradingPairs }) {
@@ -29,88 +39,97 @@ export default function TradingView({ tradingPairs }) {
   const [lastPrice, setLastPrice] = useState(null)
   const [stats24h, setStats24h] = useState(null)
   const mountedRef = useRef(true)
+  const obErrorLoggedRef = useRef(false)
 
-  // ─── Fetch candles (try proxy first, fallback to direct Hyperliquid) ──
+  // ─── Fetch candles ─────────────────────────────────────────────────────
   const fetchCandles = useCallback(async () => {
-    // Try proxy first
-    let data = null
+    let candleData = null
+
+    // Try proxy
     try {
       const res = await fetch(
         `/api/candles?coin=${selectedCoin}&interval=${interval}&limit=150`,
         { headers: getHeaders() }
       )
       if (res.ok) {
-        data = await res.json()
+        const json = await res.json()
+        if (json.candles && json.candles.length > 0) {
+          candleData = json.candles
+        }
       }
-    } catch { /* proxy unavailable */ }
+    } catch { /* proxy down */ }
 
     // Fallback: direct Hyperliquid
-    if (!data || !data.candles || data.candles.length === 0) {
+    if (!candleData) {
       try {
         const now = Date.now()
-        const intervalMs = { '1m': 60000, '5m': 300000, '15m': 900000, '1h': 3600000, '4h': 14400000, '1d': 86400000 }
-        const ms = intervalMs[interval] || 900000
-        const res = await fetch(HYPERLIQUID_API, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            type: 'candleSnapshot',
-            req: { coin: selectedCoin, interval, startTime: now - ms * 150, endTime: now }
-          })
+        const msMap = { '1m': 60000, '5m': 300000, '15m': 900000, '1h': 3600000, '4h': 14400000, '1d': 86400000 }
+        const ms = msMap[interval] || 900000
+        const raw = await fetchFromHyperliquid({
+          type: 'candleSnapshot',
+          req: { coin: selectedCoin, interval, startTime: now - ms * 150, endTime: now }
         })
-        if (res.ok) {
-          const raw = await res.json()
-          if (Array.isArray(raw) && raw.length > 0) {
-            data = {
-              candles: raw.map(c => ({
-                time: c.t || 0,
-                open: parseFloat(c.o || 0),
-                high: parseFloat(c.h || 0),
-                low: parseFloat(c.l || 0),
-                close: parseFloat(c.c || 0),
-                volume: parseFloat(c.v || 0),
-              }))
-            }
-          }
+        if (Array.isArray(raw) && raw.length > 0) {
+          candleData = raw.map(c => ({
+            time: c.t || 0,
+            open: parseFloat(c.o || 0),
+            high: parseFloat(c.h || 0),
+            low: parseFloat(c.l || 0),
+            close: parseFloat(c.c || 0),
+            volume: parseFloat(c.v || 0),
+          }))
         }
-      } catch { /* direct also failed */ }
+      } catch { /* direct failed */ }
     }
 
     if (!mountedRef.current) return
-    if (!data || !data.candles || data.candles.length === 0) {
+    if (!candleData || candleData.length === 0) {
       setChartLoading(false)
       return
     }
 
-    setCandles(data.candles)
-    const last = data.candles[data.candles.length - 1]
-    const first = data.candles[0]
+    setCandles(candleData)
+    const last = candleData[candleData.length - 1]
+    const first = candleData[0]
     setLastPrice(safeNum(last.close, null))
 
-    const high = Math.max(...data.candles.map(c => safeNum(c.high, 0)))
-    const low = Math.min(...data.candles.filter(c => safeNum(c.low, 0) > 0).map(c => c.low))
-    const vol = data.candles.reduce((sum, c) => sum + safeNum(c.volume, 0), 0) * safeNum(last.close, 0)
-    const openPrice = safeNum(first.open, 0)
-    const closePrice = safeNum(last.close, 0)
-    const change = openPrice > 0 ? ((closePrice - openPrice) / openPrice) * 100 : 0
+    const high = Math.max(...candleData.map(c => safeNum(c.high, 0)))
+    const lowVals = candleData.filter(c => safeNum(c.low, 0) > 0).map(c => c.low)
+    const low = lowVals.length > 0 ? Math.min(...lowVals) : 0
+    const vol = candleData.reduce((s, c) => s + safeNum(c.volume, 0), 0) * safeNum(last.close, 0)
+    const openP = safeNum(first.open, 0)
+    const closeP = safeNum(last.close, 0)
+    const chg = openP > 0 ? ((closeP - openP) / openP) * 100 : 0
 
     setStats24h({
       high: safeNum(high, 0),
       low: safeNum(low, 0),
       volume: safeNum(vol, 0),
-      change: safeNum(change, 0),
-      open: openPrice,
-      close: closePrice,
+      change: safeNum(chg, 0),
+      open: openP,
+      close: closeP,
     })
     setChartLoading(false)
   }, [selectedCoin, interval])
 
-  // ─── Fetch order book (try proxy first, fallback to direct Hyperliquid)
+  // ─── Fetch order book ──────────────────────────────────────────────────
   const fetchOrderBook = useCallback(async () => {
     let parsedBids = []
     let parsedAsks = []
     let calcSpread = 0
     let calcSpreadPct = 0
+
+    // Helper to parse Hyperliquid L2 levels
+    const parseLevels = (rawLevels) => {
+      if (!rawLevels || !Array.isArray(rawLevels)) return []
+      return rawLevels
+        .map(l => ({
+          px: parseFloat(l.px || 0),
+          sz: parseFloat(l.sz || 0),
+          n: parseInt(l.n || 0),
+        }))
+        .filter(l => l.sz > 0 && l.px > 0)
+    }
 
     // Try proxy first
     try {
@@ -132,27 +151,15 @@ export default function TradingView({ tradingPairs }) {
     // Fallback: direct Hyperliquid
     if (parsedBids.length === 0) {
       try {
-        const res = await fetch(HYPERLIQUID_API, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            type: 'l2Book',
-            coin: selectedCoin,
-            nSigFigs: nSigFigs,
-          })
+        const raw = await fetchFromHyperliquid({
+          type: 'l2Book',
+          coin: selectedCoin,
+          nSigFigs: nSigFigs,
         })
-        if (res.ok) {
-          const data = await res.json()
-          const levels = data.levels || [[], []]
-          const rawBids = levels[0] || []
-          const rawAsks = levels[1] || []
 
-          parsedBids = rawBids
-            .map(l => ({ px: parseFloat(l.px || 0), sz: parseFloat(l.sz || 0), n: parseInt(l.n || 0) }))
-            .filter(l => l.sz > 0)
-          parsedAsks = rawAsks
-            .map(l => ({ px: parseFloat(l.px || 0), sz: parseFloat(l.sz || 0), n: parseInt(l.n || 0) }))
-            .filter(l => l.sz > 0)
+        if (raw && raw.levels && Array.isArray(raw.levels)) {
+          parsedBids = parseLevels(raw.levels[0])
+          parsedAsks = parseLevels(raw.levels[1])
 
           if (parsedBids.length > 0 && parsedAsks.length > 0) {
             const bestBid = parsedBids[0].px
@@ -161,8 +168,18 @@ export default function TradingView({ tradingPairs }) {
             const mid = (bestAsk + bestBid) / 2
             calcSpreadPct = mid > 0 ? (calcSpread / mid) * 100 : 0
           }
+
+          if (!obErrorLoggedRef.current && parsedBids.length > 0) {
+            console.log(`[OrderBook] Direct fetch OK: ${parsedBids.length} bids, ${parsedAsks.length} asks`)
+            obErrorLoggedRef.current = true
+          }
         }
-      } catch { /* direct also failed */ }
+      } catch (err) {
+        if (!obErrorLoggedRef.current) {
+          console.warn('[OrderBook] Both proxy and direct fetch failed:', err.message)
+          obErrorLoggedRef.current = true
+        }
+      }
     }
 
     if (!mountedRef.current) return
@@ -174,9 +191,10 @@ export default function TradingView({ tradingPairs }) {
     setObLoading(false)
   }, [selectedCoin, nSigFigs])
 
-  // ─── Polling ───────────────────────────────────────────────────────────
+  // ─── Reset on coin/interval change + start polling ─────────────────────
   useEffect(() => {
     mountedRef.current = true
+    obErrorLoggedRef.current = false
     setChartLoading(true)
     setObLoading(true)
     setCandles([])
@@ -184,10 +202,13 @@ export default function TradingView({ tradingPairs }) {
     setAsks([])
     setStats24h(null)
     setLastPrice(null)
+
     fetchCandles()
     fetchOrderBook()
+
     const chartTimer = window.setInterval(fetchCandles, 30000)
     const obTimer = window.setInterval(fetchOrderBook, 2000)
+
     return () => {
       mountedRef.current = false
       window.clearInterval(chartTimer)

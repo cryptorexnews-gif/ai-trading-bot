@@ -2,6 +2,7 @@
 Shared helper functions for API routes.
 """
 
+import logging
 import re
 from typing import Any, Dict, Optional
 
@@ -12,6 +13,7 @@ from api.config import HYPERLIQUID_BASE_URL
 # Re-export from shared utils so routes can import from one place
 from utils.file_io import read_json_file  # noqa: F401
 
+logger = logging.getLogger(__name__)
 
 # ─── Hyperliquid proxy ────────────────────────────────────────────────────────
 
@@ -21,12 +23,21 @@ def post_hyperliquid_info(payload: dict, timeout: int = 15) -> Optional[Any]:
         response = requests.post(
             f"{HYPERLIQUID_BASE_URL}/info",
             json=payload,
+            headers={"Content-Type": "application/json"},
             timeout=timeout
         )
         if response.status_code == 200:
             return response.json()
+        logger.warning(f"Hyperliquid /info returned status {response.status_code} for {payload.get('type', 'unknown')}")
         return None
-    except Exception:
+    except requests.exceptions.Timeout:
+        logger.warning(f"Hyperliquid /info timeout for {payload.get('type', 'unknown')}")
+        return None
+    except requests.exceptions.ConnectionError as e:
+        logger.warning(f"Hyperliquid /info connection error: {e}")
+        return None
+    except Exception as e:
+        logger.warning(f"Hyperliquid /info error: {type(e).__name__}: {e}")
         return None
 
 
