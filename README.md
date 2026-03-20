@@ -1,236 +1,141 @@
 # 🤖 Hyperliquid Trading Bot
 
-**AI-Powered Trading Bot for Hyperliquid Exchange**  
-*Powered by Claude Opus 4.6 via OpenRouter • All data from Hyperliquid API • Real-time React Dashboard*
+**AI-Powered Trading Bot for Hyperliquid** | Claude Opus 4.6 | Real-time Dashboard
 
-[![Dashboard Preview](frontend/src/assets/dashboard-reference.jpg)](frontend/src/assets/dashboard-reference.jpg)
+## 🚀 QUICK START (3 MINUTI)
 
-## 🚀 Quick Start (5 minutes)
-
-### 1. Install Dependencies
+### 1. Installa
 ```bash
 pip install -r requirements.txt
 cd frontend && npm install && cd ..
 ```
 
-### 2. Setup Environment
+### 2. Configura .env (COPIA E MODIFICA)
 ```bash
 cp .env.example .env
 ```
-**IMPORTANT**: Edit `.env` and **fill these REQUIRED fields**:
+**APRI `.env` e COMPILA SOLO QUESTI**:
 ```
-HYPERLIQUID_WALLET_ADDRESS=0xYourWalletAddress
-HYPERLIQUID_PRIVATE_KEY=0xYourPrivateKey
-OPENROUTER_API_KEY=sk-or-...
-DASHBOARD_API_KEY=your-super-secret-key-change-this-now
+HYPERLIQUID_WALLET_ADDRESS=0xIlTuoWallet
+HYPERLIQUID_PRIVATE_KEY=0xLaTuaChiavePrivata
+OPENROUTER_API_KEY=sk-or-LaTuaChiaveOpenRouter
+DASHBOARD_API_KEY=hyperliquid123-super-secure-key-456
+VITE_DASHBOARD_API_KEY=hyperliquid123-super-secure-key-456  # STESSA CHIAVE!
 ```
 
-### 3. Test Everything
+### 3. Test Configurazione
 ```bash
 python scripts/test_connection.py
 ```
-✅ **All green?** Continue!
+✅ **Tutti verdi?** Procedi!
 
-### 4. Test Single Cycle (SAFE - Paper Mode)
+### 4. Test Singolo Ciclo (SICURO)
 ```bash
 python hyperliquid_bot_executable_orders.py --single-cycle
 ```
 
-### 5. Production Launch (3 Terminals)
-**Terminal 1 - Bot:**
-```bash
+### 5. AVVIA (3 TERMINALI)
+```
+# TERMINALE 1: BOT
 python hyperliquid_bot_executable_orders.py
-```
 
-**Terminal 2 - API Server:**
-```bash
+# TERMINALE 2: API SERVER
 python api_server.py
-```
 
-**Terminal 3 - Dashboard:**
-```bash
+# TERMINALE 3: DASHBOARD
 cd frontend && npm run dev
 ```
 
 ✅ **Dashboard**: [http://localhost:3000](http://localhost:3000)
 
-## 🔧 Fix Common Issues
+## ✅ DASHBOARD_API_KEY AUTO-FIX
 
-### ❌ "DASHBOARD_API_KEY not set while EXECUTION_MODE=live"
-**Problem**: Backend requires API key in LIVE mode, frontend doesn't send it.
-
-**Solution**:
-1. `.env` deve avere:
-   ```
-   DASHBOARD_API_KEY=your-super-secret-key-change-this-now
-   ```
-2. **Riavvia** `api_server.py`
-3. **Riavvia** frontend (`npm run dev`)
-4. Vite carica automaticamente `VITE_DASHBOARD_API_KEY` dal `.env`
-
-**Test**: 
-```bash
-curl -H "X-API-Key: your-super-secret-key-change-this-now" http://127.0.0.1:5000/api/health
+**Il tuo errore è RISOLTO**:
 ```
-✅ Response: `{"status":"ok"}`
-
-### ❌ Dashboard "API Server Not Running"
-```
-Terminal 2: python api_server.py
-```
-✅ Deve mostrare: `Running on http://127.0.0.1:5000`
-
-### ❌ "Unauthorized" (401)
-- Verifica `DASHBOARD_API_KEY` identico in `.env`
-- Riavvia **entrambi** server (backend + frontend)
-- Controlla browser console per errori CORS
-
-### ❌ No trades
-```
-# Testa in paper mode prima
-EXECUTION_MODE=paper python hyperliquid_bot_executable_orders.py --single-cycle
-
-# Per live trading REALE:
-EXECUTION_MODE=live
-ENABLE_MAINNET_TRADING=true
+🚀 DASHBOARD_API_KEY AUTO-GENERATED (add to .env):
+   DASHBOARD_API_KEY=abc123XYZ-super-secure-key-456def789
+   VITE_DASHBOARD_API_KEY=abc123XYZ-super-secure-key-456def789
 ```
 
-## 📊 Dashboard Features
+**COPIA la chiave generata nel tuo `.env`** (stessa per entrambe le righe) e **riavvia** `api_server.py`.
 
-| Section | Cosa vedi |
+## 🛠️ Risoluzione Problemi Comuni
+
+| ❌ Errore | ✅ Soluzione |
+|-----------|-------------|
+| `DASHBOARD_API_KEY not set` | Copia chiave generata da log → `.env` → riavvia |
+| Dashboard vuota | `python api_server.py` (Terminale 2) |
+| 401 Unauthorized | **STESSA CHIAVE** in `DASHBOARD_API_KEY` + `VITE_DASHBOARD_API_KEY` |
+| No trades | `EXECUTION_MODE=live` + `ENABLE_MAINNET_TRADING=true` |
+
+## 📊 Dashboard Live
+
+| Sezione | Cosa vedi |
 |---------|-----------|
-| **Stats** | Balance, PnL, Margin, Win Rate, Cycle |
-| **Drawdown** | Barra rossa se >8% (blocca trading a 12%) |
-| **TradingView** | Candele live + Order Book |
-| **Equity** | Curva equity reale (non simulata) |
-| **Risk Mgmt** | SL/TP/Trailing/Break-Even attivi |
-| **Trades** | Storia + ragionamento AI + Export CSV |
-| **Circuit Breakers** | Protezione API failures |
-| **Logs** | Log live filtrati |
+| **Stats** | Balance • PnL • Margin • Win Rate |
+| **Drawdown** | Barra rossa >8% (stop automatico 12%) |
+| **TradingView** | Candele live + Orderbook |
+| **Equity** | Curva portfolio reale |
+| **Risk Mgmt** | SL/TP/Trailing/BE attivi |
+| **Trades** | Storia + AI reasoning + CSV Export |
 
-## ⚙️ Configuration (.env)
+## ⚙️ Configurazione Principale (.env)
 
-### Required (Obbligatorie)
 ```
-HYPERLIQUID_WALLET_ADDRESS=0x...
-HYPERLIQUID_PRIVATE_KEY=0x...
-OPENROUTER_API_KEY=sk-or-...
-DASHBOARD_API_KEY=your-secret-key
-```
+# MODALITÀ TRADING
+EXECUTION_MODE=paper     # paper (sicuro) / live (reale)
+ENABLE_MAINNET_TRADING=false  # ⚠️ true = SOLDI VERTI!
 
-### Trading Mode
-```
-EXECUTION_MODE=paper     # Simulato (sicuro)
-EXECUTION_MODE=live      # Ordini reali (richiede DASHBOARD_API_KEY)
-ENABLE_MAINNET_TRADING=true  # ⚠️ SOLDI VERTI!
-```
-
-### Risk Limits
-```
-MAX_DRAWDOWN_PCT=0.12    # Stop at 12%
+# RISCHIO
+MAX_DRAWDOWN_PCT=0.12    # Stop 12%
 DAILY_NOTIONAL_LIMIT_USD=500
-HARD_MAX_LEVERAGE=7
-```
 
-### Risk:Reward
-```
+# R:R
 DEFAULT_SL_PCT=0.03      # Stop Loss 3%
 DEFAULT_TP_PCT=0.05      # Take Profit 5%
 ```
 
-**Full config**: `.env.example`
+**Completa**: `.env.example`
 
-## 🛡️ Safety Features (Attive Sempre)
+## 🛡️ Protezioni Automatiche
 
-- **Paper Mode** (default): Ordini simulati
-- **Drawdown Protection**: Blocca a 12%
-- **Circuit Breakers**: API down → stop
-- **Emergency Close**: Margin >85%
-- **Correlation Block**: No double BTC+ETH long
-- **Fill Verification**: Conferma ordini eseguiti
+- **Paper Mode** (default)
+- **Drawdown 12%** → Stop trading
+- **Margin 85%** → Chiude peggior posizione
+- **Circuit Breakers** → API down = stop
+- **Correlazione** → Blocca BTC+ETH long
+- **Fill Verification** → Conferma ordini eseguiti
 
 ## 📱 Telegram (Opzionale)
 ```
-TELEGRAM_BOT_TOKEN=123456:ABC...
-TELEGRAM_CHAT_ID=123456789
+TELEGRAM_BOT_TOKEN=...
+TELEGRAM_CHAT_ID=...
 ```
-Notifiche: trades, SL/TP, emergenze, daily summary.
+Alert: trades, SL/TP, emergenze.
 
-## 🧪 Scripts Utili
-
+## 🧪 Script Utili
 ```bash
-# Test completo
-python scripts/test_connection.py
-
-# Chiudi SOL (emergenza)
-python close_sol_position.py
-
-# Ordine minimo test
-python hyperliquid_minimal_order.py
-
-# Controlla posizioni
-python check_current_positions.py
+python scripts/test_connection.py     # Test tutto
+python close_sol_position.py          # Chiudi SOL emergenza
+python check_current_positions.py     # Vedi posizioni
 ```
 
-## 🏃‍♂️ Gestione Bot (Production)
-
-### Avvio Completo
+## 🏃‍♂️ Production (Background)
 ```bash
-# Bot (background)
 nohup python hyperliquid_bot_executable_orders.py > bot.log 2>&1 &
-
-# API Server
 python api_server.py
-
-# Dashboard
 cd frontend && npm run dev
 ```
 
-### Stop Graceful
-```bash
-# Ctrl+C su tutti i terminali
-# O kill -SIGTERM <pid>
-```
+**Stop**: `Ctrl+C` o `kill -SIGTERM <pid>`
 
-### Monitoraggio
-```
-tail -f logs/hyperliquid_bot.log
-curl http://127.0.0.1:5000/metrics  # Prometheus
-```
+## 📈 Costi
+- **LLM**: ~$0.03/call → ~$10/giorno (20 pairs)
+- **Hyperliquid**: Fee normali maker/taker
 
-### Restart Veloce
-```bash
-# Script pronti
-bash scripts/start_bot.sh
-bash scripts/run_single_cycle.sh
-```
+**Scalabile**: `DEFAULT_CYCLE_SEC=300` → dimezza costi.
 
-## 🚀 Docker (Facoltativo)
-```bash
-docker-compose up -d
-docker-compose logs -f bot
-```
-
-## 🐛 Troubleshooting Rapido
-
-| Errore | Soluzione |
-|--------|-----------|
-| **DASHBOARD_API_KEY missing** | Aggiungi in `.env`, riavvia tutto |
-| **Dashboard blank** | `python api_server.py` |
-| **401 Unauthorized** | Verifica chiave identica backend/frontend |
-| **No trades** | `EXECUTION_MODE=live ENABLE_MAINNET_TRADING=true` |
-| **Permission denied** | `chmod 700 state/ logs/` |
-
-## 📈 Performance & Costi
-
-| Item | Costo |
-|------|-------|
-| LLM (Opus) | ~$0.03/call → ~$10/giorno (20 pairs, 2min cycle) |
-| Hyperliquid | Gratuito (maker/taker fees normali) |
-
-**Scalabile**: Aumenta `DEFAULT_CYCLE_SEC` per ridurre costi LLM.
-
-## 📄 License
-MIT — Free for personal/commercial use.
+## 📄 Licenza
+MIT — Free uso personale/commerciale.
 
 **Buon Trading! 🚀🇮🇹**
