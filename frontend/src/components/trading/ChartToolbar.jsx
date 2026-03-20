@@ -42,22 +42,20 @@ export default function ChartToolbar({
         )}
       </div>
 
-      <div className="flex items-center gap-2">
-        <div className="flex bg-gray-800 rounded-lg border border-gray-700 overflow-hidden">
-          {INTERVALS.map(i => (
-            <button
-              key={i.value}
-              onClick={() => setInterval(i.value)}
-              className={`px-3 py-1.5 text-xs font-medium transition-colors ${
-                interval === i.value
-                  ? 'bg-blue-600 text-white'
-                  : 'text-gray-400 hover:text-white hover:bg-gray-700'
-              }`}
-            >
-              {i.label}
-            </button>
-          ))}
-        </div>
+      <div className="flex bg-gray-800 rounded-lg border border-gray-700 overflow-hidden">
+        {INTERVALS.map(i => (
+          <button
+            key={i.value}
+            onClick={() => setInterval(i.value)}
+            className={`px-3 py-1.5 text-xs font-medium transition-colors ${
+              interval === i.value
+                ? 'bg-blue-600 text-white'
+                : 'text-gray-400 hover:text-white hover:bg-gray-700'
+            }`}
+          >
+            {i.label}
+          </button>
+        ))}
       </div>
     </div>
   )

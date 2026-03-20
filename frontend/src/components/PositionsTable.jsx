@@ -1,6 +1,11 @@
 import React from 'react'
 import { TrendingUp, TrendingDown } from 'lucide-react'
 
+function safeNum(v, fallback = 0) {
+  const n = parseFloat(v)
+  return isNaN(n) ? fallback : n
+}
+
 export default function PositionsTable({ positions }) {
   if (!positions || Object.keys(positions).length === 0) {
     return (
@@ -36,12 +41,12 @@ export default function PositionsTable({ positions }) {
           </thead>
           <tbody>
             {Object.entries(positions).map(([coin, pos]) => {
-              const size = parseFloat(pos.size || 0)
+              const size = safeNum(pos.size)
               const isLong = size > 0
-              const pnl = parseFloat(pos.unrealized_pnl || 0)
+              const pnl = safeNum(pos.unrealized_pnl)
               const isPnlPositive = pnl >= 0
-              const entryPrice = parseFloat(pos.entry_price || 0)
-              const marginUsed = parseFloat(pos.margin_used || 0)
+              const entryPrice = safeNum(pos.entry_price)
+              const marginUsed = safeNum(pos.margin_used)
               const posValue = Math.abs(size) * entryPrice
               const leverage = marginUsed > 0 ? (posValue / marginUsed).toFixed(1) : '—'
 

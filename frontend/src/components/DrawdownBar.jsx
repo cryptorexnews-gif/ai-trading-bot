@@ -4,11 +4,11 @@ export default function DrawdownBar({ peakValue, currentBalance, maxDrawdownPct 
   const peak = parseFloat(peakValue || 0)
   const current = parseFloat(currentBalance || 0)
 
-  if (peak <= 0) {
+  if (peak <= 0 || isNaN(peak) || isNaN(current)) {
     return null
   }
 
-  const drawdownPct = ((peak - current) / peak) * 100
+  const drawdownPct = Math.max(0, ((peak - current) / peak) * 100)
   const maxPct = maxDrawdownPct * 100
   const fillPct = Math.min((drawdownPct / maxPct) * 100, 100)
 

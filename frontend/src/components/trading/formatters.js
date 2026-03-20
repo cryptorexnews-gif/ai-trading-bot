@@ -33,16 +33,3 @@ export function fmtVol(v) {
   if (n >= 1e3) return `$${(n / 1e3).toFixed(1)}K`
   return `$${n.toFixed(0)}`
 }
-
-export function getApiKey() {
-  if (typeof window !== 'undefined' && window.__DASHBOARD_API_KEY__) return window.__DASHBOARD_API_KEY__
-  const meta = document.querySelector('meta[name="dashboard-api-key"]')
-  return meta ? meta.getAttribute('content') : ''
-}
-
-export function getHeaders() {
-  const headers = {}
-  const key = getApiKey()
-  if (key) headers['X-API-Key'] = key
-  return headers
-}

@@ -13,6 +13,15 @@ function getApiKey() {
   return ''
 }
 
+export function getHeaders() {
+  const headers = {}
+  const apiKey = getApiKey()
+  if (apiKey) {
+    headers['X-API-Key'] = apiKey
+  }
+  return headers
+}
+
 export function useApi(endpoint, intervalMs = 5000) {
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(true)
@@ -20,16 +29,13 @@ export function useApi(endpoint, intervalMs = 5000) {
   const [lastUpdated, setLastUpdated] = useState(null)
   const mountedRef = useRef(true)
   const errorLoggedRef = useRef(false)
+  const fetchIdRef = useRef(0)
 
   const fetchData = useCallback(async () => {
-    try {
-      const headers = {}
-      const apiKey = getApiKey()
-      if (apiKey) {
-        headers['X-API-Key'] = apiKey
-      }
+    const currentFetchId = ++fetchIdRef.current
 
-      const response = await fetch(`${API_BASE}${endpoint}`, { headers })
+    try {
+      const response = await fetch(`${API_BASE}${endpoint}`, { headers: getHeaders() })
       if (!response.ok) {
         if (response.status === 401) {
           throw new Error('Unauthorized — check DASHBOARD_API_KEY')
@@ -37,23 +43,24 @@ export function useApi(endpoint, intervalMs = 5000) {
         throw new Error(`HTTP ${response.status}`)
       }
       const json = await response.json()
-      if (mountedRef.current) {
+
+      // Guard against race conditions: only apply if this is still the latest fetch
+      if (mountedRef.current && currentFetchId === fetchIdRef.current) {
         setData(json)
         setError(null)
         setLastUpdated(new Date())
         errorLoggedRef.current = false
       }
     } catch (err) {
-      if (mountedRef.current) {
+      if (mountedRef.current && currentFetchId === fetchIdRef.current) {
         setError(err.message)
-        // Only log the first error to avoid console spam when backend is down
         if (!errorLoggedRef.current) {
           console.warn(`[useApi] ${endpoint}: ${err.message}`)
           errorLoggedRef.current = true
         }
       }
     } finally {
-      if (mountedRef.current) {
+      if (mountedRef.current && currentFetchId === fetchIdRef.current) {
         setLoading(false)
       }
     }
@@ -61,6 +68,10 @@ export function useApi(endpoint, intervalMs = 5000) {
 
   useEffect(() => {
     mountedRef.current = true
+    fetchIdRef.current = 0
+    setLoading(true)
+    setError(null)
+
     fetchData()
     const interval = setInterval(fetchData, intervalMs)
     return () => {

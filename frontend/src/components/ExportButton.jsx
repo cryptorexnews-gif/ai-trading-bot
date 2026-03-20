@@ -1,5 +1,6 @@
 import React, { useState } from 'react'
 import { Download } from 'lucide-react'
+import { getHeaders } from '../hooks/useApi'
 
 export default function ExportButton() {
   const [loading, setLoading] = useState(false)
@@ -7,7 +8,7 @@ export default function ExportButton() {
   const handleExport = async () => {
     setLoading(true)
     try {
-      const response = await fetch('/api/trades/export')
+      const response = await fetch('/api/trades/export', { headers: getHeaders() })
       if (!response.ok) throw new Error('Export failed')
       const blob = await response.blob()
       const url = window.URL.createObjectURL(blob)

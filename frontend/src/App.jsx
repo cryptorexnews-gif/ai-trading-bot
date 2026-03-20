@@ -17,6 +17,11 @@ import DrawdownBar from './components/DrawdownBar'
 import ConnectionStatus from './components/ConnectionStatus'
 import ExportButton from './components/ExportButton'
 
+function safeNum(v, fallback = 0) {
+  const n = parseFloat(v)
+  return isNaN(n) ? fallback : n
+}
+
 export default function App() {
   const { data: statusData, error: statusError, lastUpdated: statusUpdated } = useApi('/status', 5000)
   const { data: portfolioData } = useApi('/portfolio', 5000)
@@ -45,6 +50,12 @@ export default function App() {
   const maxDrawdown = parseFloat(configData?.max_drawdown_pct || '0.15')
   const tradingPairs = configData?.trading_pairs || []
   const tradingPairsCount = configData?.trading_pairs_count || tradingPairs.length
+
+  const balance = safeNum(portfolio.total_balance)
+  const available = safeNum(portfolio.available_balance)
+  const unrealizedPnl = safeNum(portfolio.total_unrealized_pnl)
+  const marginUsage = safeNum(portfolio.margin_usage)
+  const positionCount = safeNum(portfolio.position_count)
 
   return (
     <div className="min-h-screen bg-gray-950 text-white">
@@ -79,23 +90,23 @@ export default function App() {
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
           <StatCard
             title="Balance"
-            value={`$${(portfolio.total_balance || 0).toFixed(2)}`}
-            subtitle={`Avail: $${(portfolio.available_balance || 0).toFixed(2)}`}
+            value={`$${balance.toFixed(2)}`}
+            subtitle={`Avail: $${available.toFixed(2)}`}
             icon={DollarSign}
             color="green"
           />
           <StatCard
             title="Unrealized PnL"
-            value={`$${(portfolio.total_unrealized_pnl || 0).toFixed(4)}`}
+            value={`$${unrealizedPnl.toFixed(4)}`}
             icon={TrendingUp}
-            color={(portfolio.total_unrealized_pnl || 0) >= 0 ? 'green' : 'red'}
+            color={unrealizedPnl >= 0 ? 'green' : 'red'}
           />
           <StatCard
             title="Margin Usage"
-            value={`${((portfolio.margin_usage || 0) * 100).toFixed(1)}%`}
-            subtitle={`${portfolio.position_count || 0} positions`}
+            value={`${(marginUsage * 100).toFixed(1)}%`}
+            subtitle={`${positionCount} positions`}
             icon={BarChart3}
-            color={(portfolio.margin_usage || 0) > 0.8 ? 'red' : 'blue'}
+            color={marginUsage > 0.8 ? 'red' : 'blue'}
           />
           <StatCard
             title="Trades"
@@ -106,15 +117,15 @@ export default function App() {
           />
           <StatCard
             title="Win Rate"
-            value={`${(perfSummary.win_rate || 0).toFixed(1)}%`}
+            value={`${safeNum(perfSummary.win_rate).toFixed(1)}%`}
             subtitle={`${perfSummary.wins || 0}W / ${perfSummary.losses || 0}L`}
             icon={Zap}
-            color={(perfSummary.win_rate || 0) >= 50 ? 'green' : 'yellow'}
+            color={safeNum(perfSummary.win_rate) >= 50 ? 'green' : 'yellow'}
           />
           <StatCard
             title="Cycle"
             value={`#${bot.cycle_count || 0}`}
-            subtitle={`${(bot.last_cycle_duration || 0).toFixed(1)}s`}
+            subtitle={`${safeNum(bot.last_cycle_duration).toFixed(1)}s`}
             icon={Clock}
             color="cyan"
           />
@@ -123,19 +134,19 @@ export default function App() {
         {/* Drawdown Bar */}
         <DrawdownBar
           peakValue={stateInfo.peak_portfolio_value}
-          currentBalance={portfolio.total_balance}
+          currentBalance={balance}
           maxDrawdownPct={maxDrawdown}
         />
 
         {/* Risk Alerts */}
-        {(stateInfo.consecutive_losses > 2 || stateInfo.consecutive_failed_cycles > 0) && (
+        {(safeNum(stateInfo.consecutive_losses) > 2 || safeNum(stateInfo.consecutive_failed_cycles) > 0) && (
           <div className="bg-yellow-900/20 border border-yellow-700/50 rounded-xl p-4 flex items-center gap-3">
             <AlertTriangle className="text-yellow-400 shrink-0" size={20} />
             <div className="text-sm space-x-2">
-              {stateInfo.consecutive_losses > 2 && (
+              {safeNum(stateInfo.consecutive_losses) > 2 && (
                 <span className="text-yellow-300">⚠️ {stateInfo.consecutive_losses} consecutive losses</span>
               )}
-              {stateInfo.consecutive_failed_cycles > 0 && (
+              {safeNum(stateInfo.consecutive_failed_cycles) > 0 && (
                 <span className="text-red-300">🔴 {stateInfo.consecutive_failed_cycles} failed cycles</span>
               )}
             </div>
@@ -149,7 +160,7 @@ export default function App() {
           </div>
         )}
 
-        {/* ═══ Trading View: Chart + Order Book (unified coin selector) ═══ */}
+        {/* Price Chart */}
         <TradingView tradingPairs={tradingPairs} />
 
         {/* Equity & Positions */}
