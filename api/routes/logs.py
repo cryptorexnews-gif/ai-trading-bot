@@ -10,7 +10,7 @@ from flask import Blueprint, jsonify, request
 
 from api.auth import require_api_key
 from api.config import LOG_FILE
-from api.helpers import sanitize_log_message
+from api.helpers import sanitize_dict, sanitize_log_message
 
 logs_bp = Blueprint("logs", __name__)
 
@@ -37,12 +37,11 @@ def logs():
                 continue
             try:
                 entry = json.loads(line)
-                if "message" in entry:
-                    entry["message"] = sanitize_log_message(str(entry["message"]))
-                if "exception" in entry:
-                    entry["exception"] = sanitize_log_message(str(entry["exception"]))
-                log_entries.append(entry)
+                # Sanitize the entire log entry
+                sanitized_entry = sanitize_dict(entry)
+                log_entries.append(sanitized_entry)
             except json.JSONDecodeError:
+                # If not JSON, sanitize as plain text
                 log_entries.append({
                     "message": sanitize_log_message(line),
                     "level": "INFO"

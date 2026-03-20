@@ -1,73 +1,108 @@
 #!/bin/bash
 
-# Script per avviare Hyperliquid Trading Bot in locale
-# Avvia backend API server e frontend dashboard
+# ============================================================================
+# Hyperliquid Trading Bot - Local Development Script
+# ============================================================================
+# This script starts all components needed for local development
+# ============================================================================
 
-set -e
+set -e  # Exit on error
 
-echo "🚀 Avvio Hyperliquid Trading Bot in locale..."
+echo "🤖 HYPERLIQUID TRADING BOT - LOCAL DEVELOPMENT"
+echo "================================================"
 
-# Controlla se .env esiste
-if [ ! -f .env ]; then
-    echo "⚠️  File .env non trovato!"
-    echo "📋 Copia .env.example in .env e modifica le variabili:"
+# Check if .env exists
+if [ ! -f ".env" ]; then
+    echo "❌ .env file not found!"
+    echo "   Copy .env.example to .env and configure your settings:"
     echo "   cp .env.example .env"
-    echo "   nano .env"
+    echo "   nano .env  # Edit with your values"
     exit 1
 fi
 
-# Controlla dipendenze Python
-echo "🔍 Controllo dipendenze Python..."
-if ! python3 -c "import requests, eth_account, flask" &>/dev/null; then
-    echo "📦 Installazione dipendenze Python..."
+# Check Python dependencies
+echo "🔍 Checking Python dependencies..."
+if ! python3 -c "import requests; import eth_account; import flask; import msgpack; from Crypto.Hash import keccak" 2>/dev/null; then
+    echo "📦 Installing Python dependencies..."
     pip install -r requirements.txt
 fi
 
-# Controlla dipendenze Node.js
-echo "🔍 Controllo dipendenze Node.js..."
+# Check Node.js dependencies
+echo "🔍 Checking Node.js dependencies..."
 if [ ! -d "node_modules" ]; then
-    echo "📦 Installazione dipendenze Node.js..."
-    npm install
+    echo "📦 Installing Node.js dependencies..."
+    npm install --force
 fi
 
-# Crea directory logs se non esiste
-mkdir -p logs
+# Create necessary directories
+echo "📁 Creating necessary directories..."
+mkdir -p logs state
 
-# Avvia backend API server in background
-echo "🌐 Avvio backend API server (porta 5000)..."
+# Start components in background
+echo "🚀 Starting components..."
+
+# 1. API Server
+echo "🌐 Starting API Server (port 5000)..."
 python3 api_server.py &
-BACKEND_PID=$!
+API_PID=$!
+echo "   API Server PID: $API_PID"
 
-# Attendi che il backend sia pronto
-echo "⏳ Attendo che il backend sia pronto..."
+# Wait for API server to start
+echo "⏳ Waiting for API server to start..."
 sleep 3
 
-# Avvia frontend dashboard
-echo "📊 Avvio frontend dashboard (porta 3000)..."
+# Check if API server is running
+if ! curl -s http://localhost:5000/api/health > /dev/null; then
+    echo "❌ API Server failed to start"
+    kill $API_PID 2>/dev/null || true
+    exit 1
+fi
+
+# 2. Frontend Dashboard
+echo "📊 Starting Frontend Dashboard (port 3000)..."
+cd frontend
 npm run dev &
 FRONTEND_PID=$!
+echo "   Frontend PID: $FRONTEND_PID"
+cd ..
 
-# Funzione per cleanup
+# 3. Bot (optional - comment out if you don't want it running automatically)
+# echo "🤖 Starting Trading Bot..."
+# python3 hyperliquid_bot_executable_orders.py &
+# BOT_PID=$!
+# echo "   Bot PID: $BOT_PID"
+
+echo ""
+echo "================================================"
+echo "🎉 ALL SYSTEMS GO!"
+echo "================================================"
+echo ""
+echo "🔗 URLs:"
+echo "   📊 Dashboard: http://localhost:3000"
+echo "   🌐 API Server: http://localhost:5000"
+echo "   📈 Health Check: http://localhost:5000/api/health"
+echo ""
+echo "📋 To start the trading bot manually:"
+echo "   python hyperliquid_bot_executable_orders.py --single-cycle"
+echo ""
+echo "🛑 Press Ctrl+C to stop all services"
+echo ""
+
+# Trap Ctrl+C to clean up
+trap cleanup INT
+
 cleanup() {
-    echo "🛑 Fermo tutti i processi..."
-    kill $BACKEND_PID 2>/dev/null || true
+    echo ""
+    echo "🛑 Stopping services..."
+    
+    # Kill all background processes
+    kill $API_PID 2>/dev/null || true
     kill $FRONTEND_PID 2>/dev/null || true
+    # kill $BOT_PID 2>/dev/null || true
+    
+    echo "✅ Services stopped"
     exit 0
 }
 
-# Trap SIGINT e SIGTERM
-trap cleanup SIGINT SIGTERM
-
-echo ""
-echo "✅ Tutto avviato!"
-echo "   📊 Dashboard: http://localhost:3000"
-echo "   🌐 API Server: http://localhost:5000"
-echo "   📝 Logs: logs/hyperliquid_bot.log"
-echo ""
-echo "🔍 Per testare la connessione API:"
-echo "   curl -H 'X-API-Key: hyperliquid123-super-secure-key-456' http://localhost:5000/api/health"
-echo ""
-echo "🛑 Premi Ctrl+C per fermare tutto"
-
-# Mantieni lo script in esecuzione
+# Keep script running
 wait
