@@ -30,6 +30,9 @@ class HyperliquidDataFetcher:
         self._mids_cache: Optional[Dict[str, str]] = None
         self._mids_cache_at: float = 0.0
         self._mids_cache_ttl: float = 15.0
+        self._funding_cache: Optional[List[Dict[str, Any]]] = None
+        self._funding_cache_at: float = 0.0
+        self._funding_cache_ttl: float = 60.0
 
     def _d(self, value: Any) -> Decimal:
         return safe_decimal(value)
@@ -71,18 +74,40 @@ class HyperliquidDataFetcher:
             self._meta_cache_at = now
         return self._meta_cache
 
+    def _get_asset_ctxs(self, force_refresh: bool = False) -> Optional[List[Dict[str, Any]]]:
+        """Fetch metaAndAssetCtxs which contains funding rates and open interest."""
+        now = time.time()
+        if not force_refresh and self._funding_cache and (now - self._funding_cache_at) < self._funding_cache_ttl:
+            return self._funding_cache
+        result = self._post_info({"type": "metaAndAssetCtxs"})
+        if result is not None and isinstance(result, list) and len(result) >= 2:
+            self._funding_cache = result
+            self._funding_cache_at = now
+        return self._funding_cache
+
     def get_funding_for_coin(self, coin: str) -> Dict[str, Any]:
-        meta = self.get_meta()
-        if not meta:
+        """Get funding rate, open interest, and premium from metaAndAssetCtxs."""
+        data = self._get_asset_ctxs()
+        if not data or len(data) < 2:
             return {"funding_rate": "0", "open_interest": "0", "premium": "0", "max_leverage": 10}
-        for asset in meta.get("universe", []):
+
+        meta_part = data[0]
+        ctx_part = data[1]
+        universe = meta_part.get("universe", [])
+
+        for i, asset in enumerate(universe):
             if asset.get("name") == coin:
-                return {
-                    "funding_rate": str(asset.get("funding", "0")),
-                    "open_interest": str(asset.get("openInterest", "0")),
-                    "premium": str(asset.get("premium", "0")),
-                    "max_leverage": int(asset.get("maxLeverage", 10))
-                }
+                max_lev = int(asset.get("maxLeverage", 10))
+                if i < len(ctx_part):
+                    ctx = ctx_part[i]
+                    return {
+                        "funding_rate": str(ctx.get("funding", "0")),
+                        "open_interest": str(ctx.get("openInterest", "0")),
+                        "premium": str(ctx.get("premium", "0")),
+                        "max_leverage": max_lev,
+                    }
+                return {"funding_rate": "0", "open_interest": "0", "premium": "0", "max_leverage": max_lev}
+
         return {"funding_rate": "0", "open_interest": "0", "premium": "0", "max_leverage": 10}
 
     def get_candle_snapshot(self, coin: str, interval: str = "5m", limit: int = 100) -> Optional[List[Dict[str, Any]]]:

@@ -69,10 +69,15 @@ class StateStore:
         ts: float,
         notional: Decimal
     ) -> Dict[str, str]:
+        """Add notional to daily tracker. Ignores negative values."""
+        if notional <= 0:
+            return daily_notional_by_day
+
         key = self.day_key(ts)
         current = Decimal(str(daily_notional_by_day.get(key, "0")))
         daily_notional_by_day[key] = str(current + notional)
 
+        # Keep only last 7 days
         keys_sorted = sorted(daily_notional_by_day.keys(), reverse=True)
         keep_keys = set(keys_sorted[:7])
         return {k: v for k, v in daily_notional_by_day.items() if k in keep_keys}
@@ -122,7 +127,7 @@ class StateStore:
     def get_performance_summary(self, state: Dict[str, Any]) -> Dict[str, Any]:
         history = state.get("trade_history", [])
         if not history:
-            return {"total_trades": 0, "win_rate": 0.0, "total_pnl": "0"}
+            return {"total_trades": 0, "win_rate": 0.0, "total_pnl": "0", "wins": 0, "losses": 0, "holds": 0, "consecutive_losses": 0}
 
         total = len(history)
         wins = sum(1 for t in history if t.get("success", False) and t.get("action") != "hold")

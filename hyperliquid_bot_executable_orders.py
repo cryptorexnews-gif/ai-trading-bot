@@ -166,6 +166,8 @@ class HyperliquidBot:
     def _calculate_adaptive_cycle(self) -> int:
         if not self.cfg.enable_adaptive_cycle:
             return self.cfg.default_cycle_sec
+        if not self.orchestrator.trading_pairs:
+            return self.cfg.default_cycle_sec
         vol_signal = technical_fetcher.get_volatility_signal(self.orchestrator.trading_pairs[0])
         suggested = vol_signal.get("suggested_cycle_sec", self.cfg.default_cycle_sec)
         clamped = max(self.cfg.min_cycle_sec, min(self.cfg.max_cycle_sec, suggested))
@@ -176,6 +178,7 @@ class HyperliquidBot:
     def _run_trading_cycle(self) -> bool:
         cycle_start = time.time()
         self._cycle_count += 1
+        self.orchestrator.set_cycle_count(self._cycle_count)
         try:
             logging.info("=" * 60)
             logging.info(f"Starting trading cycle #{self._cycle_count}")
@@ -216,22 +219,20 @@ class HyperliquidBot:
                 portfolio = self.orchestrator._fetch_portfolio()
                 self._last_portfolio = portfolio
 
-            # Emergency de-risk
-            self.orchestrator._handle_emergency_derisk(portfolio)
-            if self.orchestrator.risk_manager.check_emergency_derisk(portfolio):
-                portfolio = self.orchestrator._fetch_portfolio()
-                self._last_portfolio = portfolio
+            # Emergency de-risk (returns updated portfolio)
+            portfolio = self.orchestrator._handle_emergency_derisk(portfolio)
+            self._last_portfolio = portfolio
 
-            # Analyze & trade
-            trades_executed, daily_notional_used = self.orchestrator._analyze_and_trade(
+            # Analyze & trade — returns (trades_executed, notional_added_this_cycle)
+            trades_executed, notional_added = self.orchestrator._analyze_and_trade(
                 portfolio, state, daily_notional_used, peak, consecutive_losses, self._shutdown_requested
             )
 
-            # Persist state
-            old_daily = Decimal(str(state.get("daily_notional_by_day", {}).get(daily_key, "0")))
-            state["daily_notional_by_day"] = self.state_store.add_daily_notional(
-                state.get("daily_notional_by_day", {}), time.time(), daily_notional_used - old_daily
-            )
+            # Persist state — add only the delta notional from this cycle
+            if notional_added > 0:
+                state["daily_notional_by_day"] = self.state_store.add_daily_notional(
+                    state.get("daily_notional_by_day", {}), time.time(), notional_added
+                )
             if portfolio.total_balance > peak:
                 state["peak_portfolio_value"] = str(portfolio.total_balance)
                 self.metrics.set_gauge("peak_portfolio_value", portfolio.total_balance)

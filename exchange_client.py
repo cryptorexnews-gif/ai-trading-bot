@@ -200,15 +200,12 @@ class HyperliquidExchangeClient:
         return None
 
     def get_reference_price(self, coin: str, fallback_price: Decimal) -> Decimal:
+        """Get best reference price from allMids. Falls back to provided price."""
         mids = self.get_all_mids()
         if mids and coin in mids:
-            return safe_decimal(mids[coin], fallback_price)
-        meta = self.get_meta(force_refresh=False)
-        if meta is None:
-            return fallback_price
-        for asset in meta.get("universe", []):
-            if asset.get("name") == coin and asset.get("markPx") is not None:
-                return safe_decimal(asset.get("markPx"))
+            mid_price = safe_decimal(mids[coin], Decimal("0"))
+            if mid_price > 0:
+                return mid_price
         return fallback_price
 
     def get_tick_size_and_precision(self, asset_id: int) -> Tuple[Decimal, int]:

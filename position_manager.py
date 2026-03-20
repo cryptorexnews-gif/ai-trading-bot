@@ -70,6 +70,7 @@ class PositionManager:
         """
         Sync managed positions with actual exchange positions.
         Removes managed entries for positions that no longer exist.
+        Updates size and entry_price for existing positions that changed.
         Adds managed entries for new positions found on exchange.
         """
         # Remove managed positions no longer on exchange
@@ -81,14 +82,20 @@ class PositionManager:
             logger.info(f"Position {coin} closed on exchange, removing from managed")
             del self._managed[coin]
 
-        # Add new positions found on exchange
+        # Add or update positions found on exchange
         for coin, pos in exchange_positions.items():
             size = Decimal(str(pos.get("size", 0)))
             if size == 0:
                 continue
+
+            entry_price = Decimal(str(pos.get("entry_price", 0)))
+            is_long = size > 0
+
             if coin not in self._managed:
-                entry_price = Decimal(str(pos.get("entry_price", 0)))
-                is_long = size > 0
+                # New position — create managed entry
+                if entry_price <= 0:
+                    logger.warning(f"Skipping managed position for {coin}: entry_price={entry_price}")
+                    continue
 
                 activation_price = None
                 if self.enable_trailing_stop:
@@ -127,12 +134,33 @@ class PositionManager:
                     f"break_even=ON@{float(self.break_even_activation_pct)*100}%"
                 )
             else:
-                # Update size if changed (partial close, increase, etc.)
+                # Existing position — update size, entry_price, and direction if changed
                 existing = self._managed[coin]
                 new_size = abs(size)
-                if new_size != existing.size:
+                new_is_long = size > 0
+
+                size_changed = new_size != existing.size
+                direction_changed = new_is_long != existing.is_long
+                entry_changed = entry_price > 0 and entry_price != existing.entry_price
+
+                if direction_changed:
+                    # Direction flipped — this shouldn't happen (close first), but handle it
+                    logger.warning(f"Position {coin} direction changed, resetting managed state")
+                    self.remove_position(coin)
+                    # Will be re-added on next sync
+                    continue
+
+                if size_changed:
                     existing.size = new_size
-                    existing.is_long = size > 0
+                    logger.info(f"Updated {coin} size: {existing.size} -> {new_size}")
+
+                if entry_changed:
+                    old_entry = existing.entry_price
+                    existing.entry_price = entry_price
+                    # Recalculate SL/TP if entry changed and break-even not yet activated
+                    if not existing.break_even.activated:
+                        existing.stop_loss.price = None  # Reset to percentage-based
+                    logger.info(f"Updated {coin} entry: ${old_entry} -> ${entry_price}")
 
         self._save_state()
 
@@ -153,6 +181,11 @@ class PositionManager:
                 continue
 
             current_price = current_prices[coin]
+
+            # Guard against zero entry price
+            if managed.entry_price <= 0:
+                logger.warning(f"Skipping risk check for {coin}: entry_price={managed.entry_price}")
+                continue
 
             # === Break-even check (doesn't close, moves SL) ===
             if managed.check_break_even(current_price):
@@ -220,6 +253,10 @@ class PositionManager:
         trailing: Optional[bool] = None,
     ) -> None:
         """Register a new position with risk management."""
+        if entry_price <= 0:
+            logger.warning(f"Cannot register position for {coin}: entry_price={entry_price}")
+            return
+
         sl_pct = sl_pct or self.default_sl_pct
         tp_pct = tp_pct or self.default_tp_pct
         use_trailing = trailing if trailing is not None else self.enable_trailing_stop

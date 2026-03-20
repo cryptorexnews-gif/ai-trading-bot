@@ -74,6 +74,11 @@ class CycleOrchestrator:
         self.llm_rate_limiter = llm_rate_limiter
         self.trading_pairs = trading_pairs
         self._dynamic_min_sizes: Dict[str, Decimal] = {}
+        self._cycle_count: int = 0
+
+    def set_cycle_count(self, count: int) -> None:
+        """Set current cycle count for live status updates."""
+        self._cycle_count = count
 
     # ─── Phase 1: Health Check ────────────────────────────────────────────
 
@@ -139,6 +144,9 @@ class CycleOrchestrator:
             pos_size = Decimal(str(portfolio.positions[coin]["size"]))
             side = "sell" if pos_size > 0 else "buy"
             close_size = abs(pos_size)
+
+            # Rate limit the close order
+            self.hl_rate_limiter.acquire(1)
             result = self.exchange_client.place_order(coin, side, close_size, current_price)
 
             if result.get("success"):
@@ -181,15 +189,15 @@ class CycleOrchestrator:
 
     # ─── Phase 4: Emergency De-Risk ───────────────────────────────────────
 
-    def _handle_emergency_derisk(self, portfolio: PortfolioState) -> None:
-        """Close worst-performing position if margin usage is critical."""
+    def _handle_emergency_derisk(self, portfolio: PortfolioState) -> PortfolioState:
+        """Close worst-performing position if margin usage is critical. Returns updated portfolio."""
         if not self.risk_manager.check_emergency_derisk(portfolio):
-            return
+            return portfolio
 
         worst_coin = self.risk_manager.get_emergency_close_coin(portfolio)
         if not worst_coin:
             logger.warning("Emergency derisk: no position to close")
-            return
+            return portfolio
 
         logger.warning(f"EMERGENCY DERISK: closing {worst_coin}")
         self.notifier.notify_emergency_derisk(worst_coin, "margin_usage_critical")
@@ -201,6 +209,7 @@ class CycleOrchestrator:
         current_price = Decimal(str(mids.get(worst_coin, "0"))) if mids and worst_coin in mids else Decimal("0")
 
         if current_price > 0:
+            self.hl_rate_limiter.acquire(1)
             result = self.exchange_client.place_order(worst_coin, side, close_size, current_price)
             if result.get("success"):
                 self.position_manager.remove_position(worst_coin)
@@ -215,8 +224,12 @@ class CycleOrchestrator:
                 }
                 self.state_store.add_trade_record(state, trade_record)
                 self.state_store.save_state(state)
+                # Refresh portfolio after emergency close
+                return self._fetch_portfolio()
             else:
                 logger.error(f"Emergency close FAILED for {worst_coin}: {result}")
+
+        return portfolio
 
     # ─── Phase 5: Per-Coin Analysis & Execution ──────────────────────────
 
@@ -229,7 +242,7 @@ class CycleOrchestrator:
         consecutive_losses: int,
         shutdown_requested: bool,
     ) -> Tuple[int, Decimal]:
-        """Analyze each coin and execute trades. Returns (trades_executed, updated_daily_notional)."""
+        """Analyze each coin and execute trades. Returns (trades_executed, notional_added_this_cycle)."""
         correlations = self.correlation_engine.calculate_correlations(self.trading_pairs, "1h", 50)
         corr_summary = self.correlation_engine.get_correlation_summary(correlations)
         if corr_summary["high_correlation_pairs"]:
@@ -238,6 +251,7 @@ class CycleOrchestrator:
         all_mids = technical_fetcher.get_all_mids()
         recent_trades = self.state_store.get_recent_trades(state, count=5)
         trades_executed = 0
+        notional_added = Decimal("0")
 
         for coin in self.trading_pairs:
             if shutdown_requested:
@@ -250,23 +264,23 @@ class CycleOrchestrator:
             logger.info(f"--- Analyzing {coin} ---")
             write_live_status(
                 is_running=True, execution_mode=self.cfg.execution_mode,
-                cycle_count=0, last_cycle_duration=0, portfolio=portfolio, current_coin=coin
+                cycle_count=self._cycle_count, last_cycle_duration=0, portfolio=portfolio, current_coin=coin
             )
 
             result = self._process_single_coin(
-                coin, portfolio, state, daily_notional_used, peak,
+                coin, portfolio, state, daily_notional_used + notional_added, peak,
                 consecutive_losses, all_mids, recent_trades, correlations
             )
 
             if result is not None:
                 trades_executed += result["trades"]
-                daily_notional_used += result["notional"]
+                notional_added += result["notional"]
                 if result["trades"] > 0:
                     state["consecutive_losses"] = 0
                 elif result.get("failed"):
                     state["consecutive_losses"] = state.get("consecutive_losses", 0) + 1
 
-        return trades_executed, daily_notional_used
+        return trades_executed, notional_added
 
     def _process_single_coin(
         self, coin: str, portfolio: PortfolioState, state: Dict,

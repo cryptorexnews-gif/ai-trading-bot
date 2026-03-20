@@ -36,6 +36,8 @@ class LLMEngine:
         self.temperature = temperature
         self.request_timeout = 120
         self.max_retries = 2
+
+        # Plain session without retry adapter — retry_request handles retries
         self.session = requests.Session()
         self.session.headers.update({
             "Authorization": f"Bearer {api_key}",
@@ -369,7 +371,7 @@ Respond with ONLY this JSON (no markdown, no extra text):
         }
 
     def _call_openrouter(self, prompt: str) -> Optional[str]:
-        """Call OpenRouter API. Error messages never include request headers."""
+        """Call OpenRouter API with retry. Error messages never include request headers."""
         payload = {
             "model": self.model,
             "messages": [{"role": "user", "content": prompt}],
