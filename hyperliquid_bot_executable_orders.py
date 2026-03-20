@@ -100,8 +100,8 @@ class HyperliquidBot:
             state_store=self.state_store,
             metrics=self.metrics,
             position_manager=PositionManager(
-                default_sl_pct=self.cfg.trend_sl_pct,  # Use trend-specific SL
-                default_tp_pct=self.cfg.trend_tp_pct,  # Use trend-specific TP
+                default_sl_pct=self.cfg.trend_sl_pct,
+                default_tp_pct=self.cfg.trend_tp_pct,
                 default_trailing_callback=self.cfg.trend_trailing_callback,
                 enable_trailing_stop=self.cfg.enable_trailing_stop,
                 trailing_activation_pct=self.cfg.trend_trailing_activation_pct,
@@ -167,14 +167,10 @@ class HyperliquidBot:
     def _calculate_adaptive_cycle(self) -> int:
         if not self.cfg.enable_adaptive_cycle:
             return self.cfg.default_cycle_sec
-        if not self.orchestrator.trading_pairs:
-            return self.cfg.default_cycle_sec
-        vol_signal = technical_fetcher.get_volatility_signal(self.orchestrator.trading_pairs[0])
-        suggested = vol_signal.get("suggested_cycle_sec", self.cfg.default_cycle_sec)
-        clamped = max(self.cfg.min_cycle_sec, min(self.cfg.max_cycle_sec, suggested))
-        if clamped != self._next_cycle_sec:
-            logging.info(f"Adaptive cycle: {self._next_cycle_sec}s -> {clamped}s (volatility={vol_signal.get('volatility_level', 'unknown')})")
-        return clamped
+        
+        # Per trend trading 4H/1D, manteniamo ciclo fisso a 30 minuti
+        # per timing ottimale su timeframe 1H
+        return self.cfg.default_cycle_sec
 
     def _run_trading_cycle(self) -> bool:
         cycle_start = time.time()
@@ -182,7 +178,7 @@ class HyperliquidBot:
         self.orchestrator.set_cycle_count(self._cycle_count)
         try:
             logging.info("=" * 60)
-            logging.info(f"Starting trading cycle #{self._cycle_count}")
+            logging.info(f"Starting trading cycle #{self._cycle_count} (30 minuti)")
 
             self.orchestrator._run_health_check(self._cycle_count)
 
@@ -293,7 +289,7 @@ class HyperliquidBot:
 
     def run(self, single_cycle: bool = False):
         logging.info("=" * 60)
-        logging.info("HYPERLIQUID TRADING BOT STARTED")
+        logging.info("HYPERLIQUID TRADING BOT STARTED - TREND 4H/1D ULTRA-CONSERVATIVO")
         logging.info("=" * 60)
         logging.info(f"Wallet: {self.cfg.mask_wallet(self.cfg.wallet_address)}")
         logging.info(f"Execution mode: {self.cfg.execution_mode}")
@@ -301,15 +297,15 @@ class HyperliquidBot:
         logging.info(f"LLM model: {self.cfg.llm_model}")
         logging.info(f"Trading pairs ({len(self.cfg.trading_pairs)}): {self.cfg.trading_pairs}")
         logging.info(
-            f"Strategy: Trend 4H/1D Following — SL {float(self.cfg.trend_sl_pct)*100}% / "
-            f"TP {float(self.cfg.trend_tp_pct)*100}% / "
-            f"Trailing {float(self.cfg.trend_trailing_callback)*100}% / "
-            f"Break-Even @{float(self.cfg.trend_break_even_activation_pct)*100}%"
+            f"Strategy: Trend 4H/1D Ultra-Conservativo — Ciclo 30 minuti\n"
+            f"  • SL Trend: {float(self.cfg.trend_sl_pct)*100}% / TP Trend: {float(self.cfg.trend_tp_pct)*100}% (R:R 1:2)\n"
+            f"  • Position Size: {float(self.cfg.trend_position_size_pct)*100}% del portfolio\n"
+            f"  • Max Trend Positions: {self.cfg.max_trend_positions}\n"
+            f"  • Max Leverage: {self.cfg.hard_max_leverage}x\n"
+            f"  • Max Drawdown: {float(self.cfg.max_drawdown_pct)*100}%\n"
+            f"  • Daily Limit: ${self.cfg.daily_notional_limit_usd}"
         )
-        logging.info(f"Max trend positions: {self.cfg.max_trend_positions}")
-        logging.info(f"Trend position size: {float(self.cfg.trend_position_size_pct)*100}% of portfolio")
         logging.info(f"Adaptive cycle: {self.cfg.enable_adaptive_cycle} ({self.cfg.min_cycle_sec}-{self.cfg.max_cycle_sec}s)")
-        logging.info(f"Max drawdown: {float(self.cfg.max_drawdown_pct)*100}%")
         logging.info(f"Telegram: {'enabled' if self.notifier.telegram_enabled else 'disabled'}")
         logging.info("=" * 60)
 
@@ -367,7 +363,7 @@ class HyperliquidBot:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Hyperliquid Trading Bot — Claude Opus 4.6")
+    parser = argparse.ArgumentParser(description="Hyperliquid Trading Bot — Claude Opus 4.6 - Trend 4H/1D Ultra-Conservativo")
     parser.add_argument("--single-cycle", action="store_true", help="Run single cycle and exit")
     args = parser.parse_args()
     bot = HyperliquidBot()
