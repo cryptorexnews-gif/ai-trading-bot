@@ -19,35 +19,46 @@ export default function TradingView({ tradingPairs }) {
   const [interval, setInterval_] = useState('4h')
   const [candles, setCandles] = useState([])
   const [chartLoading, setChartLoading] = useState(true)
+  const [fetchError, setFetchError] = useState(null)
   const [lastPrice, setLastPrice] = useState(null)
   const [stats24h, setStats24h] = useState(null)
   const mountedRef = useRef(true)
   const apiBase = getApiBase()
 
   const fetchCandles = useCallback(async () => {
+    console.log(`Fetching candles for ${selectedCoin} ${interval}`) // Debug log
     let candleData = null
+    setFetchError(null)
 
     try {
       const res = await fetch(
-        `${apiBase}/candles?coin=${selectedCoin}&interval=${interval}&limit=150`,
-        { headers: getHeaders(), credentials: 'same-origin' }
+        `${apiBase}/candles?coin=${selectedCoin}&interval=${interval}&limit=300`, // Increased limit for sparse data
+        { 
+          headers: getHeaders(), 
+          credentials: 'same-origin',
+          signal: AbortSignal.timeout(15000) // 15s timeout
+        }
       )
 
-      if (res.ok) {
-        const json = await res.json()
-        if (json.candles && json.candles.length > 0) {
-          candleData = json.candles.map(c => ({
-            time: c.time || 0,
-            open: parseFloat(c.open || 0),
-            high: parseFloat(c.high || 0),
-            low: parseFloat(c.low || 0),
-            close: parseFloat(c.close || 0),
-            volume: parseFloat(c.volume || 0),
-          }))
-        }
+      if (!res.ok) {
+        throw new Error(`HTTP ${res.status}: ${res.statusText}`)
       }
-    } catch {
-      // handled by empty data fallback
+
+      const json = await res.json()
+      if (json.candles && json.candles.length > 0) {
+        candleData = json.candles.map(c => ({
+          time: c.time || 0,
+          open: parseFloat(c.open || 0),
+          high: parseFloat(c.high || 0),
+          low: parseFloat(c.low || 0),
+          close: parseFloat(c.close || 0),
+          volume: parseFloat(c.volume || 0),
+        }))
+        console.log(`${selectedCoin}: Loaded ${candleData.length} candles`) // Debug
+      }
+    } catch (err) {
+      console.warn(`Fetch error ${selectedCoin} ${interval}:`, err.message)
+      setFetchError(err.message)
     }
 
     if (!mountedRef.current) return
@@ -86,6 +97,7 @@ export default function TradingView({ tradingPairs }) {
     setCandles([])
     setStats24h(null)
     setLastPrice(null)
+    setFetchError(null)
 
     fetchCandles()
     const timer = window.setInterval(fetchCandles, 30000)
@@ -99,6 +111,8 @@ export default function TradingView({ tradingPairs }) {
   const change = stats24h ? safeNum(stats24h.change, 0) : 0
   const isPositive = change >= 0
   const changePct = stats24h ? change.toFixed(2) : null
+
+  const chartKey = `${selectedCoin}-${interval}` // Force re-mount
 
   return (
     <div className="bg-gray-900 rounded-xl border border-gray-800 overflow-hidden">
@@ -115,18 +129,27 @@ export default function TradingView({ tradingPairs }) {
 
       <StatsBar stats24h={stats24h} />
 
-      {chartLoading && candles.length === 0 ? (
+      {chartLoading ? (
         <ChartSkeleton height={CHART_HEIGHT} />
       ) : candles.length === 0 ? (
-        <div className="flex items-center justify-center text-gray-500" style={{ height: CHART_HEIGHT }}>
+        <div className="flex items-center justify-center text-gray-500 p-12" style={{ height: CHART_HEIGHT }}>
           <div className="text-center">
-            <div className="text-4xl mb-2">📊</div>
-            <p className="text-sm">No chart data for {selectedCoin}</p>
-            <p className="text-xs text-gray-600 mt-1">Check backend API connection</p>
+            <div className="text-4xl mb-4">📊</div>
+            <p className="text-sm font-medium mb-1">No chart data for {selectedCoin}</p>
+            {fetchError ? (
+              <p className="text-xs text-red-400 bg-red-900/30 px-2 py-1 rounded mt-2">
+                Errore: {fetchError}
+              </p>
+            ) : (
+              <p className="text-xs text-gray-600 mt-1">
+                Prova un altro timeframe/coin o verifica backend API
+              </p>
+            )}
           </div>
         </div>
       ) : (
         <CandlestickChart
+          key={chartKey}  // Force re-mount on coin/interval change
           candles={candles}
           height={CHART_HEIGHT}
           selectedCoin={selectedCoin}
