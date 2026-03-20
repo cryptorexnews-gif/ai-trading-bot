@@ -50,7 +50,7 @@ class BotConfig:
 
     # ─── LLM ──────────────────────────────────────────────────────────────
     openrouter_api_key: str = ""
-    llm_model: str = "anthropic/claude-opus-4.6"
+    llm_model: str = "anthropic/claude-opus-4"
     llm_max_tokens: int = 8192
     llm_temperature: float = 0.15
 
@@ -58,21 +58,21 @@ class BotConfig:
     trading_pairs: List[str] = field(default_factory=list)
 
     # ─── Risk Management ──────────────────────────────────────────────────
-    max_order_margin_pct: Decimal = Decimal("0.1")
-    hard_max_leverage: Decimal = Decimal("10")
+    max_order_margin_pct: Decimal = Decimal("0.08")
+    hard_max_leverage: Decimal = Decimal("7")
     min_confidence_open: Decimal = Decimal("0.72")
     min_confidence_manage: Decimal = Decimal("0.50")
-    max_margin_usage: Decimal = Decimal("0.8")
-    max_drawdown_pct: Decimal = Decimal("0.15")
-    max_single_asset_pct: Decimal = Decimal("0.40")
-    emergency_margin_threshold: Decimal = Decimal("0.88")
+    max_margin_usage: Decimal = Decimal("0.70")
+    max_drawdown_pct: Decimal = Decimal("0.12")
+    max_single_asset_pct: Decimal = Decimal("0.35")
+    emergency_margin_threshold: Decimal = Decimal("0.85")
     trade_cooldown_sec: int = 300
-    daily_notional_limit_usd: Decimal = Decimal("1000")
-    max_trades_per_cycle: int = 3
+    daily_notional_limit_usd: Decimal = Decimal("500")
+    max_trades_per_cycle: int = 2
     max_consecutive_failed_cycles: int = 5
     paper_slippage_bps: Decimal = Decimal("5")
     volatility_multiplier: Decimal = Decimal("1.2")
-    safe_fallback_mode: str = "de_risk"
+    safe_fallback_mode: str = "hold"
 
     # ─── Position Management ──────────────────────────────────────────────
     default_sl_pct: Decimal = Decimal("0.03")
@@ -85,9 +85,9 @@ class BotConfig:
 
     # ─── Adaptive Cycle ───────────────────────────────────────────────────
     enable_adaptive_cycle: bool = True
-    default_cycle_sec: int = 60
-    min_cycle_sec: int = 20
-    max_cycle_sec: int = 180
+    default_cycle_sec: int = 120
+    min_cycle_sec: int = 30
+    max_cycle_sec: int = 300
 
     # ─── Correlation ──────────────────────────────────────────────────────
     correlation_threshold: Decimal = Decimal("0.7")
@@ -110,10 +110,7 @@ class BotConfig:
     @classmethod
     def from_env(cls) -> "BotConfig":
         """Create BotConfig from environment variables."""
-        pairs_raw = _env(
-            "TRADING_PAIRS",
-            "BTC,ETH,SOL,BNB,ADA,DOGE,XRP,AVAX,LINK,SUI,ARB,OP,NEAR,WIF,PEPE,INJ,TIA,SEI,RENDER,FET"
-        )
+        pairs_raw = _env("TRADING_PAIRS", "BTC,ETH,SOL")
         trading_pairs = [p.strip().upper() for p in pairs_raw.split(",") if p.strip()]
 
         min_sizes: Dict[str, Decimal] = {
@@ -134,25 +131,25 @@ class BotConfig:
             execution_mode=_env("EXECUTION_MODE", "paper").lower(),
             enable_mainnet_trading=_env_bool("ENABLE_MAINNET_TRADING"),
             openrouter_api_key=_env("OPENROUTER_API_KEY"),
-            llm_model=_env("LLM_MODEL", "anthropic/claude-opus-4.6"),
+            llm_model=_env("LLM_MODEL", "anthropic/claude-opus-4"),
             llm_max_tokens=_env_int("LLM_MAX_TOKENS", 8192),
             llm_temperature=_env_float("LLM_TEMPERATURE", 0.15),
             trading_pairs=trading_pairs,
-            max_order_margin_pct=_env_decimal("MAX_ORDER_MARGIN_PCT", "0.1"),
-            hard_max_leverage=_env_decimal("HARD_MAX_LEVERAGE", "10"),
+            max_order_margin_pct=_env_decimal("MAX_ORDER_MARGIN_PCT", "0.08"),
+            hard_max_leverage=_env_decimal("HARD_MAX_LEVERAGE", "7"),
             min_confidence_open=_env_decimal("MIN_CONFIDENCE_OPEN", "0.72"),
             min_confidence_manage=_env_decimal("MIN_CONFIDENCE_MANAGE", "0.50"),
-            max_margin_usage=_env_decimal("MAX_MARGIN_USAGE", "0.8"),
-            max_drawdown_pct=_env_decimal("MAX_DRAWDOWN_PCT", "0.15"),
-            max_single_asset_pct=_env_decimal("MAX_SINGLE_ASSET_PCT", "0.40"),
-            emergency_margin_threshold=_env_decimal("EMERGENCY_MARGIN_THRESHOLD", "0.88"),
+            max_margin_usage=_env_decimal("MAX_MARGIN_USAGE", "0.70"),
+            max_drawdown_pct=_env_decimal("MAX_DRAWDOWN_PCT", "0.12"),
+            max_single_asset_pct=_env_decimal("MAX_SINGLE_ASSET_PCT", "0.35"),
+            emergency_margin_threshold=_env_decimal("EMERGENCY_MARGIN_THRESHOLD", "0.85"),
             trade_cooldown_sec=_env_int("TRADE_COOLDOWN_SEC", 300),
-            daily_notional_limit_usd=_env_decimal("DAILY_NOTIONAL_LIMIT_USD", "1000"),
-            max_trades_per_cycle=_env_int("MAX_TRADES_PER_CYCLE", 3),
+            daily_notional_limit_usd=_env_decimal("DAILY_NOTIONAL_LIMIT_USD", "500"),
+            max_trades_per_cycle=_env_int("MAX_TRADES_PER_CYCLE", 2),
             max_consecutive_failed_cycles=_env_int("MAX_CONSECUTIVE_FAILED_CYCLES", 5),
             paper_slippage_bps=_env_decimal("PAPER_SLIPPAGE_BPS", "5"),
             volatility_multiplier=_env_decimal("VOLATILITY_MULTIPLIER", "1.2"),
-            safe_fallback_mode=_env("SAFE_FALLBACK_MODE", "de_risk").lower(),
+            safe_fallback_mode=_env("SAFE_FALLBACK_MODE", "hold").lower(),
             default_sl_pct=_env_decimal("DEFAULT_SL_PCT", "0.03"),
             default_tp_pct=_env_decimal("DEFAULT_TP_PCT", "0.05"),
             default_trailing_callback=_env_decimal("DEFAULT_TRAILING_CALLBACK", "0.02"),
@@ -161,9 +158,9 @@ class BotConfig:
             break_even_activation_pct=_env_decimal("BREAK_EVEN_ACTIVATION_PCT", "0.015"),
             break_even_offset_pct=_env_decimal("BREAK_EVEN_OFFSET_PCT", "0.001"),
             enable_adaptive_cycle=_env_bool("ENABLE_ADAPTIVE_CYCLE", True),
-            default_cycle_sec=_env_int("DEFAULT_CYCLE_SEC", 60),
-            min_cycle_sec=_env_int("MIN_CYCLE_SEC", 20),
-            max_cycle_sec=_env_int("MAX_CYCLE_SEC", 180),
+            default_cycle_sec=_env_int("DEFAULT_CYCLE_SEC", 120),
+            min_cycle_sec=_env_int("MIN_CYCLE_SEC", 30),
+            max_cycle_sec=_env_int("MAX_CYCLE_SEC", 300),
             correlation_threshold=_env_decimal("CORRELATION_THRESHOLD", "0.7"),
             meta_cache_ttl_sec=_env_int("META_CACHE_TTL_SEC", 120),
             log_level=_env("LOG_LEVEL", "INFO"),
