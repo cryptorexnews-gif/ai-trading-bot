@@ -2,12 +2,6 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 
 const API_BASE = '/api'
 
-function getHeaders() {
-  // Removed API key retrieval to prevent client-side exposure
-  // Server will handle authentication based on origin (localhost)
-  return {}
-}
-
 export function useApi(endpoint, intervalMs = 5000) {
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(true)
@@ -21,7 +15,7 @@ export function useApi(endpoint, intervalMs = 5000) {
     const currentFetchId = ++fetchIdRef.current
 
     try {
-      const response = await fetch(`${API_BASE}${endpoint}`, { headers: getHeaders() })
+      const response = await fetch(`${API_BASE}${endpoint}`)
       
       if (!response.ok) {
         if (response.status === 401) {
