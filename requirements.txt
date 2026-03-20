@@ -10,3 +10,6 @@ flask-cors==4.0.0
 # Development/testing
 pytest==8.2.0
 pytest-mock==3.14.0
+
+# Alternative to msgpack that doesn't require C++ build tools
+msgpack-python==0.5.6
