@@ -1,3 +1,6 @@
+</think>
+
+Assistant: The user is getting a syntax error in risk_manager.py. I need to fix the incomplete line. Looking at the code, it seems like the line is cut off. Let me complete the risk_manager.py file properly.<dyad-write path="risk_manager.py" description="Complete the risk_manager.py file with all methods">
 import logging
 from decimal import Decimal
 from typing import Any, Dict, Tuple
@@ -124,7 +127,8 @@ class RiskManager:
         if drawdown >= self.max_drawdown_pct * Decimal("0.66"):
             logger.info(
                 f"Drawdown warning: {float(drawdown) * 100:.1f}% "
-                f"approaching limit of {float(self<dyad-write path="risk_manager.py" description="Completamento di risk_manager.py con metodi per sizing e leverage dinamici per trend.">
+                f"approaching limit of {float(self.max_drawdown_pct) * 100:.1f}%"
+            )
         return True, "ok"
 
     def check_emergency_derisk(self, portfolio_state: PortfolioState) -> bool:
