@@ -4,6 +4,7 @@ Flask API server entrypoint for the Hyperliquid bot dashboard.
 
 import logging
 import os
+from ipaddress import ip_address
 
 from api import create_app
 from api.config import API_AUTH_KEY, CORS_ORIGINS
@@ -12,11 +13,34 @@ logger = logging.getLogger(__name__)
 app = create_app()
 
 
+def _env_bool(key: str, default: bool = False) -> bool:
+    val = os.getenv(key, "").strip().lower()
+    if val in ("true", "1", "yes", "on"):
+        return True
+    if val in ("false", "0", "no", "off"):
+        return False
+    return default
+
+
+def _is_loopback_host(host: str) -> bool:
+    if not host:
+        return False
+    candidate = host.strip()
+    if candidate == "localhost":
+        return True
+    try:
+        return ip_address(candidate).is_loopback
+    except ValueError:
+        return False
+
+
 def main() -> None:
     host = os.getenv("API_HOST", "127.0.0.1")
     port = int(os.getenv("API_PORT", "5000"))
     debug = os.getenv("API_DEBUG", "false").lower() == "true"
     execution_mode = os.getenv("EXECUTION_MODE", "paper").lower()
+    allow_localhost_bypass = _env_bool("ALLOW_LOCALHOST_BYPASS", True)
+    loopback_bound = _is_loopback_host(host)
 
     api_key_status = "SET ✓" if API_AUTH_KEY else "EMPTY ✗"
     logger.info(f"DASHBOARD_API_KEY status: {api_key_status} (length={len(API_AUTH_KEY) if API_AUTH_KEY else 0})")
@@ -31,14 +55,22 @@ def main() -> None:
         logger.warning("Forcing debug=False because EXECUTION_MODE=live")
         debug = False
 
+    if allow_localhost_bypass and loopback_bound and execution_mode != "live":
+        auth_mode = "localhost loopback bypass enabled; remote requires API key"
+    else:
+        auth_mode = "API key required"
+
     logger.info(
         f"🚀 Starting API server on http://{host}:{port} "
-        f"(mode={execution_mode}, debug={debug}, CORS: {CORS_ORIGINS})"
+        f"(mode={execution_mode}, debug={debug}, auth={auth_mode}, CORS: {CORS_ORIGINS})"
     )
     print(f"\n✅ API Server ready: http://{host}:{port}")
-    print("   Localhost access: ALLOWED (no API key required)")
-    print("   Remote access: API key required")
-    print(f"   Test: /api/health")
+    if allow_localhost_bypass and loopback_bound and execution_mode != "live":
+        print("   Local loopback requests: ALLOWED without API key")
+        print("   Non-loopback requests: API key required")
+    else:
+        print("   API key required for protected endpoints")
+    print("   Test: /api/health")
     print()
 
     app.run(host=host, port=port, debug=debug, use_reloader=False)

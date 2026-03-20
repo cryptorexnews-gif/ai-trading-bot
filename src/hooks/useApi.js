@@ -3,9 +3,9 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 const API_BASE = '/api'
 
 export function getHeaders() {
-  const apiKey = import.meta.env.VITE_DASHBOARD_API_KEY
-  if (!apiKey) return {}
-  return { 'X-API-Key': apiKey }
+  // Security: never send secrets from browser code.
+  // Keep function for compatibility with existing callers.
+  return {}
 }
 
 export function useApi(endpoint, intervalMs = 5000) {

@@ -14,14 +14,16 @@ cd frontend && npm install && cd ..
 ```bash
 cp .env.example .env
 ```
-**APRI `.env` e COMPILA SOLO QUESTI**:
+**APRI `.env` e COMPILA**:
 ```
 HYPERLIQUID_WALLET_ADDRESS=0xIlTuoWallet
 HYPERLIQUID_PRIVATE_KEY=0xLaTuaChiavePrivata
 OPENROUTER_API_KEY=sk-or-LaTuaChiaveOpenRouter
-DASHBOARD_API_KEY=hyperliquid123-super-secure-key-456
-VITE_DASHBOARD_API_KEY=hyperliquid123-super-secure-key-456  # STESSA CHIAVE!
+DASHBOARD_API_KEY=una-chiave-backend-solo
 ```
+
+> 🔐 **Sicurezza**: non usare mai variabili `VITE_*` per segreti (`API key`, token, private key).  
+> Il frontend non deve contenere credenziali private.
 
 ### 3. Test Configurazione
 ```bash
@@ -48,24 +50,21 @@ cd frontend && npm run dev
 
 ✅ **Dashboard**: [http://localhost:3000](http://localhost:3000)
 
-## ✅ DASHBOARD_API_KEY AUTO-FIX
+## ✅ Sicurezza Auth Dashboard
 
-**Il tuo errore è RISOLTO**:
-```
-🚀 DASHBOARD_API_KEY AUTO-GENERATED (add to .env):
-   DASHBOARD_API_KEY=abc123XYZ-super-secure-key-456def789
-   VITE_DASHBOARD_API_KEY=abc123XYZ-super-secure-key-456def789
-```
-
-**COPIA la chiave generata nel tuo `.env`** (stessa per entrambe le righe) e **riavvia** `api_server.py`.
+- `DASHBOARD_API_KEY` è solo backend.
+- Nessuna chiave privata nel bundle browser.
+- In modalità non-live, il bypass senza chiave è consentito **solo** su loopback reale (`127.0.0.1/::1`) se `ALLOW_LOCALHOST_BYPASS=true`.
+- Se esponi API su rete/proxy, imposta:
+  - `ALLOW_LOCALHOST_BYPASS=false`
+  - `API_HOST=127.0.0.1` (consigliato) oppure proxy hardening serio.
 
 ## 🛠️ Risoluzione Problemi Comuni
 
 | ❌ Errore | ✅ Soluzione |
 |-----------|-------------|
-| `DASHBOARD_API_KEY not set` | Copia chiave generata da log → `.env` → riavvia |
+| `401 Unauthorized` | Verifica `DASHBOARD_API_KEY` nel backend o abilita loopback bypass in locale |
 | Dashboard vuota | `python api_server.py` (Terminale 2) |
-| 401 Unauthorized | **STESSA CHIAVE** in `DASHBOARD_API_KEY` + `VITE_DASHBOARD_API_KEY` |
 | No trades | `EXECUTION_MODE=live` + `ENABLE_MAINNET_TRADING=true` |
 
 ## 📊 Dashboard Live
