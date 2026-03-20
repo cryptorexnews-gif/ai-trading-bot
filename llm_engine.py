@@ -124,9 +124,13 @@ class LLMEngine:
             lines.append(f"    EMA200: ${float(lt.get('ema_200', 0)):.2f}")
             lines.append(f"    ATR14: ${float(lt.get('atr_14', 0)):.2f}")
 
-            rsi_list = lt.get("rsi_14", [])
-            if rsi_list and len(rsi_list) >= 3:
-                last_3 = rsi_list[-3:]
+            # Robust handling: rsi_14 can be Decimal (current value) while trend series is in rsi_trend.
+            rsi_current = lt.get("rsi_14", Decimal("50"))
+            lines.append(f"    RSI14: {float(rsi_current):.1f}")
+
+            rsi_trend = lt.get("rsi_trend", [])
+            if isinstance(rsi_trend, list) and len(rsi_trend) >= 3:
+                last_3 = rsi_trend[-3:]
                 lines.append(f"    RSI14 Trend: {', '.join([f'{float(v):.1f}' for v in last_3])}")
 
         return "\n".join(lines)
