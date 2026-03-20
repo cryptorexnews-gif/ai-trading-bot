@@ -1,10 +1,19 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 
-const API_BASE = '/api'
+function normalizeBaseUrl(value) {
+  const raw = (value || '/api').trim()
+  if (!raw) return '/api'
+  return raw.endsWith('/') ? raw.slice(0, -1) : raw
+}
+
+const API_BASE = normalizeBaseUrl(import.meta.env.VITE_API_BASE_URL)
+
+export function getApiBase() {
+  return API_BASE
+}
 
 export function getHeaders() {
   // Security: never send secrets from browser code.
-  // Keep function for compatibility with existing callers.
   return {}
 }
 

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react'
-import { getHeaders } from '../hooks/useApi'
+import { getHeaders, getApiBase } from '../hooks/useApi'
 import ChartToolbar from './trading/ChartToolbar'
 import StatsBar from './trading/StatsBar'
 import CandlestickChart from './trading/CandlestickChart'
@@ -7,22 +7,10 @@ import ChartSkeleton from './trading/ChartSkeleton'
 
 const DEFAULT_COINS = ['BTC', 'ETH', 'SOL', 'BNB', 'XRP', 'ADA', 'DOGE', 'AVAX', 'LINK', 'SUI']
 const CHART_HEIGHT = 500
-const HYPERLIQUID_INFO_URL = 'https://api.hyperliquid.xyz/info'
-const USE_PROXY_MARKET = import.meta.env.VITE_USE_API_PROXY_MARKET === 'true'
 
 function safeNum(v, fallback = 0) {
   if (v == null || isNaN(v)) return fallback
   return Number(v)
-}
-
-async function fetchFromHyperliquid(payload) {
-  const res = await fetch(HYPERLIQUID_INFO_URL, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
-  })
-  if (!res.ok) return null
-  return res.json()
 }
 
 export default function TradingView({ tradingPairs }) {
@@ -34,45 +22,32 @@ export default function TradingView({ tradingPairs }) {
   const [lastPrice, setLastPrice] = useState(null)
   const [stats24h, setStats24h] = useState(null)
   const mountedRef = useRef(true)
+  const apiBase = getApiBase()
 
   const fetchCandles = useCallback(async () => {
     let candleData = null
 
-    // Direct Hyperliquid first (default behavior)
     try {
-      const now = Date.now()
-      const msMap = { '1m': 60000, '5m': 300000, '15m': 900000, '1h': 3600000, '4h': 14400000, '1d': 86400000 }
-      const ms = msMap[interval] || 14400000
-      const raw = await fetchFromHyperliquid({
-        type: 'candleSnapshot',
-        req: { coin: selectedCoin, interval, startTime: now - ms * 150, endTime: now }
-      })
-      if (Array.isArray(raw) && raw.length > 0) {
-        candleData = raw.map(c => ({
-          time: c.t || 0,
-          open: parseFloat(c.o || 0),
-          high: parseFloat(c.h || 0),
-          low: parseFloat(c.l || 0),
-          close: parseFloat(c.c || 0),
-          volume: parseFloat(c.v || 0),
-        }))
-      }
-    } catch { /* direct failed */ }
+      const res = await fetch(
+        `${apiBase}/candles?coin=${selectedCoin}&interval=${interval}&limit=150`,
+        { headers: getHeaders(), credentials: 'same-origin' }
+      )
 
-    // Optional proxy fallback (only if explicitly enabled)
-    if (!candleData && USE_PROXY_MARKET) {
-      try {
-        const res = await fetch(
-          `/api/candles?coin=${selectedCoin}&interval=${interval}&limit=150`,
-          { headers: getHeaders() }
-        )
-        if (res.ok) {
-          const json = await res.json()
-          if (json.candles && json.candles.length > 0) {
-            candleData = json.candles
-          }
+      if (res.ok) {
+        const json = await res.json()
+        if (json.candles && json.candles.length > 0) {
+          candleData = json.candles.map(c => ({
+            time: c.time || 0,
+            open: parseFloat(c.open || 0),
+            high: parseFloat(c.high || 0),
+            low: parseFloat(c.low || 0),
+            close: parseFloat(c.close || 0),
+            volume: parseFloat(c.volume || 0),
+          }))
         }
-      } catch { /* proxy failed */ }
+      }
+    } catch {
+      // handled by empty data fallback
     }
 
     if (!mountedRef.current) return
@@ -103,7 +78,7 @@ export default function TradingView({ tradingPairs }) {
       close: closeP,
     })
     setChartLoading(false)
-  }, [selectedCoin, interval])
+  }, [apiBase, selectedCoin, interval])
 
   useEffect(() => {
     mountedRef.current = true
@@ -147,7 +122,7 @@ export default function TradingView({ tradingPairs }) {
           <div className="text-center">
             <div className="text-4xl mb-2">📊</div>
             <p className="text-sm">No chart data for {selectedCoin}</p>
-            <p className="text-xs text-gray-600 mt-1">Check your internet connection</p>
+            <p className="text-xs text-gray-600 mt-1">Check backend API connection</p>
           </div>
         </div>
       ) : (
