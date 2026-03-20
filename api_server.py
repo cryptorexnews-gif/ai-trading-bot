@@ -7,6 +7,10 @@ Usage:
     python api_server.py
 """
 
+# LOAD .env FIRST - before ANY imports that read os.getenv()
+from dotenv import load_dotenv
+load_dotenv()  # This must be FIRST to populate os.environ for all subsequent imports
+
 import logging
 import os
 
@@ -21,6 +25,10 @@ def run_api_server(host: str = "127.0.0.1", port: int = 5000, debug: bool = Fals
     app = create_app()
 
     execution_mode = os.getenv("EXECUTION_MODE", "paper").lower()
+
+    # Debug: Print detected API key status
+    api_key_status = "SET" if API_AUTH_KEY else "EMPTY"
+    logger.info(f"DASHBOARD_API_KEY status: {api_key_status} (length={len(API_AUTH_KEY) if API_AUTH_KEY else 0})")
 
     # Security checks
     if not API_AUTH_KEY:
@@ -60,9 +68,6 @@ def run_api_server(host: str = "127.0.0.1", port: int = 5000, debug: bool = Fals
 
 
 if __name__ == "__main__":
-    from dotenv import load_dotenv
-    load_dotenv()
-
     from utils.logging_config import setup_logging
     setup_logging(log_level="INFO", json_format=False, console_output=True)
 
