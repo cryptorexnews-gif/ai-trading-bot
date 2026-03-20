@@ -22,6 +22,17 @@ function fmtPct(value) {
   return `${(Number(value) * 100).toFixed(1)}%`
 }
 
+function toUnixTime(rawTime) {
+  const t = Number(rawTime)
+  if (!Number.isFinite(t) || t <= 0) return null
+  // if milliseconds convert to seconds
+  return t > 1e12 ? Math.floor(t / 1000) : Math.floor(t)
+}
+
+function isValidPoint(point) {
+  return point && point.time != null && Number.isFinite(point.time) && Number.isFinite(point.value)
+}
+
 function computeEMA(prices, period) {
   if (prices.length < period) return []
   const k = 2 / (period + 1)
@@ -94,14 +105,21 @@ export default function CandlestickChart({ candles, height = 500 }) {
 
   const candleData = useMemo(() => {
     if (!candles?.length) return []
-    return candles.slice(-1000).map(c => ({
-      time: Math.floor(Number(c.time || 0) / 1000),
-      open: Number(c.open),
-      high: Number(c.high),
-      low: Number(c.low),
-      close: Number(c.close),
-      volume: Number(c.volume || 0),
-    }))
+    return candles
+      .slice(-1000)
+      .map(c => {
+        const time = toUnixTime(c.time)
+        const open = Number(c.open)
+        const high = Number(c.high)
+        const low = Number(c.low)
+        const close = Number(c.close)
+        const volume = Number(c.volume || 0)
+
+        if (time == null) return null
+        if (![open, high, low, close].every(Number.isFinite)) return null
+        return { time, open, high, low, close, volume: Number.isFinite(volume) ? volume : 0 }
+      })
+      .filter(Boolean)
   }, [candles])
 
   const indicatorData = useMemo(() => {
@@ -120,37 +138,56 @@ export default function CandlestickChart({ candles, height = 500 }) {
     const rsiRaw = computeRSI(closes, 14)
     const macdRaw = computeMACD(closes)
 
-    const ema9 = ema9Raw.map((v, i) => ({ time: candleData[i + 8]?.time, value: v })).filter(Boolean)
-    const ema21 = ema21Raw.map((v, i) => ({ time: candleData[i + 20]?.time, value: v })).filter(Boolean)
-    const vwap = vwapRaw.map((v, i) => ({ time: candleData[i]?.time, value: v }))
-    const rsi = rsiRaw.map((v, i) => ({ time: candleData[i + 14]?.time, value: v })).filter(Boolean)
+    const ema9 = ema9Raw
+      .map((v, i) => ({ time: candleData[i + 8]?.time ?? null, value: Number(v) }))
+      .filter(isValidPoint)
+
+    const ema21 = ema21Raw
+      .map((v, i) => ({ time: candleData[i + 20]?.time ?? null, value: Number(v) }))
+      .filter(isValidPoint)
+
+    const vwap = vwapRaw
+      .map((v, i) => ({ time: candleData[i]?.time ?? null, value: Number(v) }))
+      .filter(isValidPoint)
+
+    const rsi = rsiRaw
+      .map((v, i) => ({ time: candleData[i + 14]?.time ?? null, value: Number(v) }))
+      .filter(isValidPoint)
 
     const macdOffset = 25
-    const macd = macdRaw.macd.map((v, i) => ({ time: candleData[i + macdOffset]?.time, value: v })).filter(Boolean)
-    const macdSignal = macdRaw.signal.map((v, i) => ({ time: candleData[i + macdOffset + 8]?.time, value: v })).filter(Boolean)
+    const macd = macdRaw.macd
+      .map((v, i) => ({ time: candleData[i + macdOffset]?.time ?? null, value: Number(v) }))
+      .filter(isValidPoint)
+
+    const macdSignal = macdRaw.signal
+      .map((v, i) => ({ time: candleData[i + macdOffset + 8]?.time ?? null, value: Number(v) }))
+      .filter(isValidPoint)
+
     const macdHistogram = macdRaw.histogram
       .map((v, i) => ({
-        time: candleData[i + macdOffset + 8]?.time,
-        value: v,
-        color: v >= 0 ? '#10b981' : '#ef4444',
+        time: candleData[i + macdOffset + 8]?.time ?? null,
+        value: Number(v),
+        color: Number(v) >= 0 ? '#10b981' : '#ef4444',
       }))
-      .filter(d => d.time != null)
+      .filter(d => d.time != null && Number.isFinite(d.time) && Number.isFinite(d.value))
 
     return { ema9, ema21, vwap, rsi, macd, macdSignal, macdHistogram }
   }, [candleData])
 
   const volumeData = useMemo(
     () =>
-      candleData.map(c => ({
-        time: c.time,
-        value: c.volume * c.close,
-        color: c.close >= c.open ? '#10b98135' : '#ef444435',
-      })),
+      candleData
+        .map(c => ({
+          time: c.time,
+          value: c.volume * c.close,
+          color: c.close >= c.open ? '#10b98135' : '#ef444435',
+        }))
+        .filter(d => d.time != null && Number.isFinite(d.time) && Number.isFinite(d.value)),
     [candleData]
   )
 
   useEffect(() => {
-    if (!chartContainerRef.current) return
+    if (!chartContainerRef.current || !candleData.length) return
 
     const chart = createChart(chartContainerRef.current, {
       width: chartContainerRef.current.clientWidth,
@@ -269,10 +306,12 @@ export default function CandlestickChart({ candles, height = 500 }) {
     macdHistogramSeriesRef.current = macdHistogramSeries
     chartRef.current = chart
 
-    const firstTime = candleData[0]?.time ?? 0
-    const lastTime = candleData[candleData.length - 1]?.time ?? 0
-    rsiOverbought.setData([{ time: firstTime, value: 70 }, { time: lastTime, value: 70 }])
-    rsiOversold.setData([{ time: firstTime, value: 30 }, { time: lastTime, value: 30 }])
+    const firstTime = candleData[0]?.time
+    const lastTime = candleData[candleData.length - 1]?.time
+    if (firstTime != null && lastTime != null) {
+      rsiOverbought.setData([{ time: firstTime, value: 70 }, { time: lastTime, value: 70 }])
+      rsiOversold.setData([{ time: firstTime, value: 30 }, { time: lastTime, value: 30 }])
+    }
 
     const handleResize = () => {
       if (chartContainerRef.current) {
@@ -290,7 +329,11 @@ export default function CandlestickChart({ candles, height = 500 }) {
   useEffect(() => {
     if (!candleSeriesRef.current || !candleData.length) return
 
-    candleSeriesRef.current.setData(candleData.map(({ time, open, high, low, close }) => ({ time, open, high, low, close })))
+    candleSeriesRef.current.setData(
+      candleData
+        .map(({ time, open, high, low, close }) => ({ time, open, high, low, close }))
+        .filter(d => d.time != null)
+    )
     volumeSeriesRef.current?.setData(volumeData)
 
     ema9SeriesRef.current?.setData(indicatorData.ema9)
