@@ -21,6 +21,7 @@ _state_store = StateStore(STATE_PATH, METRICS_PATH)
 @require_api_key
 def trades():
     limit = request.args.get("limit", 50, type=int)
+    limit = max(1, min(limit, 500))
     state = _state_store.load_state()
     history = state.get("trade_history", [])
     recent = list(reversed(history[-limit:]))

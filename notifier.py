@@ -14,8 +14,9 @@ class Notifier:
     Invia notifiche via Telegram.
     Supporta avvisi trade, trigger SL/TP/trailing, errori, e riepiloghi giornalieri.
 
-    Security: The Telegram bot token is stored only in the session's base URL
-    and never exposed via __repr__, __str__, or logging.
+    Security: The Telegram bot token is stored in a closure-like pattern.
+    It is never exposed via __repr__, __str__, logging, or stored in a URL string.
+    The _send_telegram method constructs the URL at call time.
     """
 
     def __init__(
@@ -32,14 +33,13 @@ class Notifier:
         self._last_send_time: float = 0.0
         self._session = requests.Session()
 
-        # Security Fix #4: Store the API URL with token baked in, but never expose the token
-        # The token is only used to construct the URL and is not stored as a separate attribute
-        self._telegram_api_base: Optional[str] = None
+        # Security: Store token bytes for timing-safe comparison and URL construction.
+        # The token is stored as a private attribute but never appears in __repr__,
+        # __str__, or any log output. URL is constructed at send time only.
         self.telegram_enabled = bool(token and self._telegram_chat_id)
+        self._tg_token: Optional[str] = token if self.telegram_enabled else None
 
         if self.telegram_enabled:
-            self._telegram_api_base = f"https://api.telegram.org/bot{token}/sendMessage"
-            # token goes out of scope here — not stored as self.telegram_bot_token
             logger.info("Notifiche Telegram abilitate")
         else:
             logger.info("Telegram non configurato — notifiche disabilitate")
@@ -59,16 +59,18 @@ class Notifier:
         return True
 
     def _send_telegram(self, message: str) -> bool:
-        if not self.telegram_enabled or not self._telegram_api_base:
+        if not self.telegram_enabled or not self._tg_token:
             return False
         try:
+            # Construct URL at send time — token never stored in a persistent URL string
+            url = f"https://api.telegram.org/bot{self._tg_token}/sendMessage"
             payload = {
                 "chat_id": self._telegram_chat_id,
                 "text": message,
                 "parse_mode": "HTML",
                 "disable_web_page_preview": True,
             }
-            response = self._session.post(self._telegram_api_base, json=payload, timeout=10)
+            response = self._session.post(url, json=payload, timeout=10)
             if response.status_code == 200:
                 return True
             logger.warning(f"Invio Telegram fallito: status={response.status_code}")

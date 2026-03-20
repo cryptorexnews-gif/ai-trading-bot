@@ -2,6 +2,8 @@
 """
 Script to close SOL position on Hyperliquid.
 Uses configuration from .env file.
+
+Security: Private key is derived into Account immediately and never stored as a raw string.
 """
 
 import os
@@ -17,7 +19,11 @@ from Crypto.Hash import keccak
 
 load_dotenv()
 
-PRIVATE_KEY = os.getenv("HYPERLIQUID_PRIVATE_KEY")
+# Security: Derive Account immediately, raw key is not stored
+_raw_key = os.getenv("HYPERLIQUID_PRIVATE_KEY", "")
+ACCOUNT = Account.from_key(_raw_key) if _raw_key else None
+del _raw_key  # Remove raw key from module scope
+
 WALLET_ADDRESS = os.getenv("HYPERLIQUID_WALLET_ADDRESS")
 ENABLE_MAINNET_TRADING = os.getenv("ENABLE_MAINNET_TRADING", "false").lower() == "true"
 BASE_URL = os.getenv("HYPERLIQUID_BASE_URL", "https://api.hyperliquid.xyz")
@@ -123,6 +129,10 @@ def main():
     print(f"API: {BASE_URL}")
     print()
 
+    if not ACCOUNT:
+        print("❌ HYPERLIQUID_PRIVATE_KEY not set or invalid.")
+        return
+
     if not ENABLE_MAINNET_TRADING:
         print("ENABLE_MAINNET_TRADING is false. Cannot close position.")
         return
@@ -181,8 +191,6 @@ def main():
 
     print(f"\nClosing: {close_side.upper()} {close_size} SOL @ ${limit_price}")
 
-    account = Account.from_key(PRIVATE_KEY)
-
     order_wire = {
         "a": asset_id,
         "b": is_buy,
@@ -194,7 +202,7 @@ def main():
 
     action = {"type": "order", "orders": [order_wire], "grouping": "na"}
     nonce = int(time.time() * 1000)
-    signature = sign_l1_action_exact(account, action, None, nonce, None, True)
+    signature = sign_l1_action_exact(ACCOUNT, action, None, nonce, None, True)
 
     payload = {
         "action": action,

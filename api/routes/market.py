@@ -1,5 +1,6 @@
 """
 Market data endpoints — proxies Hyperliquid API for candles and order book.
+All coin parameters are validated against known patterns.
 """
 
 import logging
@@ -8,24 +9,42 @@ import time
 from flask import Blueprint, jsonify, request
 
 from api.auth import require_api_key
+from api.config import COIN_PATTERN, KNOWN_TRADING_PAIRS
 from api.helpers import post_hyperliquid_info
 
 logger = logging.getLogger(__name__)
 
 market_bp = Blueprint("market", __name__)
 
+# Allowed candle intervals
+_VALID_INTERVALS = {"1m", "3m", "5m", "15m", "1h", "4h", "1d"}
+
+
+def _validate_coin(coin_raw: str) -> str:
+    """Validate and sanitize coin parameter. Returns uppercased coin or empty string if invalid."""
+    coin = coin_raw.strip().upper()
+    if not COIN_PATTERN.match(coin):
+        return ""
+    return coin
+
 
 @market_bp.route("/api/candles", methods=["GET"])
 @require_api_key
 def candles():
     """Get candlestick data from Hyperliquid for price chart."""
-    coin = request.args.get("coin", "BTC").upper()
+    coin = _validate_coin(request.args.get("coin", "BTC"))
+    if not coin:
+        return jsonify({"error": "invalid coin parameter"}), 400
+
     interval = request.args.get("interval", "15m")
+    if interval not in _VALID_INTERVALS:
+        return jsonify({"error": f"invalid interval, must be one of: {', '.join(sorted(_VALID_INTERVALS))}"}), 400
+
     limit = request.args.get("limit", 100, type=int)
-    limit = min(limit, 500)
+    limit = max(1, min(limit, 500))
 
     interval_ms_map = {
-        "1m": 60_000, "5m": 300_000, "15m": 900_000,
+        "1m": 60_000, "3m": 180_000, "5m": 300_000, "15m": 900_000,
         "1h": 3_600_000, "4h": 14_400_000, "1d": 86_400_000
     }
     interval_ms = interval_ms_map.get(interval, 900_000)
@@ -71,7 +90,10 @@ def orderbook():
     Get L2 order book from Hyperliquid.
     Uses nSigFigs for price grouping (2-5, matching Hyperliquid UI).
     """
-    coin = request.args.get("coin", "BTC").upper()
+    coin = _validate_coin(request.args.get("coin", "BTC"))
+    if not coin:
+        return jsonify({"error": "invalid coin parameter"}), 400
+
     n_sig_figs = request.args.get("nSigFigs", 5, type=int)
     n_sig_figs = max(2, min(5, n_sig_figs))
 
@@ -141,9 +163,12 @@ def orderbook():
 
 
 @market_bp.route("/api/orderbook/debug", methods=["GET"])
+@require_api_key
 def orderbook_debug():
-    """Debug endpoint — returns raw Hyperliquid L2 response."""
-    coin = request.args.get("coin", "BTC").upper()
+    """Debug endpoint — returns raw Hyperliquid L2 response. Requires API key."""
+    coin = _validate_coin(request.args.get("coin", "BTC"))
+    if not coin:
+        return jsonify({"error": "invalid coin parameter"}), 400
 
     data = post_hyperliquid_info({
         "type": "l2Book",

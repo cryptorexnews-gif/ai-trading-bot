@@ -20,12 +20,42 @@ def run_api_server(host: str = "127.0.0.1", port: int = 5000, debug: bool = Fals
     """Start the API server."""
     app = create_app()
 
+    execution_mode = os.getenv("EXECUTION_MODE", "paper").lower()
+
+    # Security checks
     if not API_AUTH_KEY:
+        if execution_mode == "live":
+            logger.error(
+                "SECURITY CRITICAL: DASHBOARD_API_KEY not set while EXECUTION_MODE=live. "
+                "All dashboard endpoints will reject requests. "
+                "Set DASHBOARD_API_KEY in .env to enable dashboard access."
+            )
+        else:
+            logger.warning(
+                "SECURITY WARNING: DASHBOARD_API_KEY not set — API endpoints are unauthenticated. "
+                "Set DASHBOARD_API_KEY in .env for production use."
+            )
+
+    if host == "0.0.0.0":
+        if not API_AUTH_KEY:
+            logger.error(
+                "SECURITY CRITICAL: API server binding to 0.0.0.0 (all interfaces) "
+                "without DASHBOARD_API_KEY. This exposes the API to the network without authentication."
+            )
         logger.warning(
-            "SECURITY WARNING: DASHBOARD_API_KEY not set — API endpoints are unauthenticated. "
-            "Set DASHBOARD_API_KEY in .env for production use."
+            "API server binding to 0.0.0.0 — ensure a reverse proxy with TLS is in front "
+            "for production deployments."
         )
-    logger.info(f"Starting API server on {host}:{port} (CORS origins: {CORS_ORIGINS})")
+
+    # Never use Flask debug mode in live trading
+    if execution_mode == "live" and debug:
+        logger.warning("Forcing debug=False because EXECUTION_MODE=live")
+        debug = False
+
+    logger.info(
+        f"Starting API server on {host}:{port} "
+        f"(mode={execution_mode}, debug={debug}, CORS origins: {CORS_ORIGINS})"
+    )
     app.run(host=host, port=port, debug=debug, use_reloader=False)
 
 
@@ -38,4 +68,9 @@ if __name__ == "__main__":
 
     host = os.getenv("API_SERVER_HOST", "127.0.0.1")
     port = int(os.getenv("API_SERVER_PORT", "5000"))
-    run_api_server(host=host, port=port, debug=True)
+    execution_mode = os.getenv("EXECUTION_MODE", "paper").lower()
+
+    # Only enable debug in paper mode
+    use_debug = execution_mode != "live"
+
+    run_api_server(host=host, port=port, debug=use_debug)

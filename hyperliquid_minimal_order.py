@@ -3,6 +3,8 @@
 ORDINE MINIMALE PER HYPERLIQUID
 Script che piazza UN ordine minimo con firma EIP-712 corretta.
 Usa configurazione da .env file.
+
+Security: Private key is derived into Account immediately and never stored as a raw string.
 """
 
 import time
@@ -16,7 +18,11 @@ from Crypto.Hash import keccak
 
 load_dotenv()
 
-PRIVATE_KEY = os.getenv("HYPERLIQUID_PRIVATE_KEY")
+# Security: Derive Account immediately, raw key is not stored
+_raw_key = os.getenv("HYPERLIQUID_PRIVATE_KEY", "")
+ACCOUNT = Account.from_key(_raw_key) if _raw_key else None
+del _raw_key  # Remove raw key from module scope
+
 WALLET_ADDRESS = os.getenv("HYPERLIQUID_WALLET_ADDRESS")
 ENABLE_MAINNET_TRADING = os.getenv("ENABLE_MAINNET_TRADING", "false").lower() == "true"
 AUTO_CONFIRM_MINIMAL_ORDER = os.getenv("AUTO_CONFIRM_MINIMAL_ORDER", "false").lower() == "true"
@@ -140,14 +146,17 @@ def create_minimal_order(coin, is_buy, sz, limit_px):
 
 
 def send_minimal_order():
+    if not ACCOUNT:
+        print("🛑 Bloccato: HYPERLIQUID_PRIVATE_KEY non configurata o invalida.")
+        return False
+
     if not ENABLE_MAINNET_TRADING:
         print("🛑 Bloccato: ENABLE_MAINNET_TRADING non è true (fail-closed).")
         return False
 
     print("=== ORDINE MINIMALE HYPERLIQUID ===")
 
-    account = Account.from_key(PRIVATE_KEY)
-    print(f"💰 Wallet: {mask_wallet(account.address)}")
+    print(f"💰 Wallet: {mask_wallet(ACCOUNT.address)}")
 
     coin = "ETH"
     is_buy = True
@@ -175,7 +184,7 @@ def send_minimal_order():
 
     print("🔐 Firma...")
     signature = sign_l1_action_exact(
-        wallet=account,
+        wallet=ACCOUNT,
         action=order_action,
         vault_address=None,
         nonce=timestamp,
@@ -261,188 +270,22 @@ if __name__ == "__main__":
     print("=" * 50)
     print()
 
-    if not ENABLE_MAINNET_TRADING:
+    if not ACCOUNT:
+        print("🛑 Errore: HYPERLIQUID_PRIVATE_KEY non configurata.")
+    elif not ENABLE_MAINNET_TRADING:
         print("🛑 Sicurezza: ENABLE_MAINNET_TRADING=false, ordini reali bloccati.")
     else:
-        print("✅ ENABLE_MAINNET_TRADING=true rilevato.")
+        print(f"✅ ENABLE_MAINNET_TRADING=true rilevato. Wallet: {mask_wallet(ACCOUNT.address)}")
 
     verify_connectivity()
     verify_wallet_balance()
 
-    if ENABLE_MAINNET_TRADING and AUTO_CONFIRM_MINIMAL_ORDER:
+    if ACCOUNT and ENABLE_MAINNET_TRADING and AUTO_CONFIRM_MINIMAL_ORDER:
         print("✅ AUTO_CONFIRM_MINIMAL_ORDER=true: invio automatico abilitato.")
         print("\n" + "=" * 30)
         send_minimal_order()
-    elif ENABLE_MAINNET_TRADING and not AUTO_CONFIRM_MINIMAL_ORDER:
-        print("\n🛑 AUTO_CONFIRM_MINIMAL_ORDER<dyad-write path="utils/circuit_breaker.py">
-HALF_OPEN transition basato su recovery_timeout, quindi il breaker si recupera effettivamente invece di rimanere aperto per sempre.">
-import logging
-import time
-from enum import Enum
-from typing import Any, Callable, Dict, Optional
-
-logger = logging.getLogger(__name__)
-
-
-class CircuitState(Enum):
-    CLOSED = "closed"
-    OPEN = "open"
-    HALF_OPEN = "half_open"
-
-
-class CircuitBreaker:
-    """
-    Circuit breaker per chiamate API esterne.
-    Previene cascate di fallimenti bloccando temporaneamente quando un servizio è giù.
-    Transizioni: CLOSED -> OPEN (dopo threshold fallimenti)
-                 OPEN -> HALF_OPEN (dopo che recovery_timeout è trascorso)
-                 HALF_OPEN -> CLOSED (alla prima chiamata riuscita) o OPEN (al fallimento)
-    """
-
-    def __init__(
-        self,
-        name: str,
-        failure_threshold: int = 5,
-        recovery_timeout: float = 60.0,
-        half_open_max_calls: int = 3,
-        expected_exception: type = Exception
-    ):
-        self.name = name
-        self.failure_threshold = failure_threshold
-        self.recovery_timeout = recovery_timeout
-        self.half_open_max_calls = half_open_max_calls
-        self.expected_exception = expected_exception
-
-        self.state = CircuitState.CLOSED
-        self.failure_count = 0
-        self.last_failure_time: Optional[float] = None
-        self.half_open_calls = 0
-
-    def _maybe_transition_to_half_open(self) -> None:
-        """Controlla se è passato abbastanza tempo per provare half-open."""
-        if self.state != CircuitState.OPEN:
-            return
-        if self.last_failure_time is None:
-            return
-        elapsed = time.time() - self.last_failure_time
-        if elapsed >= self.recovery_timeout:
-            logger.info(
-                f"Circuit '{self.name}' transizione OPEN -> HALF_OPEN "
-                f"dopo {elapsed:.1f}s (timeout={self.recovery_timeout}s)"
-            )
-            self.state = CircuitState.HALF_OPEN
-            self.half_open_calls = 0
-
-    def call(self, func: Callable[..., Any], *args, **kwargs) -> Any:
-        """
-        Esegue una funzione attraverso il circuit breaker.
-
-        Raises:
-            CircuitBreakerOpenError: Se circuit è aperto e timeout recovery non trascorso
-            Exception: Qualsiasi eccezione dalla funzione wrappata
-        """
-        # Controlla se dovremmo transire da OPEN a HALF_OPEN
-        self._maybe_transition_to_half_open()
-
-        if self.state == CircuitState.OPEN:
-            raise CircuitBreakerOpenError(
-                f"Circuit '{self.name}' è OPEN. "
-                f"Riproverà dopo {self.recovery_timeout}s dall'ultimo fallimento."
-            )
-
-        if self.state == CircuitState.HALF_OPEN:
-            if self.half_open_calls >= self.half_open_max_calls:
-                # Troppe chiamate half-open fallite, torna a OPEN
-                self.state = CircuitState.OPEN
-                self.last_failure_time = time.time()
-                raise CircuitBreakerOpenError(
-                    f"Circuit '{self.name}' HALF_OPEN max chiamate ({self.half_open_max_calls}) superato, ri-apertura"
-                )
-            self.half_open_calls += 1
-
-        try:
-            result = func(*args, **kwargs)
-            self._on_success()
-            return result
-        except self.expected_exception as e:
-            self._on_failure()
-            raise
-
-    def _on_success(self) -> None:
-        """Gestisce chiamata riuscita."""
-        if self.state == CircuitState.HALF_OPEN:
-            logger.info(f"Circuit '{self.name}' recuperato, HALF_OPEN -> CLOSED")
-        self.state = CircuitState.CLOSED
-        self.failure_count = 0
-        self.last_failure_time = None
-        self.half_open_calls = 0
-
-    def _on_failure(self) -> None:
-        """Gestisce chiamata fallita."""
-        self.failure_count += 1
-        self.last_failure_time = time.time()
-
-        if self.state == CircuitState.CLOSED and self.failure_count >= self.failure_threshold:
-            logger.warning(
-                f"Circuit '{self.name}' CLOSED -> OPEN dopo {self.failure_count} fallimenti consecutivi"
-            )
-            self.state = CircuitState.OPEN
-        elif self.state == CircuitState.HALF_OPEN:
-            logger.warning(f"Circuit '{self.name}' fallito in HALF_OPEN, ri-apertura")
-            self.state = CircuitState.OPEN
-
-    def reset(self) -> None:
-        """Resetta manualmente il circuit breaker allo stato closed."""
-        logger.info(f"Circuit '{self.name}' resettato manualmente a CLOSED")
-        self.state = CircuitState.CLOSED
-        self.failure_count = 0
-        self.last_failure_time = None
-        self.half_open_calls = 0
-
-    def get_state(self) -> Dict[str, Any]:
-        """Ottieni stato corrente del circuit breaker."""
-        return {
-            "name": self.name,
-            "state": self.state.value,
-            "failure_count": self.failure_count,
-            "last_failure_time": self.last_failure_time,
-            "half_open_calls": self.half_open_calls,
-            "recovery_timeout": self.recovery_timeout,
-            "failure_threshold": self.failure_threshold
-        }
-
-
-class CircuitBreakerOpenError(Exception):
-    """Eccezione sollevata quando circuit breaker è aperto."""
-    pass
-
-
-# Registro globale di circuit breaker
-_circuit_breakers: Dict[str, CircuitBreaker] = {}
-
-
-def get_or_create_circuit_breaker(
-    name: str,
-    failure_threshold: int = 5,
-    recovery_timeout: float = 60.0,
-    half_open_max_calls: int = 3,
-    expected_exception: type = Exception
-) -> CircuitBreaker:
-    """
-    Ottieni o crea un circuit breaker per nome.
-    Utile per condividere circuit breaker tra moduli.
-    """
-    if name not in _circuit_breakers:
-        _circuit_breakers[name] = CircuitBreaker(
-            name=name,
-            failure_threshold=failure_threshold,
-            recovery_timeout=recovery_timeout,
-            half_open_max_calls=half_open_max_calls,
-            expected_exception=expected_exception
-        )
-    return _circuit_breakers[name]
-
-
-def get_all_circuit_states() -> Dict[str, Dict[str, Any]]:
-    """Ottieni stati di tutti i circuit breaker."""
-    return {name: cb.get_state() for name, cb in _circuit_breakers.items()}
+    elif ACCOUNT and ENABLE_MAINNET_TRADING and not AUTO_CONFIRM_MINIMAL_ORDER:
+        print("\n🛑 AUTO_CONFIRM_MINIMAL_ORDER=false.")
+        print("Per inviare l'ordine, imposta AUTO_CONFIRM_MINIMAL_ORDER=true nel .env")
+    else:
+        print("\n📋 Verifica completata. Nessun ordine inviato.")
