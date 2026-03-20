@@ -1,48 +1,4 @@
-import React from 'react'
-import { Shield, TrendingUp, TrendingDown, CheckCircle } from 'lucide-react'
-
-export default function ManagedPositions({ positions }) {
-  if (!positions || positions.length === 0) {
-    return (
-      <div className="bg-gray-900 rounded-xl p-6 border border-gray-800">
-        <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">
-          <Shield size={18} className="text-blue-400" />
-          Risk Management
-        </h3>
-        <div className="flex flex-col items-center justify-center py-6 text-gray-500">
-          <div className="text-4xl mb-2">🛡️</div>
-          <p className="text-sm">No managed positions</p>
-        </div>
-      </div>
-    )
-  }
-
-  return (
-    <div className="bg-gray-900 rounded-xl p-6 border border-gray-800">
-      <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">
-        <Shield size={18} className="text-blue-400" />
-        Risk Management
-        <span className="text-sm font-normal text-gray-500">({positions.length})</span>
-      </h3>
-      <div className="space-y-3">
-        {positions.map((pos) => {
-          const isLong = pos.side === 'LONG'
-          const entry = parseFloat(pos.entry_price || 0)
-          const sl = parseFloat(pos.stop_loss_price || 0)
-          const tp = parseFloat(pos.take_profit_price || 0)
-          const slPct = (parseFloat(pos.stop_loss_pct || 0) * 100).toFixed(1)
-          const tpPct = (parseFloat(pos.take_profit_pct || 0) * 100).toFixed(1)
-          const beActivated = pos.break_even_activated || false
-          const beActivationPct = (parseFloat(pos.break_even_activation_pct || 0.015) * 100).toFixed(1)
-
-          return (
-            <div key={pos.coin} className="bg-gray-800/50 rounded-lg p-4 border border-gray-700/50">
-              <div className="flex items-center justify-between mb-3">
-                <div className="flex items-center gap-2">
-                  <span className="font-bold text-lg">{pos.coin}</span>
-                  <span className={`flex items-center gap-1 text-xs font-bold px-2 py-0.5 rounded ${
-                    isLong ? 'bg-green-900/50 text-green-400<dyad-write path="frontend/src/components/ManagedPositions.jsx" description="Completare l'aggiornamento del frontend per trend 4h/1d">
-                  <span className={`flex items-center gap-1 text-xs font-bold px-2 py-0.5 rounded ${
+<span className={`flex items-center gap-1 text-xs font-bold px-2 py-0.5 rounded ${
                     isLong ? 'bg-green-900/50 text-green-400' : 'bg-red-900/50 text-red-400'
                   }`}>
                     {isLong ? <TrendingUp size={10} /> : <TrendingDown size={10} />}

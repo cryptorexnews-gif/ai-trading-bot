@@ -27,7 +27,7 @@ async function fetchFromHyperliquid(payload) {
 export default function TradingView({ tradingPairs }) {
   const coins = tradingPairs && tradingPairs.length > 0 ? tradingPairs : DEFAULT_COINS
   const [selectedCoin, setSelectedCoin] = useState(coins[0])
-  const [interval, setInterval_] = useState('1h')
+  const [interval, setInterval_] = useState('4h')  // Default to 4h for trend trading
   const [candles, setCandles] = useState([])
   const [chartLoading, setChartLoading] = useState(true)
   const [lastPrice, setLastPrice] = useState(null)
@@ -56,7 +56,7 @@ export default function TradingView({ tradingPairs }) {
       try {
         const now = Date.now()
         const msMap = { '1m': 60000, '5m': 300000, '15m': 900000, '1h': 3600000, '4h': 14400000, '1d': 86400000 }
-        const ms = msMap[interval] || 900000
+        const ms = msMap[interval] || 14400000  // Default to 4h
         const raw = await fetchFromHyperliquid({
           type: 'candleSnapshot',
           req: { coin: selectedCoin, interval, startTime: now - ms * 150, endTime: now }
@@ -104,7 +104,6 @@ export default function TradingView({ tradingPairs }) {
     setChartLoading(false)
   }, [selectedCoin, interval])
 
-  // Reset on coin/interval change + start polling
   useEffect(() => {
     mountedRef.current = true
     setChartLoading(true)
@@ -145,7 +144,7 @@ export default function TradingView({ tradingPairs }) {
       ) : candles.length === 0 ? (
         <div className="flex items-center justify-center text-gray-500" style={{ height: CHART_HEIGHT }}>
           <div className="text-center">
-            <div className="text-3xl mb-2">📊</div>
+            <div className="text-4xl mb-2">📊</div>
             <p className="text-sm">No chart data for {selectedCoin}</p>
             <p className="text-xs text-gray-600 mt-1">Check your internet connection</p>
           </div>

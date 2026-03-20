@@ -2,10 +2,8 @@ import React from 'react'
 import { fmtPrice } from './formatters'
 
 const INTERVALS = [
-  { value: '5m', label: '5m' },
-  { value: '15m', label: '15m' },
   { value: '1h', label: '1H' },
-  { value: '4h', label: '4H' },
+  { value: '4h', label: '4H' },  // Default for trend trading
   { value: '1d', label: 'D' },
 ]
 

@@ -12,11 +12,12 @@ export default function StatsBar({ stats24h }) {
 
   return (
     <div className="flex items-center gap-4 px-4 py-1.5 border-b border-gray-800/50 text-[11px] text-gray-400 font-mono overflow-x-auto">
-      <span>24h High <span className="text-green-400">${fmtPrice(high)}</span></span>
+      <span>High <span className="text-green-400">${fmtPrice(high)}</span></span>
       <span className="text-gray-700">|</span>
-      <span>24h Low <span className="text-red-400">${fmtPrice(low)}</span></span>
+     <dyad-write path="frontend/src/components/trading/StatsBar.jsx" description="Completare StatsBar.jsx">
+      <span>Low <span className="text-red-400">${fmtPrice(low)}</span></span>
       <span className="text-gray-700">|</span>
-      <span>24h Vol <span className="text-blue-400">{fmtVol(volume)}</span></span>
+      <span>Vol <span className="text-blue-400">{fmtVol(volume)}</span></span>
       <span className="text-gray-700">|</span>
       <span>O <span className="text-gray-300">${fmtPrice(open)}</span></span>
       <span>C <span className="text-white">${fmtPrice(close)}</span></span>

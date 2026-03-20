@@ -328,3 +328,22 @@ class AssetCorrelation:
     correlation: Decimal  # -1 a 1
     period: str  # es. "4h", "1d"
     sample_count: int = 0
+
+
+@dataclass
+class TrendSignal:
+    """Segnale trend per strategia 4h/1d."""
+    coin: str
+    primary_trend: str  # "bullish", "bearish", "neutral"
+    secondary_trend: str  # "bullish", "bearish", "neutral"
+    entry_trend: str  # "bullish", "bearish", "neutral"
+    trend_strength: int  # 0-3 (numero di timeframes allineati)
+    volume_confirmation: bool
+    rsi_signal: str  # "oversold", "overbought", "neutral"
+    bb_position: Decimal  # 0-1 (posizione nelle bande)
+    vwap_distance: Decimal  # % sopra/sotto VWAP
+    confidence_score: Decimal  # 0-1
+    entry_price: Optional[Decimal] = None
+    stop_loss_price: Optional[Decimal] = None
+    take_profit_price: Optional[Decimal] = None
+    timestamp: float = 0.0

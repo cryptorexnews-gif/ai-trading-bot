@@ -100,11 +100,12 @@ class HyperliquidBot:
             state_store=self.state_store,
             metrics=self.metrics,
             position_manager=PositionManager(
-                default_sl_pct=self.cfg.default_sl_pct, default_tp_pct=self.cfg.default_tp_pct,
-                default_trailing_callback=self.cfg.default_trailing_callback,
+                default_sl_pct=self.cfg.trend_sl_pct,  # Use trend-specific SL
+                default_tp_pct=self.cfg.trend_tp_pct,  # Use trend-specific TP
+                default_trailing_callback=self.cfg.trend_trailing_callback,
                 enable_trailing_stop=self.cfg.enable_trailing_stop,
-                trailing_activation_pct=self.cfg.trailing_activation_pct,
-                break_even_activation_pct=self.cfg.break_even_activation_pct,
+                trailing_activation_pct=self.cfg.trend_trailing_activation_pct,
+                break_even_activation_pct=self.cfg.trend_break_even_activation_pct,
                 break_even_offset_pct=self.cfg.break_even_offset_pct,
             ),
             correlation_engine=CorrelationEngine(correlation_threshold=self.cfg.correlation_threshold),
@@ -300,11 +301,13 @@ class HyperliquidBot:
         logging.info(f"LLM model: {self.cfg.llm_model}")
         logging.info(f"Trading pairs ({len(self.cfg.trading_pairs)}): {self.cfg.trading_pairs}")
         logging.info(
-            f"Strategy: Asymmetric R:R — SL {float(self.cfg.default_sl_pct)*100}% / "
-            f"TP {float(self.cfg.default_tp_pct)*100}% / "
-            f"Trailing {float(self.cfg.default_trailing_callback)*100}% / "
-            f"Break-Even @{float(self.cfg.break_even_activation_pct)*100}%"
+            f"Strategy: Trend 4H/1D Following — SL {float(self.cfg.trend_sl_pct)*100}% / "
+            f"TP {float(self.cfg.trend_tp_pct)*100}% / "
+            f"Trailing {float(self.cfg.trend_trailing_callback)*100}% / "
+            f"Break-Even @{float(self.cfg.trend_break_even_activation_pct)*100}%"
         )
+        logging.info(f"Max trend positions: {self.cfg.max_trend_positions}")
+        logging.info(f"Trend position size: {float(self.cfg.trend_position_size_pct)*100}% of portfolio")
         logging.info(f"Adaptive cycle: {self.cfg.enable_adaptive_cycle} ({self.cfg.min_cycle_sec}-{self.cfg.max_cycle_sec}s)")
         logging.info(f"Max drawdown: {float(self.cfg.max_drawdown_pct)*100}%")
         logging.info(f"Telegram: {'enabled' if self.notifier.telegram_enabled else 'disabled'}")
