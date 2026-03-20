@@ -3,6 +3,8 @@ Technical Analyzer — Orchestrator for technical analysis.
 Combines data fetching, indicator calculation, and trend analysis.
 """
 
+from decimal import Decimal
+
 from utils.data_fetcher import HyperliquidDataFetcher
 from utils.technical_indicators import TechnicalIndicators
 from utils.trend_analyzer import TrendAnalyzer
@@ -27,10 +29,9 @@ class TechnicalAnalyzer:
 
     def is_trend_confirmed(self, coin: str, volume_threshold: float = 1.5) -> bool:
         """Check if trend is confirmed for trading."""
-        from decimal import Decimal
         return self.trend_analyzer.is_trend_confirmed(coin, Decimal(str(volume_threshold)))
 
-    # Compatibility pass-throughs expected by orchestrator/engines
+    # Expected runtime passthroughs
     def get_all_mids(self, force_refresh: bool = False):
         return self.data_fetcher.get_all_mids(force_refresh=force_refresh)
 
@@ -46,3 +47,16 @@ class TechnicalAnalyzer:
 
 # Global instance for backward compatibility
 technical_fetcher = TechnicalAnalyzer()
+
+# Hard compatibility shims in case an older class shape is loaded
+if not hasattr(technical_fetcher, "get_all_mids"):
+    technical_fetcher.get_all_mids = technical_fetcher.data_fetcher.get_all_mids
+
+if not hasattr(technical_fetcher, "get_meta"):
+    technical_fetcher.get_meta = technical_fetcher.data_fetcher.get_meta
+
+if not hasattr(technical_fetcher, "get_funding_for_coin"):
+    technical_fetcher.get_funding_for_coin = technical_fetcher.data_fetcher.get_funding_for_coin
+
+if not hasattr(technical_fetcher, "get_candle_snapshot"):
+    technical_fetcher.get_candle_snapshot = technical_fetcher.data_fetcher.get_candle_snapshot
