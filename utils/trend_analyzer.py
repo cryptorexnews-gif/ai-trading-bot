@@ -19,6 +19,30 @@ class TrendAnalyzer:
         self._trend_cache_at: Dict[str, float] = {}
         self._trend_cache_ttl: float = 86400.0  # 1 giorno
 
+    @staticmethod
+    def _ema_trend_short_mid(short_ema: Decimal, mid_ema: Decimal) -> str:
+        if short_ema > mid_ema:
+            return "bullish"
+        if short_ema < mid_ema:
+            return "bearish"
+        return "neutral"
+
+    @staticmethod
+    def _ema_trend_9_21_50(ema9: Decimal, ema21: Decimal, ema50: Decimal) -> str:
+        if ema9 > ema21 > ema50:
+            return "bullish"
+        if ema9 < ema21 < ema50:
+            return "bearish"
+        return "neutral"
+
+    @staticmethod
+    def _ema_trend_21_50(ema21: Decimal, ema50: Decimal) -> str:
+        if ema21 > ema50:
+            return "bullish"
+        if ema21 < ema50:
+            return "bearish"
+        return "neutral"
+
     def analyze_multi_timeframe_trend(self, coin: str) -> Dict[str, Any]:
         """
         Analyze trend across 1H, 4H, and 1D timeframes.
@@ -29,11 +53,11 @@ class TrendAnalyzer:
             return self._trend_cache[coin]
 
         # Get data for each timeframe
-        intraday_candles = self.data_fetcher.get_candle_snapshot(coin, "1h", 100)
-        hourly_candles = self.data_fetcher.get_candle_snapshot(coin, "4h", 50)
-        daily_candles = self.data_fetcher.get_candle_snapshot(coin, "1d", 30)
+        intraday_candles = self.data_fetcher.get_candle_snapshot(coin, "1h", 120)
+        hourly_candles = self.data_fetcher.get_candle_snapshot(coin, "4h", 80)
+        daily_candles = self.data_fetcher.get_candle_snapshot(coin, "1d", 240)
 
-        if not intraday_candles or len(intraday_candles) < 10:
+        if not intraday_candles or len(intraday_candles) < 25:
             return {"trend_strength": 0, "trend_direction": "neutral", "trends_aligned": False}
 
         # Extract price data
@@ -51,6 +75,11 @@ class TrendAnalyzer:
         bollinger_1h = TechnicalIndicators.calculate_bollinger_bands(intraday_closes, 20, Decimal("2"))
         vwap_1h = TechnicalIndicators.calculate_vwap(intraday_highs, intraday_lows, intraday_closes, intraday_volumes)
 
+        intraday_trend = self._ema_trend_short_mid(
+            ema_9_1h[-1] if ema_9_1h else Decimal("0"),
+            ema_21_1h[-1] if ema_21_1h else Decimal("0"),
+        )
+
         # Calculate volume ratio
         current_volume = intraday_volumes[-1] if intraday_volumes else Decimal("0")
         avg_volume = sum(intraday_volumes[-20:]) / Decimal(str(min(20, len(intraday_volumes)))) if intraday_volumes else Decimal("0")
@@ -65,18 +94,25 @@ class TrendAnalyzer:
 
         # 4H timeframe analysis (primary trend)
         hourly_context = {}
-        if hourly_candles and len(hourly_candles) >= 20:
+        hourly_trend = "neutral"
+        if hourly_candles and len(hourly_candles) >= 50:
             hourly_closes = [c["close"] for c in hourly_candles]
             hourly_highs = [c["high"] for c in hourly_candles]
             hourly_lows = [c["low"] for c in hourly_candles]
 
             ema_9_4h = TechnicalIndicators.calculate_ema(hourly_closes, 9)
             ema_21_4h = TechnicalIndicators.calculate_ema(hourly_closes, 21)
-            ema_50_4h = TechnicalIndicators.calculate_ema(hourly_closes, min(50, len(hourly_closes)))
+            ema_50_4h = TechnicalIndicators.calculate_ema(hourly_closes, 50)
             rsi_14_4h = TechnicalIndicators.calculate_rsi(hourly_closes, 14)
             macd_line_4h, signal_line_4h, histogram_4h = TechnicalIndicators.calculate_macd(hourly_closes)
             atr_14_4h = TechnicalIndicators.calculate_atr(hourly_highs, hourly_lows, hourly_closes, 14)
             bollinger_4h = TechnicalIndicators.calculate_bollinger_bands(hourly_closes, 20, Decimal("2"))
+
+            hourly_trend = self._ema_trend_9_21_50(
+                ema_9_4h[-1] if ema_9_4h else Decimal("0"),
+                ema_21_4h[-1] if ema_21_4h else Decimal("0"),
+                ema_50_4h[-1] if ema_50_4h else Decimal("0"),
+            )
 
             hourly_context = {
                 "ema_9": ema_9_4h[-1] if ema_9_4h else Decimal("0"),
@@ -90,23 +126,29 @@ class TrendAnalyzer:
                 "bollinger_upper": bollinger_4h["upper"][-1] if bollinger_4h["upper"] else Decimal("0"),
                 "bollinger_middle": bollinger_4h["middle"][-1] if bollinger_4h["middle"] else Decimal("0"),
                 "bollinger_lower": bollinger_4h["lower"][-1] if bollinger_4h["lower"] else Decimal("0"),
-                "trend": "bullish" if (ema_9_4h and ema_21_4h and ema_9_4h[-1] > ema_21_4h[-1]) else "bearish",
+                "trend": hourly_trend,
                 "rsi_trend": [rsi_14_4h[i] if i < len(rsi_14_4h) else Decimal("50") for i in range(max(0, len(rsi_14_4h) - 5), len(rsi_14_4h))],
             }
 
         # 1D timeframe analysis (main trend)
         long_term_context = {}
+        daily_trend = "neutral"
         daily_closes = []
-        if daily_candles and len(daily_candles) >= 5:
+        if daily_candles and len(daily_candles) >= 50:
             daily_closes = [c["close"] for c in daily_candles]
             daily_highs = [c["high"] for c in daily_candles]
             daily_lows = [c["low"] for c in daily_candles]
 
             daily_ema_21 = TechnicalIndicators.calculate_ema(daily_closes, 21)
-            daily_ema_50 = TechnicalIndicators.calculate_ema(daily_closes, min(50, len(daily_closes)))
-            daily_ema_200 = TechnicalIndicators.calculate_ema(daily_closes, min(200, len(daily_closes)))
+            daily_ema_50 = TechnicalIndicators.calculate_ema(daily_closes, 50)
+            daily_ema_200 = TechnicalIndicators.calculate_ema(daily_closes, 200) if len(daily_closes) >= 200 else [Decimal("0")] * len(daily_closes)
             daily_rsi_14 = TechnicalIndicators.calculate_rsi(daily_closes, 14)
             daily_atr_14 = TechnicalIndicators.calculate_atr(daily_highs, daily_lows, daily_closes, 14)
+
+            daily_trend = self._ema_trend_21_50(
+                daily_ema_21[-1] if daily_ema_21 else Decimal("0"),
+                daily_ema_50[-1] if daily_ema_50 else Decimal("0"),
+            )
 
             long_term_context = {
                 "ema_21": daily_ema_21[-1] if daily_ema_21 else Decimal("0"),
@@ -114,54 +156,34 @@ class TrendAnalyzer:
                 "ema_200": daily_ema_200[-1] if daily_ema_200 else Decimal("0"),
                 "rsi_14": daily_rsi_14[-1] if daily_rsi_14 else Decimal("50"),
                 "atr_14": daily_atr_14[-1] if daily_atr_14 else Decimal("0"),
-                "trend": "bullish" if (daily_ema_21 and daily_ema_50 and daily_ema_21[-1] > daily_ema_50[-1]) else "bearish",
+                "trend": daily_trend,
                 "rsi_trend": [daily_rsi_14[i] if i < len(daily_rsi_14) else Decimal("50") for i in range(max(0, len(daily_rsi_14) - 3), len(daily_rsi_14))],
             }
 
-        # Determine overall trend strength and direction
-        trend_strength = 0
-        trend_directions = []
-
-        # 1H trend (weaker weight)
-        if ema_9_1h and ema_21_1h and ema_9_1h[-1] > ema_21_1h[-1]:
-            trend_directions.append("bullish")
-            trend_strength += 0.5
-        elif ema_9_1h and ema_21_1h and ema_9_1h[-1] < ema_21_1h[-1]:
-            trend_directions.append("bearish")
-            trend_strength += 0.5
-
-        # 4H trend (full weight)
-        if hourly_context.get("trend") == "bullish":
-            trend_directions.append("bullish")
-            trend_strength += 1
-        elif hourly_context.get("trend") == "bearish":
-            trend_directions.append("bearish")
-            trend_strength += 1
-
-        # 1D trend (full weight)
-        if long_term_context.get("trend") == "bullish":
-            trend_directions.append("bullish")
-            trend_strength += 1
-        elif long_term_context.get("trend") == "bearish":
-            trend_directions.append("bearish")
-            trend_strength += 1
-
-        bullish_count = trend_directions.count("bullish")
-        bearish_count = trend_directions.count("bearish")
+        # Determine overall trend from timeframe votes
+        votes = [intraday_trend, hourly_trend, daily_trend]
+        bullish_count = sum(1 for v in votes if v == "bullish")
+        bearish_count = sum(1 for v in votes if v == "bearish")
 
         if bullish_count > bearish_count:
             overall_direction = "bullish"
+            trend_strength = bullish_count
         elif bearish_count > bullish_count:
             overall_direction = "bearish"
+            trend_strength = bearish_count
         else:
             overall_direction = "neutral"
+            trend_strength = 0
 
-        trends_aligned = all(d == overall_direction for d in trend_directions) and len(trend_directions) > 0
+        trends_aligned = trend_strength >= 2
 
         # Current price and change
         change_24h = Decimal("0")
-        if len(daily_closes) >= 2 and daily_closes[-2] != 0:
-            change_24h = (daily_closes[-1] - daily_closes[-2]) / daily_closes[-2]
+        if daily_candles and len(daily_candles) >= 2:
+            prev_close = daily_candles[-2]["close"]
+            last_close = daily_candles[-1]["close"]
+            if prev_close != 0:
+                change_24h = (last_close - prev_close) / prev_close
 
         funding_data = self.data_fetcher.get_funding_for_coin(coin)
 
@@ -173,6 +195,7 @@ class TrendAnalyzer:
             "trend_direction": overall_direction,
             "trend_strength": int(trend_strength),
             "trends_aligned": trends_aligned,
+            "intraday_trend": intraday_trend,
             "volume_ratio": volume_ratio,
             "current_ema9": ema_9_1h[-1] if ema_9_1h else Decimal("0"),
             "current_ema21": ema_21_1h[-1] if ema_21_1h else Decimal("0"),
@@ -194,28 +217,27 @@ class TrendAnalyzer:
         """Check if trend is confirmed for 4H/1D strategy."""
         trend_data = self.analyze_multi_timeframe_trend(coin)
 
-        # Primary trend (4H): EMA9 > EMA21 > EMA50
         hourly_context = trend_data.get("hourly_context", {})
+        long_term = trend_data.get("long_term_context", {})
+
         ema9_4h = hourly_context.get("ema_9", Decimal("0"))
         ema21_4h = hourly_context.get("ema_21", Decimal("0"))
         ema50_4h = hourly_context.get("ema_50", Decimal("0"))
-        primary_trend_ok = ema9_4h > ema21_4h > ema50_4h
+        primary_direction = self._ema_trend_9_21_50(ema9_4h, ema21_4h, ema50_4h)
+        primary_trend_ok = primary_direction in ["bullish", "bearish"]
 
-        # Secondary trend (1D): Confirm direction
-        long_term = trend_data.get("long_term_context", {})
         daily_trend = long_term.get("trend", "neutral")
-        secondary_trend_ok = daily_trend in ["bullish", "bearish"]
+        secondary_trend_ok = daily_trend == primary_direction and daily_trend in ["bullish", "bearish"]
 
-        # Trend strength: At least 2/3 timeframes aligned
         trend_strength = trend_data.get("trend_strength", 0)
         strength_ok = trend_strength >= 2
 
-        # Volume confirmation
-        volume_ratio = trend_data.get("volume_ratio", 1)
+        volume_ratio = trend_data.get("volume_ratio", Decimal("1"))
         volume_ok = volume_ratio > volume_threshold
 
-        duration_ok = True
-
-        confirmed = primary_trend_ok and secondary_trend_ok and strength_ok and volume_ok and duration_ok
-        logger.debug(f"{coin} trend confirmed: primary={primary_trend_ok}, secondary={secondary_trend_ok}, strength={trend_strength}, volume={volume_ok}, duration={duration_ok}")
+        confirmed = primary_trend_ok and secondary_trend_ok and strength_ok and volume_ok
+        logger.debug(
+            f"{coin} trend confirmed: primary={primary_direction}, secondary={daily_trend}, "
+            f"strength={trend_strength}, volume_ratio={volume_ratio}, confirmed={confirmed}"
+        )
         return confirmed

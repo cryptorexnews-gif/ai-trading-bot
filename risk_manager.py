@@ -58,7 +58,7 @@ class RiskManager:
         Returns (is_safe, reason).
         """
         action = str(order.get("action", "")).strip().lower()
-        size = Decimal(str(order.get("size", 0)))
+        raw_size = Decimal(str(order.get("size", 0)))
         leverage = Decimal(str(order.get("leverage", 1)))
         confidence = Decimal(str(order.get("confidence", 0)))
 
@@ -68,56 +68,105 @@ class RiskManager:
         if action == TradingAction.HOLD.value:
             return True, "hold"
 
-        if action in [TradingAction.BUY.value, TradingAction.SELL.value, TradingAction.INCREASE_POSITION.value]:
+        open_actions = {
+            TradingAction.BUY.value,
+            TradingAction.SELL.value,
+            TradingAction.INCREASE_POSITION.value,
+        }
+        manage_actions = {
+            TradingAction.CLOSE_POSITION.value,
+            TradingAction.REDUCE_POSITION.value,
+            TradingAction.CHANGE_LEVERAGE.value,
+        }
+
+        if action in open_actions:
             if confidence < self.min_confidence_open:
                 return False, "confidence_open_too_low"
-        elif confidence < self.min_confidence_manage:
-            return False, "confidence_manage_too_low"
+        else:
+            if confidence < self.min_confidence_manage:
+                return False, "confidence_manage_too_low"
 
         if leverage < 1 or leverage > self.hard_max_leverage:
             return False, "leverage_out_of_bounds"
 
-        if size <= 0:
-            return False, "size_zero_or_negative"
+        existing_size = Decimal("0")
+        if coin in portfolio.positions:
+            existing_size = Decimal(str(portfolio.positions[coin].get("size", 0)))
 
-        min_size = self.min_size_by_coin.get(coin, Decimal("0.001"))
-        if size < min_size:
-            return False, f"size_below_minimum_{min_size}"
+        # Normalize size by action type
+        if action == TradingAction.CHANGE_LEVERAGE.value:
+            size = Decimal("0")
+        elif action == TradingAction.CLOSE_POSITION.value:
+            if existing_size == 0:
+                return False, "no_position_to_close"
+            requested = abs(raw_size)
+            size = abs(existing_size) if requested <= 0 else min(requested, abs(existing_size))
+            order["size"] = size
+        elif action == TradingAction.REDUCE_POSITION.value:
+            if existing_size == 0:
+                return False, "no_position_to_reduce"
+            if raw_size <= 0:
+                return False, "size_zero_or_negative"
+            size = min(abs(raw_size), abs(existing_size))
+            order["size"] = size
+        else:
+            # Open / increase actions
+            if raw_size <= 0:
+                return False, "size_zero_or_negative"
+            size = abs(raw_size)
 
-        if action in [TradingAction.BUY.value, TradingAction.SELL.value]:
-            if self._would_conflict_with_existing_position(coin, action, portfolio):
-                return False, f"conflict_{action}_while_position_exists"
+            min_size = self.min_size_by_coin.get(coin, Decimal("0.001"))
+            if size < min_size:
+                return False, f"size_below_minimum_{min_size}"
 
-        if self._would_exceed_margin_usage(coin, size, current_price, leverage, portfolio):
-            return False, "margin_usage_too_high"
+        if action in {TradingAction.BUY.value, TradingAction.SELL.value} and existing_size != 0:
+            if action == TradingAction.BUY.value and existing_size < 0:
+                return False, "conflict_buy_while_short"
+            if action == TradingAction.SELL.value and existing_size > 0:
+                return False, "conflict_sell_while_long"
+            if action == TradingAction.BUY.value and existing_size > 0:
+                return False, "conflict_buy_while_long"
+            if action == TradingAction.SELL.value and existing_size < 0:
+                return False, "conflict_sell_while_short"
 
-        if self._would_exceed_single_asset_limit(coin, size, current_price, leverage, portfolio):
-            return False, "single_asset_exposure_too_high"
+        # Open-only risk checks
+        if action in open_actions:
+            notional = size * current_price
+            margin_needed = notional / leverage if leverage > 0 else Decimal("0")
 
-        if peak_portfolio_value and portfolio.total_balance > 0:
-            drawdown = (peak_portfolio_value - portfolio.total_balance) / peak_portfolio_value
-            if drawdown >= self.max_drawdown_pct:
-                return False, "max_drawdown_breached"
-            if drawdown >= self.max_drawdown_pct * Decimal("0.66"):
-                logger.info(
-                    f"Drawdown warning: {float(drawdown) * 100:.1f}% "
-                    f"approaching limit of {float(self.max_drawdown_pct) * 100:.1f}%"
-                )
+            if margin_needed > portfolio.available_balance:
+                return False, "insufficient_available_balance"
 
-        if coin in last_trade_timestamps:
-            time_since_last = current_time - last_trade_timestamps[coin]
-            if time_since_last < self.trade_cooldown_sec:
-                return False, "cooldown_active"
+            if self._would_exceed_margin_usage(coin, size, current_price, leverage, portfolio):
+                return False, "margin_usage_too_high"
 
-        notional = size * current_price
-        if daily_notional_used + notional > self.daily_notional_limit_usd:
-            return False, "daily_notional_cap_exceeded"
+            if self._would_exceed_single_asset_limit(coin, size, current_price, leverage, portfolio):
+                return False, "single_asset_exposure_too_high"
 
-        if volatility_pct and volatility_pct > Decimal("0.02"):
-            adjusted_size = size * (Decimal("0.02") / volatility_pct)
-            if adjusted_size < min_size:
-                return False, "volatility_too_high_for_min_size"
-            order["size"] = adjusted_size
+            if peak_portfolio_value and portfolio.total_balance > 0:
+                drawdown = (peak_portfolio_value - portfolio.total_balance) / peak_portfolio_value
+                if drawdown >= self.max_drawdown_pct:
+                    return False, "max_drawdown_breached"
+                if drawdown >= self.max_drawdown_pct * Decimal("0.66"):
+                    logger.info(
+                        f"Drawdown warning: {float(drawdown) * 100:.1f}% "
+                        f"approaching limit of {float(self.max_drawdown_pct) * 100:.1f}%"
+                    )
+
+            if coin in last_trade_timestamps:
+                time_since_last = current_time - last_trade_timestamps[coin]
+                if time_since_last < self.trade_cooldown_sec:
+                    return False, "cooldown_active"
+
+            if daily_notional_used + notional > self.daily_notional_limit_usd:
+                return False, "daily_notional_cap_exceeded"
+
+            if volatility_pct and volatility_pct > Decimal("0.02"):
+                min_size = self.min_size_by_coin.get(coin, Decimal("0.001"))
+                adjusted_size = size * (Decimal("0.02") / volatility_pct)
+                if adjusted_size < min_size:
+                    return False, "volatility_too_high_for_min_size"
+                order["size"] = adjusted_size
 
         return True, "ok"
 
@@ -138,22 +187,6 @@ class RiskManager:
                 worst_coin = coin
 
         return worst_coin
-
-    def _would_conflict_with_existing_position(
-        self, coin: str, action: str, portfolio: PortfolioState
-    ) -> bool:
-        if coin not in portfolio.positions:
-            return False
-
-        existing_size = Decimal(str(portfolio.positions[coin]["size"]))
-        is_long = existing_size > 0
-
-        if action == TradingAction.BUY.value and is_long:
-            return True
-        if action == TradingAction.SELL.value and not is_long:
-            return True
-
-        return False
 
     def _would_exceed_margin_usage(
         self, coin: str, size: Decimal, price: Decimal, leverage: Decimal, portfolio: PortfolioState

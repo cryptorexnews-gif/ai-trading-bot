@@ -163,12 +163,24 @@ def config():
         return rate_limit_resp
 
     try:
+        trading_pairs_raw = os.getenv(
+            "TRADING_PAIRS",
+            "BTC,ETH,SOL,BNB,ADA,DOGE,XRP,AVAX,LINK,SUI,ARB,OP,NEAR,WIF,PEPE,INJ,TIA,SEI,RENDER,FET"
+        )
+        trading_pairs = [p.strip().upper() for p in trading_pairs_raw.split(",") if p.strip()]
+
         return jsonify({
             "execution_mode": os.getenv("EXECUTION_MODE", "paper"),
             "enable_mainnet_trading": os.getenv("ENABLE_MAINNET_TRADING", "false"),
             "llm_model": os.getenv("LLM_MODEL", "anthropic/claude-opus-4.6"),
             "max_leverage": os.getenv("HARD_MAX_LEVERAGE", "10"),
             "max_drawdown_pct": os.getenv("MAX_DRAWDOWN_PCT", "0.15"),
+            "default_sl_pct": os.getenv("TREND_SL_PCT", "0.04"),
+            "default_tp_pct": os.getenv("TREND_TP_PCT", "0.08"),
+            "enable_trailing_stop": os.getenv("ENABLE_TRAILING_STOP", "true"),
+            "break_even_activation_pct": os.getenv("TREND_BREAK_EVEN_ACTIVATION_PCT", "0.02"),
+            "trading_pairs": trading_pairs,
+            "trading_pairs_count": len(trading_pairs),
             "timestamp": time.time()
         })
     except Exception:
