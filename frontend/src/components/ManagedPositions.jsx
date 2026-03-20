@@ -1,5 +1,5 @@
 import React from 'react'
-import { Shield, Target, TrendingUp, TrendingDown, CheckCircle } from 'lucide-react'
+import { Shield, TrendingUp, TrendingDown, CheckCircle } from 'lucide-react'
 
 export default function ManagedPositions({ positions }) {
   if (!positions || positions.length === 0) {
@@ -40,6 +40,8 @@ export default function ManagedPositions({ positions }) {
               <div className="flex items-center justify-between mb-3">
                 <div className="flex items-center gap-2">
                   <span className="font-bold text-lg">{pos.coin}</span>
+                  <span className={`flex items-center gap-1 text-xs font-bold px-2 py-0.5 rounded ${
+                    isLong ? 'bg-green-900/50 text-green-400<dyad-write path="frontend/src/components/ManagedPositions.jsx" description="Completare l'aggiornamento del frontend per trend 4h/1d">
                   <span className={`flex items-center gap-1 text-xs font-bold px-2 py-0.5 rounded ${
                     isLong ? 'bg-green-900/50 text-green-400' : 'bg-red-900/50 text-red-400'
                   }`}>

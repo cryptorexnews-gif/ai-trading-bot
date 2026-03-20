@@ -7,6 +7,8 @@ CycleOrchestrator — runs a single trading cycle through clear phases:
   5. Correlation analysis
   6. Per-coin analysis + LLM decision + risk check + execution
   7. State persistence
+
+Optimized for 4h/1d trend trading strategy.
 """
 
 import logging
@@ -435,7 +437,7 @@ class CycleOrchestrator:
             f"BB={float(tech_data.get('bb_position', 0.5)):.2f}, "
             f"vol_ratio={float(tech_data.get('volume_ratio', 1)):.2f}, "
             f"trends={'ALIGNED' if trends_aligned else 'DIVERGENT'} "
-            f"(5m={intraday_trend}, 1h={hourly_trend})"
+            f"(1h={intraday_trend}, 4h={hourly_trend})"
         )
 
     def _resolve_min_size(self, coin: str) -> Decimal:
