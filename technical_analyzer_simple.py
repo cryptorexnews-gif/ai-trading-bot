@@ -18,7 +18,14 @@ class TechnicalAnalyzer:
 
     def get_technical_indicators(self, coin: str) -> dict:
         """Get complete technical indicators for a coin."""
-        return self.trend_analyzer.analyze_multi_timeframe_trend(coin)
+        data = self.trend_analyzer.analyze_multi_timeframe_trend(coin)
+
+        # Defensive validation: skip coin safely if payload is incomplete.
+        required_keys = ["current_price", "change_24h", "volume_24h", "funding_rate"]
+        if not data or not all(k in data for k in required_keys):
+            return None
+
+        return data
 
     def get_volatility_signal(self, coin: str) -> dict:
         """Get volatility signal for a coin."""
