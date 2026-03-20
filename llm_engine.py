@@ -78,54 +78,59 @@ class LLMEngine:
     def _format_technical_data(self, technical_data: Optional[Dict[str, Any]]) -> str:
         if not technical_data:
             return "  No technical data available."
-        key_indicators = [
-            "current_price", "change_24h", "volume_24h", "funding_rate",
-            "open_interest", "vwap", "volume_ratio", "bb_position",
-            "current_ema9", "current_ema20",
-            "current_macd", "current_macd_signal", "current_macd_histogram",
-            "current_rsi_7", "current_rsi_14",
-            "intraday_atr", "bollinger_upper", "bollinger_middle", "bollinger_lower"
-        ]
+        
         lines = []
-        for key in key_indicators:
-            value = technical_data.get(key)
-            if value is None:
-                continue
-            if isinstance(value, Decimal):
-                lines.append(f"  {key}: {float(value):.6f}")
-            else:
-                lines.append(f"  {key}: {value}")
-
-        lines.append(f"  intraday_trend (5m): {technical_data.get('intraday_trend', 'unknown')}")
-        lines.append(f"  trends_aligned (5m+1h+4h): {technical_data.get('trends_aligned', False)}")
-
+        
+        # Price and basic info
+        lines.append(f"  Current Price: ${float(technical_data.get('current_price', 0)):.2f}")
+        lines.append(f"  24h Change: {float(technical_data.get('change_24h', 0)) * 100:+.2f}%")
+        lines.append(f"  Volume 24h: ${float(technical_data.get('volume_24h', 0)):,.0f}")
+        lines.append(f"  Funding Rate: {float(technical_data.get('funding_rate', 0)) * 100:+.4f}%")
+        
+        # Trend information
+        lines.append(f"  Trend Direction: {technical_data.get('trend_direction', 'neutral').upper()}")
+        lines.append(f"  Trend Strength: {technical_data.get('trend_strength', 0)}/3 timeframes aligned")
+        lines.append(f"  Trends Aligned: {'YES ✅' if technical_data.get('trends_aligned', False) else 'NO ⚠️'}")
+        
+        # 1h timeframe (entry timing)
+        lines.append("\n  ⏰ 1H TIMEFRAME (Entry Timing):")
+        lines.append(f"    EMA9: ${float(technical_data.get('current_ema9', 0)):.2f}")
+        lines.append(f"    EMA21: ${float(technical_data.get('current_ema21', 0)):.2f}")
+        lines.append(f"    RSI14: {float(technical_data.get('current_rsi_14', 50)):.1f}")
+        lines.append(f"    MACD Hist: {float(technical_data.get('current_macd_histogram', 0)):.4f}")
+        lines.append(f"    ATR14: ${float(technical_data.get('intraday_atr', 0)):.2f}")
+        lines.append(f"    BB Position: {float(technical_data.get('bb_position', 0.5)) * 100:.1f}%")
+        lines.append(f"    VWAP: ${float(technical_data.get('vwap', 0)):.2f}")
+        lines.append(f"    Volume Ratio: {float(technical_data.get('volume_ratio', 1)):.2f}x")
+        
+        # 4h timeframe (primary trend)
         hourly = technical_data.get("hourly_context", {})
         if hourly:
-            lines.append("  hourly_context (1h):")
-            for sub_key in ["ema_9", "ema_20", "rsi_14", "macd", "macd_signal", "atr_14", "trend"]:
-                sub_value = hourly.get(sub_key)
-                if sub_value is not None:
-                    val_str = f"{float(sub_value):.6f}" if isinstance(sub_value, Decimal) else str(sub_value)
-                    lines.append(f"    {sub_key}: {val_str}")
-            rsi_trend = hourly.get("rsi_trend", [])
-            if rsi_trend:
-                formatted = [f"{float(v):.2f}" if isinstance(v, Decimal) else str(v) for v in rsi_trend]
-                lines.append(f"    rsi_trend: [{', '.join(formatted)}]")
-
+            lines.append("\n  📊 4H TIMEFRAME (Primary Trend):")
+            lines.append(f"    Trend: {hourly.get('trend', 'unknown').upper()}")
+            lines.append(f"    EMA9: ${float(hourly.get('ema_9', 0)):.2f}")
+            lines.append(f"    EMA21: ${float(hourly.get('ema_21', 0)):.2f}")
+            lines.append(f"    EMA50: ${float(hourly.get('ema_50', 0)):.2f}")
+            lines.append(f"    RSI14: {float(hourly.get('rsi_14', 50)):.1f}")
+            lines.append(f"    MACD: {float(hourly.get('macd_line', 0)):.4f}")
+            lines.append(f"    ATR14: ${float(hourly.get('atr_14', 0)):.2f}")
+        
+        # 1d timeframe (main trend)
         lt = technical_data.get("long_term_context", {})
         if lt:
-            lines.append(f"  long_term_trend (4h): {lt.get('trend', 'unknown')}")
-            for sub_key in ["ema_20", "ema_50", "atr_14", "current_volume", "avg_volume"]:
-                sub_value = lt.get(sub_key)
-                if sub_value is not None:
-                    val_str = f"{float(sub_value):.6f}" if isinstance(sub_value, Decimal) else str(sub_value)
-                    lines.append(f"    {sub_key}: {val_str}")
+            lines.append("\n  📈 1D TIMEFRAME (Main Trend):")
+            lines.append(f"    Trend: {lt.get('trend', 'unknown').upper()}")
+            lines.append(f"    EMA21: ${float(lt.get('ema_21', 0)):.2f}")
+            lines.append(f"    EMA50: ${float(lt.get('ema_50', 0)):.2f}")
+            lines.append(f"    EMA200: ${float(lt.get('ema_200', 0)):.2f}")
+            lines.append(f"    ATR14: ${float(lt.get('atr_14', 0)):.2f}")
+            
             rsi_list = lt.get("rsi_14", [])
-            if rsi_list:
+            if rsi_list and len(rsi_list = lt.get("rsi_14", [])
+            if rsi_list and len(rsi_list) >= 3:
                 last_3 = rsi_list[-3:]
-                formatted = [f"{float(v):.2f}" if isinstance(v, Decimal) else str(v) for v in last_3]
-                lines.append(f"    rsi_14_trend: [{', '.join(formatted)}]")
-
+                lines.append(f"    RSI14 Trend: {', '.join([f'{float(v):.1f}' for v in last_3])}")
+        
         return "\n".join(lines)
 
     def _format_recent_trades(self, recent_trades: List[Dict[str, Any]]) -> str:
@@ -184,7 +189,7 @@ FUNDING DATA (from Hyperliquid):
 RISK CONTEXT:
   Peak Portfolio Value: ${peak_portfolio_value}
   Current Drawdown: {float(current_dd) * 100:.2f}%
-  Max Allowed Drawdown: 12%
+  Max Allowed Drawdown: 15%
   Consecutive Losing Trades: {consecutive_losses}"""
 
         total_exposure = portfolio_state.get_total_exposure()
@@ -196,13 +201,19 @@ RISK CONTEXT:
 RECENT TRADE HISTORY (last 5):
 {self._format_recent_trades(recent_trades)}"""
 
-        trends_aligned = technical_data.get("trends_aligned", False) if technical_data else False
-        if trends_aligned:
-            alignment_note = "\nALL TIMEFRAMES ALIGNED — high confidence entries appropriate."
+        # Trend analysis
+        trend_strength = technical_data.get("trend_strength", 0) if technical_data else 0
+        trend_direction = technical_data.get("trend_direction", "neutral") if technical_data else "neutral"
+        
+        trend_analysis = ""
+        if trend_strength == 3:
+            trend_analysis = "✅ ALL TIMEFRAMES ALIGNED (1H+4H+1D) — High conviction trend trade opportunity."
+        elif trend_strength == 2:
+            trend_analysis = "⚠️ TWO TIMEFRAMES ALIGNED — Moderate conviction, wait for better alignment or use smaller size."
         else:
-            alignment_note = "\nTIMEFRAMES DIVERGENT — prefer smaller sizes or hold if no strong edge."
+            trend_analysis = "🚫 NO TIMEFRAME ALIGNMENT — Avoid new positions, only manage existing ones."
 
-        prompt = f"""You are an elite cryptocurrency trader on Hyperliquid exchange, optimized for CONSISTENT PROFITABILITY with asymmetric risk/reward.
+        prompt = f"""You are an elite cryptocurrency trend trader on Hyperliquid exchange, specialized in 4HOUR and 1DAY trend following.
 ALL data below comes directly from the Hyperliquid API. Make your decision based ONLY on this data.
 
 {all_mids_section}
@@ -214,9 +225,10 @@ TARGET ASSET: {market_data.coin}
   Funding Rate: {float(market_data.funding_rate):.6f}%
 {funding_section}
 
-TECHNICAL INDICATORS (from Hyperliquid candles — multi-timeframe):
+TECHNICAL INDICATORS (Multi-timeframe analysis for trend trading):
 {self._format_technical_data(technical_data)}
-{alignment_note}
+
+{trend_analysis}
 
 PORTFOLIO STATE:
   Total Balance: ${portfolio_state.total_balance}
@@ -231,60 +243,64 @@ CURRENT POSITIONS:
 {self._format_positions(portfolio_state.positions)}
 {recent_trades_section}
 
-=== STRATEGY RULES (FOLLOW STRICTLY) ===
+=== TREND TRADING STRATEGY RULES (4H/1D FOCUS) ===
 
-ENTRY CRITERIA — Open new positions only when:
-1. Multi-timeframe confluence: At least 2 of 3 timeframes (5m, 1h, 4h) agree on direction
-2. RSI confirmation: RSI-14 between 30-45 for longs (oversold bounce), 55-70 for shorts (overbought rejection)
-3. Volume confirmation: volume_ratio > 1.2 (above average volume confirms move)
-4. MACD alignment: histogram direction matches trade direction
-5. Bollinger position: bb_position < 0.3 for longs (near lower band), > 0.7 for shorts (near upper band)
-6. VWAP: Price below VWAP for longs (discount), above VWAP for shorts (premium)
+TREND IDENTIFICATION CRITERIA — Enter ONLY when:
+1. PRIMARY TREND (4H): EMA9 > EMA21 > EMA50 (uptrend) or EMA9 < EMA21 < EMA50 (downtrend)
+2. MAIN TREND (1D): Confirms primary trend direction
+3. TREND STRENGTH: At least 2/3 timeframes aligned (preferably 3/3)
+4. VOLUME CONFIRMATION: volume_ratio > 1.3 on breakout/breakdown
+5. RSI POSITION: RSI14 between 40-60 for continuation, <30/>70 for reversal setups
+6. NO MAJOR DIVERGENCES: Price making higher highs with indicators confirming
 
-POSITION MANAGEMENT:
-- Minimum risk/reward ratio 1:3 (SL 2%, TP 6%) — bot manages SL/TP automatically
-- Break-even stop activates at +1.5% profit (SL moves to entry + 0.1%)
-- If a position is profitable > 3%, consider letting trailing stop manage
-- If a position is losing > 1.5%, consider closing early if technicals turned against
-- Close positions when original thesis is invalidated (trend reversal on 1h)
-- Reduce position if margin usage > 60%
+ENTRY TIMING (1H timeframe):
+- Wait for pullback to key levels: EMA21, VWAP, or previous support/resistance
+- RSI14 between 30-40 for longs, 60-70 for shorts (pullback zones)
+- MACD histogram turning positive (longs) or negative (shorts)
+- Price above VWAP for longs, below VWAP for shorts
+- Bollinger Band position <30% for longs, >70% for shorts (reversion to mean)
 
-SIZING RULES:
-- Minimum sizes by coin:
-  BTC: 0.001, ETH: 0.01, SOL: 0.1, BNB: 0.01, XRP: 1, ADA: 10, DOGE: 10
-  AVAX: 0.1, LINK: 0.1, NEAR: 1, SUI: 1, ARB: 1, OP: 1, SEI: 1
-  TIA: 0.1, INJ: 0.01, WIF: 1, PEPE: 100000, RENDER: 0.1, FET: 1
-- Use leverage 3-7x for high confidence trades (all timeframes aligned)
-- Use leverage 2-4x for medium confidence trades
-- Never exceed 10x leverage
-- Max 40% of balance on single asset
-- For high-volatility coins (WIF, PEPE, DOGE, SUI), prefer lower leverage (2-4x)
-- For blue chips (BTC, ETH), higher leverage is acceptable (up to 7x)
+POSITION MANAGEMENT FOR TREND TRADING:
+- Initial Stop Loss: 5% from entry (wider for trend trades)
+- Take Profit: 10% minimum (1:2 risk/reward)
+- Break-even: Activate at +3% profit, move SL to entry +0.2%
+- Trailing Stop: Activate at +5% profit, 3% callback
+- Let winners run: If trend remains strong, consider moving TP to 15-20%
+- Exit if: 1D trend breaks (EMA21 crosses EMA50), or volume dries up on moves
 
-CRITICAL RULES:
-- DO NOT open BUY if already SHORT on same asset (close first)
-- DO NOT open SELL if already LONG on same asset (close first)
-- If drawdown > 8%, ONLY allow close_position or reduce_position or hold
-- If consecutive losses > 3, you MUST respond with "hold" unless closing a losing position
-- If funding rate is extreme (> 0.01% or < -0.01%), factor it into directional bias
-- Negative funding = shorts pay longs = bullish pressure
-- Positive funding = longs pay shorts = bearish pressure
-- If no clear edge exists, ALWAYS hold — capital preservation is priority #1
-- Be extra cautious with meme coins (WIF, PEPE, DOGE) — require higher confidence (0.80+)
+SIZING & RISK FOR TREND TRADES:
+- Maximum 2 open trend positions simultaneously
+- Position size: 2-4% of portfolio per trend trade
+- Leverage: 3-5x maximum (conservative for overnight holds)
+- Never exceed 40% portfolio exposure across all positions
+- Blue chips (BTC, ETH): Up to 5x leverage acceptable
+- Altcoins (SOL, AVAX, etc.): Max 3x leverage
+- Meme coins (WIF, PEPE): Avoid or max 2x leverage with tight SL
 
-CONFIDENCE SCORING:
-- 0.85-1.0: All timeframes aligned + strong volume + clear RSI signal
-- 0.72-0.84: 2/3 timeframes aligned + decent volume
-- 0.50-0.71: Mixed signals — only for managing existing positions
-- Below 0.50: Hold
+CRITICAL RULES FOR TREND TRADING:
+- DO NOT counter-trend trade (no buying in downtrend, no selling in uptrend)
+- If drawdown > 10%, reduce position sizes by 50%
+- If consecutive losses > 2, switch to 1% position sizes until recovery
+- Monitor funding rates: Extreme positive (>0.01%) = caution on longs
+- Monitor funding rates: Extreme negative (<-0.01%) = caution on shorts
+- Weekend rule: Reduce leverage by 30% before weekends (higher volatility)
+- News events: Avoid opening new positions 1 hour before/after major announcements
+- If no clear trend exists, ALWAYS hold — capital preservation is priority #1
+
+CONFIDENCE SCORING FOR TREND TRADES:
+- 0.90-1.0: All 3 timeframes aligned + strong volume + clean pullback
+- 0.80-0.89: 2/3 timeframes aligned + decent volume + good entry timing
+- 0.70-0.79: Trend present but entry timing suboptimal
+- 0.60-0.69: Weak trend signal — only for managing existing positions
+- Below 0.60: No trade — wait for better setup
 
 Respond with ONLY this JSON (no markdown, no extra text):
 {{
   "action": "buy|sell|hold|close_position|increase_position|reduce_position|change_leverage",
   "size": 0.001,
-  "leverage": 5,
-  "confidence": 0.75,
-  "reasoning": "Concise analysis: [timeframe alignment] + [key indicator] + [risk/reward assessment]"
+  "leverage": 4,
+  "confidence": 0.85,
+  "reasoning": "Trend analysis: [timeframe alignment] + [entry timing] + [risk assessment]"
 }}"""
         return prompt.strip()
 

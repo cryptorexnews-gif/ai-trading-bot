@@ -107,6 +107,13 @@ class BotConfig:
     min_size_by_coin: Dict[str, Decimal] = field(default_factory=dict)
     default_min_size: Decimal = Decimal("1")
 
+    # ─── Trend 4h/1d Specific Parameters ──────────────────────────────────
+    primary_timeframe: str = "4h"
+    secondary_timeframe: str = "1d"
+    entry_timeframe: str = "1h"
+    min_trend_duration_hours: int = 24
+    volume_confirmation_threshold: Decimal = Decimal("1.5")
+
     @classmethod
     def from_env(cls) -> "BotConfig":
         """Create BotConfig from environment variables."""
@@ -166,6 +173,12 @@ class BotConfig:
             log_level=_env("LOG_LEVEL", "INFO"),
             log_file=_env("LOG_FILE", "logs/hyperliquid_bot.log"),
             min_size_by_coin=min_sizes,
+            # Trend 4h/1d specific parameters
+            primary_timeframe=_env("PRIMARY_TIMEFRAME", "4h"),
+            secondary_timeframe=_env("SECONDARY_TIMEFRAME", "1d"),
+            entry_timeframe=_env("ENTRY_TIMEFRAME", "1h"),
+            min_trend_duration_hours=_env_int("MIN_TREND_DURATION_HOURS", 24),
+            volume_confirmation_threshold=_env_decimal("VOLUME_CONFIRMATION_THRESHOLD", "1.5"),
         )
 
     def validate(self) -> List[str]:
@@ -209,6 +222,12 @@ class BotConfig:
             warnings.append("OPENROUTER_API_KEY not set — LLM disabled, using fallback only")
         if self.daily_notional_limit_usd < Decimal("10"):
             warnings.append(f"DAILY_NOTIONAL_LIMIT_USD={self.daily_notional_limit_usd} is very low")
+
+        # Trend-specific validations
+        if self.min_trend_duration_hours < 6:
+            warnings.append(f"MIN_TREND_DURATION_HOURS={self.min_trend_duration_hours} is very low for 4h/1d strategy")
+        if self.volume_confirmation_threshold < Decimal("1.0"):
+            warnings.append(f"VOLUME_CONFIRMATION_THRESHOLD={self.volume_confirmation_threshold} < 1.0 may generate false signals")
 
         return warnings
 

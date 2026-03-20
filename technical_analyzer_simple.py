@@ -18,7 +18,7 @@ class HyperliquidDataFetcher:
     Fetches ALL market data exclusively from Hyperliquid API.
     No external data sources (Binance, CoinGecko, etc.) are used.
     Uses Decimal for all financial calculations.
-    Supports multi-timeframe analysis (5m, 1h, 4h).
+    Supports multi-timeframe analysis (5m, 1h, 4h, 1d).
     """
 
     def __init__(self, base_url: str = HYPERLIQUID_BASE_URL):
@@ -263,64 +263,73 @@ class HyperliquidDataFetcher:
             return {"volatility_level": "low", "suggested_cycle_sec": 120, "atr_pct": float(atr_pct)}
 
     def get_technical_indicators(self, coin: str) -> Optional[Dict[str, Any]]:
-        """Get complete technical indicators for a coin. Multi-timeframe: 5m, 1h, 4h."""
-        intraday_candles = self.get_candle_snapshot(coin, "5m", 100)
+        """Get complete technical indicators for a coin. Multi-timeframe: 5m, 1h, 4h, 1d."""
+        # Timeframes per trend 4h/1d strategy
+        intraday_candles = self.get_candle_snapshot(coin, "1h", 100)  # 1h per entry timing
+        hourly_candles = self.get_candle_snapshot(coin, "4h", 50)      # 4h per trend primario
+        daily_candles = self.get_candle_snapshot(coin, "1d", 30)       # 1d per trend principale
+        
         if not intraday_candles or len(intraday_candles) < 10:
             logger.warning(f"Insufficient intraday candle data for {coin}")
             return None
 
-        hourly_candles = self.get_candle_snapshot(coin, "1h", 50)
-        daily_candles = self.get_candle_snapshot(coin, "4h", 50)
         if not daily_candles or len(daily_candles) < 5:
-            logger.warning(f"Insufficient 4h candle data for {coin}")
+            logger.warning(f"Insufficient daily candle data for {coin}")
             return None
 
-        # Extract price series — intraday
+        # Extract price series — 1h per entry
         intraday_closes = [c["close"] for c in intraday_candles]
         intraday_highs = [c["high"] for c in intraday_candles]
         intraday_lows = [c["low"] for c in intraday_candles]
         intraday_volumes = [c["volume"] for c in intraday_candles]
 
-        # Extract price series — 4h
+        # Extract price series — 4h per trend primario
+        hourly_closes = [c["close"] for c in hourly_candles] if hourly_candles else []
+        hourly_highs = [c["high"] for c in hourly_candles] if hourly_candles else []
+        hourly_lows = [c["low"] for c in hourly_candles] if hourly_candles else []
+
+        # Extract price series — 1d per trend principale
         daily_closes = [c["close"] for c in daily_candles]
         daily_highs = [c["high"] for c in daily_candles]
         daily_lows = [c["low"] for c in daily_candles]
 
-        # Intraday indicators
-        ema_20 = self.calculate_ema(intraday_closes, 20)
-        ema_9 = self.calculate_ema(intraday_closes, 9)
-        macd_line, signal_line, histogram = self.calculate_macd(intraday_closes)
-        rsi_7 = self.calculate_rsi(intraday_closes, 7)
-        rsi_14 = self.calculate_rsi(intraday_closes, 14)
-        intraday_atr = self._calculate_atr(intraday_highs, intraday_lows, intraday_closes, 14)
-        bollinger = self._calculate_bollinger_bands(intraday_closes, 20)
-        vwap = self._calculate_vwap(intraday_highs, intraday_lows, intraday_closes, intraday_volumes)
+        # 1h indicators (entry timing)
+        ema_9_1h = self.calculate_ema(intraday_closes, 9)
+        ema_21_1h = self.calculate_ema(intraday_closes, 21)
+        ema_50_1h = self.calculate_ema(intraday_closes, min(50, len(intraday_closes)))
+        rsi_14_1h = self.calculate_rsi(intraday_closes, 14)
+        macd_line_1h, signal_line_1h, histogram_1h = self.calculate_macd(intraday_closes)
+        atr_14_1h = self._calculate_atr(intraday_highs, intraday_lows, intraday_closes, 14)
+        bollinger_1h = self._calculate_bollinger_bands(intraday_closes, 20, Decimal("2"))
+        vwap_1h = self._calculate_vwap(intraday_highs, intraday_lows, intraday_closes, intraday_volumes)
 
-        # Hourly context
-        hourly_context = {}
-        if hourly_candles and len(hourly_candles) >= 10:
-            hc = [c["close"] for c in hourly_candles]
-            hh = [c["high"] for c in hourly_candles]
-            hl = [c["low"] for c in hourly_candles]
-            h_ema9 = self.calculate_ema(hc, 9)
-            h_ema20 = self.calculate_ema(hc, 20)
-            h_rsi14 = self.calculate_rsi(hc, 14)
-            h_macd, h_signal, h_hist = self.calculate_macd(hc)
-            h_atr = self._calculate_atr(hh, hl, hc, 14)
-            hourly_context = {
-                "ema_9": h_ema9[-1] if h_ema9 else Decimal("0"),
-                "ema_20": h_ema20[-1] if h_ema20 else Decimal("0"),
-                "rsi_14": h_rsi14[-1] if h_rsi14 else Decimal("50"),
-                "macd": h_macd[-1] if h_macd else Decimal("0"),
-                "macd_signal": h_signal[-1] if h_signal else Decimal("0"),
-                "atr_14": h_atr[-1] if h_atr else Decimal("0"),
-                "trend": "bullish" if (h_ema9 and h_ema20 and h_ema9[-1] > h_ema20[-1]) else "bearish",
-                "rsi_trend": [h_rsi14[i] if i < len(h_rsi14) else Decimal("50") for i in range(max(0, len(h_rsi14)-3), len(h_rsi14))],
+        # 4h indicators (primary trend)
+        hourly_indicators = {}
+        if hourly_candles and len(hourly_candles) >= 20:
+            ema_9_4h = self.calculate_ema(hourly_closes, 9)
+            ema_21_4h = self.calculate_ema(hourly_closes, 21)
+            ema_50_4h = self.calculate_ema(hourly_closes, min(50, len(hourly_closes)))
+            rsi_14_4h = self.calculate_rsi(hourly_closes, 14)
+            macd_line_4h, signal_line_4h, histogram_4h = self.calculate_macd(hourly_closes)
+            atr_14_4h = self._calculate_atr(hourly_highs, hourly_lows, hourly_closes, 14)
+            
+            hourly_indicators = {
+                "ema_9": ema_9_4h[-1] if ema_9_4h else Decimal("0"),
+                "ema_21": ema_21_4h[-1] if ema_21_4h else Decimal("0"),
+                "ema_50": ema_50_4h[-1] if ema_50_4h else Decimal("0"),
+                "rsi_14": rsi_14_4h[-1] if rsi_14_4h else Decimal("50"),
+                "macd_line": macd_line_4h[-1] if macd_line_4h else Decimal("0"),
+                "macd_signal": signal_line_4h[-1] if signal_line_4h else Decimal("0"),
+                "macd_histogram": histogram_4h[-1] if histogram_4h else Decimal("0"),
+                "atr_14": atr_14_4h[-1] if atr_14_4h else Decimal("0"),
+                "trend": "bullish" if (ema_9_4h and ema_21_4h and ema_9_4h[-1] > ema_21_4h[-1]) else "bearish",
+                "rsi_trend": [rsi_14_4h[i] if i < len(rsi_14_4h) else Decimal("50") for i in range(max(0, len(rsi_14_4h)-5), len(rsi_14_4h))],
             }
 
-        # Long-term (4h) indicators
-        daily_ema_20 = self.calculate_ema(daily_closes, 20)
+        # 1d indicators (main trend)
+        daily_ema_21 = self.calculate_ema(daily_closes, 21)
         daily_ema_50 = self.calculate_ema(daily_closes, min(50, len(daily_closes)))
+        daily_ema_200 = self.calculate_ema(daily_closes, min(200, len(daily_closes)))
         daily_macd, daily_signal, daily_hist = self.calculate_macd(daily_closes)
         daily_rsi_14 = self.calculate_rsi(daily_closes, 14)
         daily_atr_14 = self._calculate_atr(daily_highs, daily_lows, daily_closes, 14)
@@ -331,7 +340,7 @@ class HyperliquidDataFetcher:
         avg_volume = sum(intraday_volumes[-20:]) / Decimal(str(min(20, len(intraday_volumes)))) if intraday_volumes else Decimal("0")
         volume_ratio = (current_volume / avg_volume) if avg_volume > 0 else Decimal("1")
 
-        # 24h change
+        # 24h change from daily candles
         if len(daily_closes) >= 2 and daily_closes[-2] != 0:
             change_24h = (daily_closes[-1] - daily_closes[-2]) / daily_closes[-2]
         elif len(intraday_closes) >= 2 and intraday_closes[0] != 0:
@@ -342,43 +351,75 @@ class HyperliquidDataFetcher:
         volume_24h = sum(intraday_volumes) * current_price if intraday_volumes else Decimal("0")
         funding_data = self.get_funding_for_coin(coin)
 
-        # Bollinger position
-        bb_upper = bollinger["upper"][-1] if bollinger["upper"] else Decimal("0")
-        bb_lower = bollinger["lower"][-1] if bollinger["lower"] else Decimal("0")
+        # Bollinger position (1h)
+        bb_upper = bollinger_1h["upper"][-1] if bollinger_1h["upper"] else Decimal("0")
+        bb_lower = bollinger_1h["lower"][-1] if bollinger_1h["lower"] else Decimal("0")
         bb_width = bb_upper - bb_lower
         bb_position = ((current_price - bb_lower) / bb_width) if bb_width > 0 else Decimal("0.5")
 
         # Multi-timeframe trend alignment
-        intraday_trend = "bullish" if (ema_9 and ema_20 and ema_9[-1] > ema_20[-1]) else "bearish"
-        daily_trend = "bullish" if (daily_ema_20 and daily_ema_50 and daily_ema_20[-1] > daily_ema_50[-1]) else "bearish"
-        hourly_trend = hourly_context.get("trend", "unknown")
-        trends_aligned = (intraday_trend == hourly_trend == daily_trend)
+        intraday_trend = "bullish" if (ema_9_1h and ema_21_1h and ema_9_1h[-1] > ema_21_1h[-1]) else "bearish"
+        hourly_trend = hourly_indicators.get("trend", "unknown")
+        daily_trend = "bullish" if (daily_ema_21 and daily_ema_50 and daily_ema_21[-1] > daily_ema_50[-1]) else "bearish"
+        
+        # Trend strength indicators
+        trend_strength = 0
+        if intraday_trend == hourly_trend == daily_trend:
+            trend_strength = 3  # All timeframes aligned
+        elif (intraday_trend == hourly_trend) or (hourly_trend == daily_trend):
+            trend_strength = 2  # Two timeframes aligned
+        else:
+            trend_strength = 1  # No alignment
+
+        # ADX-like trend strength (simplified)
+        trend_direction = ""
+        if daily_ema_21 and daily_ema_50:
+            if daily_ema_21[-1] > daily_ema_50[-1]:
+                trend_direction = "uptrend"
+            else:
+                trend_direction = "downtrend"
+
+        funding_data = self.get_funding_for_coin(coin)
 
         return {
-            "current_price": current_price, "change_24h": change_24h,
-            "volume_24h": volume_24h, "funding_rate": self._d(funding_data.get("funding_rate", "0")),
+            "current_price": current_price,
+            "change_24h": change_24h,
+            "volume_24h": volume_24h,
+            "funding_rate": self._d(funding_data.get("funding_rate", "0")),
             "open_interest": funding_data.get("open_interest", "0"),
-            "vwap": vwap, "volume_ratio": volume_ratio, "bb_position": bb_position,
-            "current_ema9": ema_9[-1] if ema_9 else Decimal("0"),
-            "current_ema20": ema_20[-1] if ema_20 else Decimal("0"),
-            "current_macd": macd_line[-1] if macd_line else Decimal("0"),
-            "current_macd_signal": signal_line[-1] if signal_line else Decimal("0"),
-            "current_macd_histogram": histogram[-1] if histogram else Decimal("0"),
-            "current_rsi_7": rsi_7[-1] if rsi_7 else Decimal("50"),
-            "current_rsi_14": rsi_14[-1] if rsi_14 else Decimal("50"),
-            "intraday_atr": intraday_atr[-1] if intraday_atr else Decimal("0"),
+            "vwap": vwap_1h,
+            "volume_ratio": volume_ratio,
+            "bb_position": bb_position,
+            
+            # 1h indicators
+            "current_ema9": ema_9_1h[-1] if ema_9_1h else Decimal("0"),
+            "current_ema21": ema_21_1h[-1] if ema_21_1h else Decimal("0"),
+            "current_ema50": ema_50_1h[-1] if ema_50_1h else Decimal("0"),
+            "current_macd": macd_line_1h[-1] if macd_line_1h[-1] if macd_line_1h else Decimal("0"),
+            "current_macd_signal": signal_line_1h[-1] if signal_line_1h else Decimal("0"),
+            "current_macd_histogram": histogram_1h[-1] if histogram_1h else Decimal("0"),
+            "current_rsi_14": rsi_14_1h[-1] if rsi_14_1h else Decimal("50"),
+            "intraday_atr": atr_14_1h[-1] if atr_14_1h else Decimal("0"),
             "bollinger_upper": bb_upper,
-            "bollinger_middle": bollinger["middle"][-1] if bollinger["middle"] else Decimal("0"),
+            "bollinger_middle": bollinger_1h["middle"][-1] if bollinger_1h["middle"] else Decimal("0"),
             "bollinger_lower": bb_lower,
+            "bb_position": bb_position,
+            "vwap": vwap_1h,
+            "volume_ratio": volume_ratio,
             "intraday_trend": intraday_trend,
-            "hourly_context": hourly_context,
-            "trends_aligned": trends_aligned,
+            "hourly_context": hourly_indicators,
+            "trend_strength": trend_strength,
+            "trend_direction": trend_direction,
+            "trends_aligned": trend_strength == 3,
             "long_term_context": {
-                "ema_20": daily_ema_20[-1] if daily_ema_20 else Decimal("0"),
+                "ema_21": daily_ema_21[-1] if daily_ema_21 else Decimal("0"),
                 "ema_50": daily_ema_50[-1] if daily_ema_50 else Decimal("0"),
-                "macd": daily_macd[-5:], "rsi_14": daily_rsi_14[-5:],
+                "ema_200": daily_ema_200[-1] if daily_ema_200 else Decimal("0"),
+                "macd": daily_macd[-5:] if len(daily_macd) >= 5 else [],
+                "rsi_14": daily_rsi_14[-5:] if len(daily_rsi_14) >= 5 else [],
                 "atr_14": daily_atr_14[-1] if daily_atr_14 else Decimal("0"),
-                "current_volume": current_volume, "avg_volume": avg_volume,
+                "current_volume": current_volume,
+                "avg_volume": avg_volume,
                 "trend": daily_trend,
             }
         }
