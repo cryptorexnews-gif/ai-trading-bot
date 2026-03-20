@@ -113,6 +113,15 @@ class BotConfig:
     entry_timeframe: str = "1h"
     min_trend_duration_hours: int = 24
     volume_confirmation_threshold: Decimal = Decimal("1.5")
+    trend_confirmation_required: bool = True
+    max_trend_positions: int = 2
+    trend_position_size_pct: Decimal = Decimal("0.03")
+    trend_leverage_multiplier: Decimal = Decimal("1.0")
+    trend_sl_pct: Decimal = Decimal("0.05")
+    trend_tp_pct: Decimal = Decimal("0.10")
+    trend_break_even_activation_pct: Decimal = Decimal("0.03")
+    trend_trailing_activation_pct: Decimal = Decimal("0.05")
+    trend_trailing_callback: Decimal = Decimal("0.03")
 
     @classmethod
     def from_env(cls) -> "BotConfig":
@@ -179,6 +188,15 @@ class BotConfig:
             entry_timeframe=_env("ENTRY_TIMEFRAME", "1h"),
             min_trend_duration_hours=_env_int("MIN_TREND_DURATION_HOURS", 24),
             volume_confirmation_threshold=_env_decimal("VOLUME_CONFIRMATION_THRESHOLD", "1.5"),
+            trend_confirmation_required=_env_bool("TREND_CONFIRMATION_REQUIRED", True),
+            max_trend_positions=_env_int("MAX_TREND_POSITIONS", 2),
+            trend_position_size_pct=_env_decimal("TREND_POSITION_SIZE_PCT", "0.03"),
+            trend_leverage_multiplier=_env_decimal("TREND_LEVERAGE_MULTIPLIER", "1.0"),
+            trend_sl_pct=_env_decimal("TREND_SL_PCT", "0.05"),
+            trend_tp_pct=_env_decimal("TREND_TP_PCT", "0.10"),
+            trend_break_even_activation_pct=_env_decimal("TREND_BREAK_EVEN_ACTIVATION_PCT", "0.03"),
+            trend_trailing_activation_pct=_env_decimal("TREND_TRAILING_ACTIVATION_PCT", "0.05"),
+            trend_trailing_callback=_env_decimal("TREND_TRAILING_CALLBACK", "0.03"),
         )
 
     def validate(self) -> List[str]:
@@ -228,6 +246,12 @@ class BotConfig:
             warnings.append(f"MIN_TREND_DURATION_HOURS={self.min_trend_duration_hours} is very low for 4h/1d strategy")
         if self.volume_confirmation_threshold < Decimal("1.0"):
             warnings.append(f"VOLUME_CONFIRMATION_THRESHOLD={self.volume_confirmation_threshold} < 1.0 may generate false signals")
+        if self.trend_position_size_pct > Decimal("0.10"):
+            warnings.append(f"TREND_POSITION_SIZE_PCT={self.trend_position_size_pct} is high (>10%) for trend trading")
+        if self.trend_sl_pct < Decimal("0.02"):
+            warnings.append(f"TREND_SL_PCT={self.trend_sl_pct} is very tight for trend trading")
+        if self.trend_tp_pct / self.trend_sl_pct < Decimal("1.5"):
+            warnings.append(f"Trend R:R ratio is low: TP={self.trend_tp_pct}, SL={self.trend_sl_pct}")
 
         return warnings
 

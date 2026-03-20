@@ -247,7 +247,7 @@ CURRENT POSITIONS:
 TREND IDENTIFICATION CRITERIA — Enter ONLY when:
 1. PRIMARY TREND (4H): EMA9 > EMA21 > EMA50 (uptrend) or EMA9 < EMA21 < EMA50 (downtrend)
 2. MAIN TREND (1D): Confirms primary trend direction
-3. TREND STRENGTH: At least 2/3. TREND STRENGTH: At least 2/3 timeframes aligned (preferably 3/3)
+3. TREND STRENGTH: At least 2/3 timeframes aligned (preferably 3/3)
 4. VOLUME CONFIRMATION: volume_ratio > 1.3 on breakout/breakdown
 5. RSI POSITION: RSI14 between 40-60 for continuation, <30/>70 for reversal setups
 6. NO MAJOR DIVERGENCES: Price making higher highs with indicators confirming
