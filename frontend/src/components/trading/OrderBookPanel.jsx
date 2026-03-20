@@ -8,9 +8,10 @@ const SIG_FIG_OPTIONS = [
   { value: 5, label: '5' },
 ]
 
-function safeNum(v, fallback = 0) {
-  if (v == null || isNaN(v)) return fallback
-  return Number(v)
+function num(v) {
+  if (v == null) return 0
+  const n = Number(v)
+  return isNaN(n) ? 0 : n
 }
 
 export default function OrderBookPanel({
@@ -27,41 +28,49 @@ export default function OrderBookPanel({
 }) {
   const safeBids = Array.isArray(bids) ? bids : []
   const safeAsks = Array.isArray(asks) ? asks : []
-  const safeSpread = safeNum(spread)
-  const safeSpreadPct = safeNum(spreadPct)
 
-  const bidsWithCum = useMemo(() => {
+  // Parse and accumulate bids
+  const bidsRows = useMemo(() => {
     let cum = 0
     return safeBids.map(b => {
-      cum += safeNum(b.sz)
-      return { px: safeNum(b.px), sz: safeNum(b.sz), n: safeNum(b.n), cum }
+      const px = num(b.px)
+      const sz = num(b.sz)
+      cum += sz
+      return { px, sz, cum }
     })
   }, [safeBids])
 
-  const asksWithCum = useMemo(() => {
+  // Parse and accumulate asks
+  const asksRows = useMemo(() => {
     let cum = 0
     return safeAsks.map(a => {
-      cum += safeNum(a.sz)
-      return { px: safeNum(a.px), sz: safeNum(a.sz), n: safeNum(a.n), cum }
+      const px = num(a.px)
+      const sz = num(a.sz)
+      cum += sz
+      return { px, sz, cum }
     })
   }, [safeAsks])
 
+  // Max size for depth bar scaling
   const maxSize = useMemo(() => {
-    const allSizes = [...safeBids.map(b => safeNum(b.sz)), ...safeAsks.map(a => safeNum(a.sz))]
+    const allSizes = [
+      ...bidsRows.map(b => b.sz),
+      ...asksRows.map(a => a.sz),
+    ]
     return allSizes.length > 0 ? Math.max(...allSizes, 0.0001) : 0.0001
-  }, [safeBids, safeAsks])
+  }, [bidsRows, asksRows])
 
-  const totalBidSize = bidsWithCum.length > 0 ? bidsWithCum[bidsWithCum.length - 1].cum : 0
-  const totalAskSize = asksWithCum.length > 0 ? asksWithCum[asksWithCum.length - 1].cum : 0
-  const totalSize = totalBidSize + totalAskSize
-  const bidPct = totalSize > 0 ? Math.round((totalBidSize / totalSize) * 100) : 50
+  // Imbalance
+  const totalBid = bidsRows.length > 0 ? bidsRows[bidsRows.length - 1].cum : 0
+  const totalAsk = asksRows.length > 0 ? asksRows[asksRows.length - 1].cum : 0
+  const total = totalBid + totalAsk
+  const bidPct = total > 0 ? Math.round((totalBid / total) * 100) : 50
 
+  // Layout heights
   const overhead = 140
-  const availableHeight = panelHeight - overhead
-  const halfHeight = Math.max(60, Math.floor(availableHeight / 2))
+  const half = Math.max(60, Math.floor((panelHeight - overhead) / 2))
 
   const isEmpty = safeBids.length === 0 && safeAsks.length === 0
-  const isLoading = loading && isEmpty
 
   return (
     <div
@@ -96,7 +105,7 @@ export default function OrderBookPanel({
         <span className="text-right">Total</span>
       </div>
 
-      {isLoading ? (
+      {loading && isEmpty ? (
         <div className="flex-1 flex items-center justify-center">
           <div className="flex flex-col gap-1.5 w-full px-3">
             {[...Array(16)].map((_, i) => (
@@ -114,58 +123,40 @@ export default function OrderBookPanel({
         </div>
       ) : (
         <div className="flex flex-col flex-1 overflow-hidden">
-          {/* Asks (reversed: lowest ask at bottom near spread) */}
-          <div className="overflow-y-auto flex flex-col justify-end" style={{ height: halfHeight }}>
-            {[...asksWithCum].reverse().map((ask, idx) => (
-              <Row
-                key={`a-${idx}`}
-                price={ask.px}
-                size={ask.sz}
-                cumulative={ask.cum}
-                maxSize={maxSize}
-                side="ask"
-              />
+          {/* ─── Asks (reversed so lowest ask is at bottom near spread) ─── */}
+          <div className="overflow-hidden flex flex-col justify-end" style={{ height: half }}>
+            {[...asksRows].reverse().map((row, i) => (
+              <OBRow key={`a${i}`} px={row.px} sz={row.sz} cum={row.cum} maxSize={maxSize} side="ask" />
             ))}
           </div>
 
-          {/* Spread + Last Price */}
+          {/* ─── Spread bar ─── */}
           <div className="flex items-center justify-between px-3 py-1.5 border-y border-gray-800 bg-gray-900/60 shrink-0">
             <div className="flex items-center gap-2">
               <span className={`text-[13px] font-bold font-mono ${isPositive ? 'text-green-400' : 'text-red-400'}`}>
-                {lastPrice != null ? fmtPrice(lastPrice) : '—'}
+                {lastPrice != null && lastPrice !== 0 ? fmtPrice(lastPrice) : '—'}
               </span>
               {isPositive ? (
-                <svg width="10" height="10" viewBox="0 0 10 10" className="text-green-400">
-                  <path d="M5 1 L9 7 L1 7 Z" fill="currentColor" />
-                </svg>
+                <svg width="10" height="10" viewBox="0 0 10 10" className="text-green-400"><path d="M5 1 L9 7 L1 7 Z" fill="currentColor" /></svg>
               ) : (
-                <svg width="10" height="10" viewBox="0 0 10 10" className="text-red-400">
-                  <path d="M5 9 L9 3 L1 3 Z" fill="currentColor" />
-                </svg>
+                <svg width="10" height="10" viewBox="0 0 10 10" className="text-red-400"><path d="M5 9 L9 3 L1 3 Z" fill="currentColor" /></svg>
               )}
             </div>
             <div className="text-[10px] text-gray-500 font-mono">
               <span className="text-gray-600">Spd </span>
-              <span className="text-yellow-400/80">{fmtPrice(safeSpread)}</span>
-              <span className="text-gray-700 ml-1">({safeSpreadPct.toFixed(3)}%)</span>
+              <span className="text-yellow-400/80">{num(spread) > 0 ? fmtPrice(num(spread)) : '—'}</span>
+              <span className="text-gray-700 ml-1">({num(spreadPct).toFixed(3)}%)</span>
             </div>
           </div>
 
-          {/* Bids */}
-          <div className="overflow-y-auto" style={{ height: halfHeight }}>
-            {bidsWithCum.map((bid, idx) => (
-              <Row
-                key={`b-${idx}`}
-                price={bid.px}
-                size={bid.sz}
-                cumulative={bid.cum}
-                maxSize={maxSize}
-                side="bid"
-              />
+          {/* ─── Bids (no scrollbar) ─── */}
+          <div className="overflow-hidden" style={{ height: half }}>
+            {bidsRows.map((row, i) => (
+              <OBRow key={`b${i}`} px={row.px} sz={row.sz} cum={row.cum} maxSize={maxSize} side="bid" />
             ))}
           </div>
 
-          {/* Imbalance bar */}
+          {/* ─── Imbalance bar ─── */}
           <div className="px-3 py-2 border-t border-gray-800 shrink-0">
             <div className="flex items-center justify-between text-[10px] mb-1">
               <span className="text-green-400/70">B {bidPct}%</span>
@@ -182,33 +173,29 @@ export default function OrderBookPanel({
   )
 }
 
-function Row({ price, size, cumulative, maxSize, side }) {
+/* ─── Single order book row ─── */
+function OBRow({ px, sz, cum, maxSize, side }) {
   const isBid = side === 'bid'
-  const sz = safeNumLocal(size)
   const depthPct = maxSize > 0 ? Math.min((sz / maxSize) * 100, 100) : 0
 
   return (
     <div className="relative grid grid-cols-3 py-[1.5px] px-3 text-[11px] font-mono hover:bg-white/[0.03] transition-colors">
+      {/* Depth bar */}
       <div
-        className={`absolute right-0 top-0 bottom-0 pointer-events-none transition-all duration-300 ${
+        className={`absolute right-0 top-0 bottom-0 pointer-events-none ${
           isBid ? 'bg-green-500/[0.12]' : 'bg-red-500/[0.12]'
         }`}
         style={{ width: `${depthPct}%` }}
       />
       <span className={`relative z-10 ${isBid ? 'text-green-400' : 'text-red-400'}`}>
-        {fmtPrice(price)}
+        {fmtPrice(px)}
       </span>
       <span className="text-gray-300 text-right relative z-10">
-        {fmtSize(size)}
+        {fmtSize(sz)}
       </span>
       <span className="text-gray-500 text-right relative z-10">
-        {fmtSize(cumulative)}
+        {fmtSize(cum)}
       </span>
     </div>
   )
-}
-
-function safeNumLocal(v) {
-  if (v == null || isNaN(v)) return 0
-  return Number(v)
 }

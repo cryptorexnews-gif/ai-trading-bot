@@ -3,28 +3,35 @@
  */
 
 export function fmtPrice(p) {
-  if (p == null || isNaN(p)) return '—'
-  if (p >= 10000) return p.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
-  if (p >= 100) return p.toFixed(2)
-  if (p >= 1) return p.toFixed(4)
-  if (p >= 0.01) return p.toFixed(5)
-  return p.toFixed(8)
+  if (p == null || isNaN(p) || p === 0) return '—'
+  const n = Number(p)
+  if (n >= 10000) return n.toLocaleString(undefined, { minimumFractionDigits: 1, maximumFractionDigits: 1 })
+  if (n >= 1000) return n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+  if (n >= 100) return n.toFixed(2)
+  if (n >= 10) return n.toFixed(3)
+  if (n >= 1) return n.toFixed(4)
+  if (n >= 0.01) return n.toFixed(5)
+  if (n >= 0.0001) return n.toFixed(6)
+  return n.toFixed(8)
 }
 
 export function fmtSize(s) {
-  if (s == null || isNaN(s)) return '—'
-  if (s >= 1000000) return `${(s / 1000000).toFixed(2)}M`
-  if (s >= 1000) return `${(s / 1000).toFixed(1)}k`
-  if (s >= 1) return s.toFixed(3)
-  return s.toFixed(6)
+  if (s == null || isNaN(s) || s === 0) return '—'
+  const n = Number(s)
+  if (n >= 1000000) return `${(n / 1000000).toFixed(2)}M`
+  if (n >= 1000) return `${(n / 1000).toFixed(1)}k`
+  if (n >= 1) return n.toFixed(3)
+  if (n >= 0.001) return n.toFixed(4)
+  return n.toFixed(6)
 }
 
 export function fmtVol(v) {
-  if (v == null || isNaN(v)) return '—'
-  if (v >= 1e9) return `$${(v / 1e9).toFixed(2)}B`
-  if (v >= 1e6) return `$${(v / 1e6).toFixed(2)}M`
-  if (v >= 1e3) return `$${(v / 1e3).toFixed(1)}K`
-  return `$${v.toFixed(0)}`
+  if (v == null || isNaN(v) || v === 0) return '—'
+  const n = Number(v)
+  if (n >= 1e9) return `$${(n / 1e9).toFixed(2)}B`
+  if (n >= 1e6) return `$${(n / 1e6).toFixed(2)}M`
+  if (n >= 1e3) return `$${(n / 1e3).toFixed(1)}K`
+  return `$${n.toFixed(0)}`
 }
 
 export function getApiKey() {
