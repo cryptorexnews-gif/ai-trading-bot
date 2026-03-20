@@ -126,7 +126,12 @@ export default function TradingView({ tradingPairs }) {
           </div>
         </div>
       ) : (
-        <CandlestickChart candles={candles} height={CHART_HEIGHT} />
+        <CandlestickChart
+          candles={candles}
+          height={CHART_HEIGHT}
+          selectedCoin={selectedCoin}
+          interval={interval}
+        />
       )}
     </div>
   )
