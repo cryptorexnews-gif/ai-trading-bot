@@ -25,11 +25,6 @@ export default class ErrorBoundary extends React.Component {
             <p className="text-sm text-gray-400 mb-4">
               Something went wrong rendering the dashboard. This usually fixes itself on refresh.
             </p>
-            {this.state.error && (
-              <pre className="text-xs text-red-400/70 bg-gray-900 rounded p-3 mb-4 overflow-auto max-h-32 text-left">
-                {this.state.error.toString()}
-              </pre>
-            )}
             <button
               onClick={() => {
                 this.setState({ hasError: false, error: null, errorInfo: null })

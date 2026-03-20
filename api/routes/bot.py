@@ -117,31 +117,12 @@ def managed_positions():
 @bot_bp.route("/api/config", methods=["GET"])
 @require_api_key
 def config():
-    """Return bot configuration. Never returns secret env vars."""
-    trading_pairs_str = os.getenv(
-        "TRADING_PAIRS",
-        "BTC,ETH,SOL,BNB,ADA,DOGE,XRP,AVAX,LINK,SUI,ARB,OP,NEAR,WIF,PEPE,INJ,TIA,SEI,RENDER,FET"
-    )
-    trading_pairs = [p.strip().upper() for p in trading_pairs_str.split(",") if p.strip()]
-
+    """Return minimal bot configuration. Never returns secret env vars."""
     return jsonify({
         "execution_mode": os.getenv("EXECUTION_MODE", "paper"),
         "enable_mainnet_trading": os.getenv("ENABLE_MAINNET_TRADING", "false"),
         "llm_model": os.getenv("LLM_MODEL", "anthropic/claude-opus-4.6"),
-        "trading_pairs": trading_pairs,
-        "trading_pairs_count": len(trading_pairs),
         "max_leverage": os.getenv("HARD_MAX_LEVERAGE", "10"),
-        "max_margin_usage": os.getenv("MAX_MARGIN_USAGE", "0.8"),
         "max_drawdown_pct": os.getenv("MAX_DRAWDOWN_PCT", "0.15"),
-        "trade_cooldown_sec": os.getenv("TRADE_COOLDOWN_SEC", "300"),
-        "daily_notional_limit": os.getenv("DAILY_NOTIONAL_LIMIT_USD", "1000"),
-        "safe_fallback_mode": os.getenv("SAFE_FALLBACK_MODE", "de_risk"),
-        "default_sl_pct": os.getenv("DEFAULT_SL_PCT", "0.03"),
-        "default_tp_pct": os.getenv("DEFAULT_TP_PCT", "0.05"),
-        "enable_trailing_stop": os.getenv("ENABLE_TRAILING_STOP", "true"),
-        "trailing_callback": os.getenv("DEFAULT_TRAILING_CALLBACK", "0.02"),
-        "break_even_activation_pct": os.getenv("BREAK_EVEN_ACTIVATION_PCT", "0.015"),
-        "enable_adaptive_cycle": os.getenv("ENABLE_ADAPTIVE_CYCLE", "true"),
-        "correlation_threshold": os.getenv("CORRELATION_THRESHOLD", "0.7"),
         "timestamp": time.time()
     })

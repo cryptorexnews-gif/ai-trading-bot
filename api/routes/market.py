@@ -49,12 +49,7 @@ def candles():
 
     data = post_hyperliquid_info({
         "type": "candleSnapshot",
-        "req": {
-            "coin": coin,
-            "interval": interval,
-            "startTime": start_ms,
-            "endTime": now_ms
-        }
+        "req": {"coin": coin, "interval": interval, "startTime": start_ms, "endTime": now_ms}
     })
 
     if data is None or not isinstance(data, list):
