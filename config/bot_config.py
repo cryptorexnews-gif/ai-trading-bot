@@ -1,23 +1,112 @@
-meta_cache_ttl_sec=_env_int("META_CACHE_TTL_SEC", 86400),
-            log_level=_env("LOG_LEVEL", "INFO"),
-            log_file=_env("LOG_FILE", "logs/hyperliquid_bot.log"),
-            min_size_by_coin=min_sizes,
-            # Trend 4h/1d specific parameters
-            primary_timeframe=_env("PRIMARY_TIMEFRAME", "4h"),
-            secondary_timeframe=_env("SECONDARY_TIMEFRAME", "1d"),
-            entry_timeframe=_env("ENTRY_TIMEFRAME", "1h"),
-            min_trend_duration_hours=_env_int("MIN_TREND_DURATION_HOURS", 36),
-            volume_confirmation_threshold=_env_decimal("VOLUME_CONFIRMATION_THRESHOLD", "1.6"),
-            trend_confirmation_required=_env_bool("TREND_CONFIRMATION_REQUIRED", True),
-            max_trend_positions=_env_int("MAX_TREND_POSITIONS", 2),
-            trend_position_size_pct=_env_decimal("TREND_POSITION_SIZE_PCT", "0.02"),
-            trend_leverage_multiplier=_env_decimal("TREND_LEVERAGE_MULTIPLIER", "0.9"),
-            trend_sl_pct=_env_decimal("TREND_SL_PCT", "0.04"),
-            trend_tp_pct=_env_decimal("TREND_TP_PCT", "0.08"),
-            trend_break_even_activation_pct=_env_decimal("TREND_BREAK_EVEN_ACTIVATION_PCT", "0.02"),
-            trend_trailing_activation_pct=_env_decimal("TREND_TRAILING_ACTIVATION_PCT", "0.03"),
-            trend_trailing_callback=_env_decimal("TREND_TRAILING_CALLBACK", "0.02"),
+from decimal import Decimal
+from typing import Dict, List, Optional
+import os
+
+
+def _env(key: str, default: str = "") -> str:
+    return os.getenv(key, default)
+
+
+def _env_bool(key: str, default: bool = False) -> bool:
+    val = os.getenv(key, "").lower()
+    if val in ("true", "1", "yes", "on"):
+        return True
+    if val in ("false", "0", "no", "off"):
+        return False
+    return default
+
+
+def _env_int(key: str, default: int = 0) -> int:
+    try:
+        return int(os.getenv(key, str(default)))
+    except ValueError:
+        return default
+
+
+def _env_decimal(key: str, default: str = "0") -> Decimal:
+    try:
+        return Decimal(str(os.getenv(key, default)))
+    except Exception:
+        return Decimal(default)
+
+
+class BotConfig:
+    """Configuration for the Hyperliquid Trading Bot."""
+
+    def __init__(self):
+        # Core settings
+        self.wallet_address = _env("HYPERLIQUID_WALLET_ADDRESS", "")
+        self.execution_mode = _env("EXECUTION_MODE", "paper").lower()
+        self.enable_mainnet_trading = _env_bool("ENABLE_MAINNET_TRADING", False)
+        self.base_url = _env("HYPERLIQUID_BASE_URL", "https://api.hyperliquid.xyz")
+
+        # LLM settings
+        self.openrouter_api_key = _env("OPENROUTER_API_KEY", "")
+        self.llm_model = _env("LLM_MODEL", "anthropic/claude-opus-4.6")
+        self.llm_max_tokens = _env_int("LLM_MAX_TOKENS", 8192)
+        self.llm_temperature = _env_decimal("LLM_TEMPERATURE", "0.15")
+
+        # Risk management
+        self.hard_max_leverage = _env_decimal("HARD_MAX_LEVERAGE", "10")
+        self.min_confidence_open = _env_decimal("MIN_CONFIDENCE_OPEN", "0.72")
+        self.min_confidence_manage = _env_decimal("MIN_CONFIDENCE_MANAGE", "0.50")
+        self.max_margin_usage = _env_decimal("MAX_MARGIN_USAGE", "0.8")
+        self.max_order_margin_pct = _env_decimal("MAX_ORDER_MARGIN_PCT", "0.1")
+        self.trade_cooldown_sec = _env_int("TRADE_COOLDOWN_SEC", 300)
+        self.daily_notional_limit_usd = _env_decimal("DAILY_NOTIONAL_LIMIT_USD", "1000")
+        self.volatility_multiplier = _env_decimal("VOLATILITY_MULTIPLIER", "1.2")
+        self.max_drawdown_pct = _env_decimal("MAX_DRAWDOWN_PCT", "0.15")
+        self.max_single_asset_pct = _env_decimal("MAX_SINGLE_ASSET_PCT", "0.35")
+        self.emergency_margin_threshold = _env_decimal("EMERGENCY_MARGIN_THRESHOLD", "0.88")
+
+        # Trading pairs
+        trading_pairs_raw = _env(
+            "TRADING_PAIRS",
+            "BTC,ETH,SOL,BNB,ADA,DOGE,XRP,AVAX,LINK,SUI,ARB,OP,NEAR,WIF,PEPE,INJ,TIA,SEI,RENDER,FET"
         )
+        self.trading_pairs = [p.strip().upper() for p in trading_pairs_raw.split(",") if p.strip()]
+
+        # Min sizes by coin
+        min_sizes = {}
+        for coin in self.trading_pairs:
+            env_key = f"MIN_SIZE_{coin}"
+            default_size = "0.001" if coin in ["BTC", "ETH"] else "0.01" if coin in ["SOL", "BNB", "ADA"] else "0.1"
+            min_sizes[coin] = _env_decimal(env_key, default_size)
+        self.min_size_by_coin = min_sizes
+
+        # Cycle settings
+        self.default_cycle_sec = _env_int("DEFAULT_CYCLE_SEC", 1800)
+        self.min_cycle_sec = _env_int("MIN_CYCLE_SEC", 900)
+        self.max_cycle_sec = _env_int("MAX_CYCLE_SEC", 3600)
+        self.enable_adaptive_cycle = _env_bool("ENABLE_ADAPTIVE_CYCLE", True)
+
+        # API settings
+        self.info_timeout = _env_int("HYPERLIQUID_INFO_TIMEOUT", 15)
+        self.exchange_timeout = _env_int("HYPERLIQUID_EXCHANGE_TIMEOUT", 30)
+        self.paper_slippage_bps = _env_decimal("PAPER_SLIPPAGE_BPS", "5")
+
+        # Logging
+        self.log_level = _env("LOG_LEVEL", "INFO")
+        self.log_file = _env("LOG_FILE", "logs/hyperliquid_bot.log")
+
+        # Cache settings
+        self.meta_cache_ttl_sec = _env_int("META_CACHE_TTL_SEC", 86400)
+
+        # Trend 4h/1d specific parameters
+        self.primary_timeframe = _env("PRIMARY_TIMEFRAME", "4h")
+        self.secondary_timeframe = _env("SECONDARY_TIMEFRAME", "1d")
+        self.entry_timeframe = _env("ENTRY_TIMEFRAME", "1h")
+        self.min_trend_duration_hours = _env_int("MIN_TREND_DURATION_HOURS", 36)
+        self.volume_confirmation_threshold = _env_decimal("VOLUME_CONFIRMATION_THRESHOLD", "1.6")
+        self.trend_confirmation_required = _env_bool("TREND_CONFIRMATION_REQUIRED", True)
+        self.max_trend_positions = _env_int("MAX_TREND_POSITIONS", 2)
+        self.trend_position_size_pct = _env_decimal("TREND_POSITION_SIZE_PCT", "0.02")
+        self.trend_leverage_multiplier = _env_decimal("TREND_LEVERAGE_MULTIPLIER", "0.9")
+        self.trend_sl_pct = _env_decimal("TREND_SL_PCT", "0.04")
+        self.trend_tp_pct = _env_decimal("TREND_TP_PCT", "0.08")
+        self.trend_break_even_activation_pct = _env_decimal("TREND_BREAK_EVEN_ACTIVATION_PCT", "0.02")
+        self.trend_trailing_activation_pct = _env_decimal("TREND_TRAILING_ACTIVATION_PCT", "0.03")
+        self.trend_trailing_callback = _env_decimal("TREND_TRAILING_CALLBACK", "0.02")
 
     def validate(self) -> List[str]:
         """Validate config, return list of warnings. Raises SystemExit on critical errors."""
@@ -52,7 +141,7 @@ meta_cache_ttl_sec=_env_int("META_CACHE_TTL_SEC", 86400),
             warnings.append("EXECUTION_MODE=live but ENABLE_MAINNET_TRADING=false — orders will be paper")
         if self.execution_mode not in ("paper", "live"):
             warnings.append(f"Unknown EXECUTION_MODE '{self.execution_mode}', defaulting to paper behavior")
-        
+
         # Trend-specific validations
         if self.min_trend_duration_hours < 24:
             warnings.append(f"MIN_TREND_DURATION_HOURS={self.min_trend_duration_hours} è basso per trend 4H/1D")
@@ -64,7 +153,7 @@ meta_cache_ttl_sec=_env_int("META_CACHE_TTL_SEC", 86400),
             warnings.append(f"TREND_SL_PCT={self.trend_sl_pct} è molto stretto per trend trading")
         if self.trend_tp_pct / self.trend_sl_pct < Decimal("1.5"):
             warnings.append(f"Trend R:R ratio è basso: TP={self.trend_tp_pct}, SL={self.trend_sl_pct}")
-        
+
         # Cycle validation
         if self.default_cycle_sec < 300:
             warnings.append(f"DEFAULT_CYCLE_SEC={self.default_cycle_sec} è molto breve (<5 minuti)")
