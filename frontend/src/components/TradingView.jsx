@@ -8,6 +8,7 @@ import ChartSkeleton from './trading/ChartSkeleton'
 const DEFAULT_COINS = ['BTC', 'ETH', 'SOL', 'BNB', 'XRP', 'ADA', 'DOGE', 'AVAX', 'LINK', 'SUI']
 const CHART_HEIGHT = 500
 const HYPERLIQUID_INFO_URL = 'https://api.hyperliquid.xyz/info'
+const USE_PROXY_MARKET = import.meta.env.VITE_USE_API_PROXY_MARKET === 'true'
 
 function safeNum(v, fallback = 0) {
   if (v == null || isNaN(v)) return fallback
@@ -27,7 +28,7 @@ async function fetchFromHyperliquid(payload) {
 export default function TradingView({ tradingPairs }) {
   const coins = tradingPairs && tradingPairs.length > 0 ? tradingPairs : DEFAULT_COINS
   const [selectedCoin, setSelectedCoin] = useState(coins[0])
-  const [interval, setInterval_] = useState('4h')  // Default to 4h for trend trading
+  const [interval, setInterval_] = useState('4h')
   const [candles, setCandles] = useState([])
   const [chartLoading, setChartLoading] = useState(true)
   const [lastPrice, setLastPrice] = useState(null)
@@ -37,41 +38,41 @@ export default function TradingView({ tradingPairs }) {
   const fetchCandles = useCallback(async () => {
     let candleData = null
 
-    // Try proxy first
+    // Direct Hyperliquid first (default behavior)
     try {
-      const res = await fetch(
-        `/api/candles?coin=${selectedCoin}&interval=${interval}&limit=150`,
-        { headers: getHeaders() }
-      )
-      if (res.ok) {
-        const json = await res.json()
-        if (json.candles && json.candles.length > 0) {
-          candleData = json.candles
-        }
+      const now = Date.now()
+      const msMap = { '1m': 60000, '5m': 300000, '15m': 900000, '1h': 3600000, '4h': 14400000, '1d': 86400000 }
+      const ms = msMap[interval] || 14400000
+      const raw = await fetchFromHyperliquid({
+        type: 'candleSnapshot',
+        req: { coin: selectedCoin, interval, startTime: now - ms * 150, endTime: now }
+      })
+      if (Array.isArray(raw) && raw.length > 0) {
+        candleData = raw.map(c => ({
+          time: c.t || 0,
+          open: parseFloat(c.o || 0),
+          high: parseFloat(c.h || 0),
+          low: parseFloat(c.l || 0),
+          close: parseFloat(c.c || 0),
+          volume: parseFloat(c.v || 0),
+        }))
       }
-    } catch { /* proxy down */ }
+    } catch { /* direct failed */ }
 
-    // Fallback: direct Hyperliquid
-    if (!candleData) {
+    // Optional proxy fallback (only if explicitly enabled)
+    if (!candleData && USE_PROXY_MARKET) {
       try {
-        const now = Date.now()
-        const msMap = { '1m': 60000, '5m': 300000, '15m': 900000, '1h': 3600000, '4h': 14400000, '1d': 86400000 }
-        const ms = msMap[interval] || 14400000  // Default to 4h
-        const raw = await fetchFromHyperliquid({
-          type: 'candleSnapshot',
-          req: { coin: selectedCoin, interval, startTime: now - ms * 150, endTime: now }
-        })
-        if (Array.isArray(raw) && raw.length > 0) {
-          candleData = raw.map(c => ({
-            time: c.t || 0,
-            open: parseFloat(c.o || 0),
-            high: parseFloat(c.h || 0),
-            low: parseFloat(c.l || 0),
-            close: parseFloat(c.c || 0),
-            volume: parseFloat(c.v || 0),
-          }))
+        const res = await fetch(
+          `/api/candles?coin=${selectedCoin}&interval=${interval}&limit=150`,
+          { headers: getHeaders() }
+        )
+        if (res.ok) {
+          const json = await res.json()
+          if (json.candles && json.candles.length > 0) {
+            candleData = json.candles
+          }
         }
-      } catch { /* direct failed */ }
+      } catch { /* proxy failed */ }
     }
 
     if (!mountedRef.current) return
