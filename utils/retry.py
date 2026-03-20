@@ -1,7 +1,7 @@
 import logging
 import random
 import time
-from typing import Any, Callable, Dict, List, Optional, Set, TypeVar
+from typing import Callable, Optional, Set, TypeVar
 
 import requests
 

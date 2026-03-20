@@ -1,7 +1,6 @@
 import json
 import logging
 import re
-import time
 from decimal import Decimal
 from typing import Any, Dict, List, Optional
 
@@ -78,20 +77,20 @@ class LLMEngine:
     def _format_technical_data(self, technical_data: Optional[Dict[str, Any]]) -> str:
         if not technical_data:
             return "  No technical data available."
-        
+
         lines = []
-        
+
         # Price and basic info
         lines.append(f"  Current Price: ${float(technical_data.get('current_price', 0)):.2f}")
         lines.append(f"  24h Change: {float(technical_data.get('change_24h', 0)) * 100:+.2f}%")
         lines.append(f"  Volume 24h: ${float(technical_data.get('volume_24h', 0)):,.0f}")
         lines.append(f"  Funding Rate: {float(technical_data.get('funding_rate', 0)) * 100:+.4f}%")
-        
+
         # Trend information
         lines.append(f"  Trend Direction: {technical_data.get('trend_direction', 'neutral').upper()}")
         lines.append(f"  Trend Strength: {technical_data.get('trend_strength', 0)}/3 timeframes aligned")
         lines.append(f"  Trends Aligned: {'YES ✅' if technical_data.get('trends_aligned', False) else 'NO ⚠️'}")
-        
+
         # 1h timeframe (entry timing)
         lines.append("\n  ⏰ 1H TIMEFRAME (Entry Timing):")
         lines.append(f"    EMA9: ${float(technical_data.get('current_ema9', 0)):.2f}")
@@ -102,7 +101,7 @@ class LLMEngine:
         lines.append(f"    BB Position: {float(technical_data.get('bb_position', 0.5)) * 100:.1f}%")
         lines.append(f"    VWAP: ${float(technical_data.get('vwap', 0)):.2f}")
         lines.append(f"    Volume Ratio: {float(technical_data.get('volume_ratio', 1)):.2f}x")
-        
+
         # 4h timeframe (primary trend)
         hourly = technical_data.get("hourly_context", {})
         if hourly:
@@ -114,7 +113,7 @@ class LLMEngine:
             lines.append(f"    RSI14: {float(hourly.get('rsi_14', 50)):.1f}")
             lines.append(f"    MACD: {float(hourly.get('macd_line', 0)):.4f}")
             lines.append(f"    ATR14: ${float(hourly.get('atr_14', 0)):.2f}")
-        
+
         # 1d timeframe (main trend)
         lt = technical_data.get("long_term_context", {})
         if lt:
@@ -124,12 +123,12 @@ class LLMEngine:
             lines.append(f"    EMA50: ${float(lt.get('ema_50', 0)):.2f}")
             lines.append(f"    EMA200: ${float(lt.get('ema_200', 0)):.2f}")
             lines.append(f"    ATR14: ${float(lt.get('atr_14', 0)):.2f}")
-            
+
             rsi_list = lt.get("rsi_14", [])
             if rsi_list and len(rsi_list) >= 3:
                 last_3 = rsi_list[-3:]
                 lines.append(f"    RSI14 Trend: {', '.join([f'{float(v):.1f}' for v in last_3])}")
-        
+
         return "\n".join(lines)
 
     def _format_recent_trades(self, recent_trades: List[Dict[str, Any]]) -> str:
@@ -203,7 +202,7 @@ RECENT TRADE HISTORY (last 5):
         # Trend analysis
         trend_strength = technical_data.get("trend_strength", 0) if technical_data else 0
         trend_direction = technical_data.get("trend_direction", "neutral") if technical_data else "neutral"
-        
+
         trend_analysis = ""
         if trend_strength == 3:
             trend_analysis = "✅ ALL TIMEFRAMES ALIGNED (1H+4H+1D) — High conviction trend trade opportunity."

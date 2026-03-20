@@ -1,8 +1,6 @@
-import json
-import os
 import time
 from decimal import Decimal
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 from utils.file_io import atomic_write_json, read_json_file
 
