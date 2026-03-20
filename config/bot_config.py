@@ -76,6 +76,7 @@ class BotConfig:
         self.min_cycle_sec = _env_int("MIN_CYCLE_SEC", 900)
         self.max_cycle_sec = _env_int("MAX_CYCLE_SEC", 3600)
         self.enable_adaptive_cycle = _env_bool("ENABLE_ADAPTIVE_CYCLE", True)
+        self.max_trades_per_cycle = _env_int("MAX_TRADES_PER_CYCLE", 2)
 
         self.info_timeout = _env_int("HYPERLIQUID_INFO_TIMEOUT", 15)
         self.exchange_timeout = _env_int("HYPERLIQUID_EXCHANGE_TIMEOUT", 30)
@@ -163,6 +164,8 @@ class BotConfig:
             warnings.append("MAX_ORDER_NOTIONAL_USD < 0 is invalid; it should be 0 (disabled) or positive")
         if self.max_order_notional_usd > 0 and self.max_order_notional_usd < Decimal("10"):
             warnings.append("MAX_ORDER_NOTIONAL_USD is very low; trades may be frequently rejected")
+        if self.max_trades_per_cycle < 1:
+            warnings.append("MAX_TRADES_PER_CYCLE < 1 is invalid; using very restrictive setting")
 
         return warnings
 
