@@ -172,11 +172,14 @@ export default function CandlestickChart({ candles, height = 500, selectedCoin =
       handleScale: true,
     })
 
-    const candleSeries = chart.addCandlestickSeries({
-      upColor: '#10b98166',
-      downColor: '#ef444466',
-      borderDownColor: '#ef4444',
-      borderUpColor: '#10b981',
+    // Create candlestick series with default options
+    const candleSeries = chart.addCandlestickSeries()
+    
+    // Apply styling via applyOptions
+    candleSeries.applyOptions({
+      upColor: '#10b981',
+      downColor: '#ef4444',
+      borderVisible: false,
       wickUpColor: '#10b981',
       wickDownColor: '#ef4444',
     })
