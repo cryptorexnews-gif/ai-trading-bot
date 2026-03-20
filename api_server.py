@@ -6,6 +6,10 @@ import logging
 import os
 from ipaddress import ip_address
 
+from dotenv import load_dotenv
+
+load_dotenv()
+
 from api import create_app
 from api.config import API_AUTH_KEY, CORS_ORIGINS
 
