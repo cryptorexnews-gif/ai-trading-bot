@@ -22,13 +22,13 @@ class HyperliquidDataFetcher:
         self.session = create_robust_session()
         self._meta_cache: Optional[Dict[str, Any]] = None
         self._meta_cache_at: float = 0.0
-        self._meta_cache_ttl: float = 120.0
+        self._meta_cache_ttl: float = 86400.0  # 1 giorno (24 ore)
         self._mids_cache: Optional[Dict[str, str]] = None
         self._mids_cache_at: float = 0.0
-        self._mids_cache_ttl: float = 15.0
+        self._mids_cache_ttl: float = 3600.0  # 1 ora per prezzi mid
         self._funding_cache: Optional[List[Dict[str, Any]]] = None
         self._funding_cache_at: float = 0.0
-        self._funding_cache_ttl: float = 60.0
+        self._funding_cache_ttl: float = 3600.0  # 1 ora per funding
 
     def _d(self, value: Any) -> Decimal:
         """Convert to Decimal safely."""

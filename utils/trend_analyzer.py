@@ -13,12 +13,20 @@ class TrendAnalyzer:
 
     def __init__(self, data_fetcher: HyperliquidDataFetcher):
         self.data_fetcher = data_fetcher
+        # Cache per analisi trend (1 giorno)
+        self._trend_cache: Dict[str, Dict[str, Any]] = {}
+        self._trend_cache_at: Dict[str, float] = {}
+        self._trend_cache_ttl: float = 86400.0  # 1 giorno
 
     def analyze_multi_timeframe_trend(self, coin: str) -> Dict[str, Any]:
         """
         Analyze trend across 1H, 4H, and 1D timeframes.
         Returns trend strength (0-3), direction, and alignment info.
         """
+        now = time.time()
+        if coin in self._trend_cache and (now - self._trend_cache_at.get(coin, 0)) < self._trend_cache_ttl:
+            return self._trend_cache[coin]
+
         # Get data for each timeframe
         intraday_candles = self.data_fetcher.get_candle_snapshot(coin, "1h", 100)
         hourly_candles = self.data_fetcher.get_candle_snapshot(coin, "4h", 50)
@@ -159,7 +167,7 @@ class TrendAnalyzer:
         # Funding rate
         funding_data = self.data_fetcher.get_funding_for_coin(coin)
 
-        return {
+        result = {
             "current_price": current_price,
             "change_24h": change_24h,
             "volume_24h": current_volume,
@@ -178,6 +186,12 @@ class TrendAnalyzer:
             "hourly_context": hourly_context,
             "long_term_context": long_term_context,
         }
+
+        # Cache result
+        self._trend_cache[coin] = result
+        self._trend_cache_at[coin] = now
+
+        return result
 
     def is_trend_confirmed(self, coin: str, volume_threshold: Decimal = Decimal("1.5")) -> bool:
         """Check if trend is confirmed for 4H/1D strategy."""

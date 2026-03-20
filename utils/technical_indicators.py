@@ -118,7 +118,7 @@ class TechnicalIndicators:
     def get_volatility_signal(candles: List[Dict[str, Any]], coin: str) -> Dict[str, Any]:
         """Calculate volatility signal from candle data."""
         if not candles or len(candles) < 10:
-            return {"volatility_level": "normal", "suggested_cycle_sec": 60}
+            return {"volatility_level": "normal", "suggested_cycle_sec": 1800}  # Default 30 minuti
 
         closes = [c["close"] for c in candles]
         highs = [c["high"] for c in candles]
@@ -129,15 +129,15 @@ class TechnicalIndicators:
         current_price = closes[-1] if closes else Decimal("1")
 
         if current_price == 0:
-            return {"volatility_level": "normal", "suggested_cycle_sec": 60}
+            return {"volatility_level": "normal", "suggested_cycle_sec": 1800}
 
         atr_pct = (current_atr / current_price) * Decimal("100")
 
         if atr_pct > Decimal("1.5"):
-            return {"volatility_level": "extreme", "suggested_cycle_sec": 20, "atr_pct": float(atr_pct)}
+            return {"volatility_level": "extreme", "suggested_cycle_sec": 900, "atr_pct": float(atr_pct)}  # 15 minuti
         elif atr_pct > Decimal("0.8"):
-            return {"volatility_level": "high", "suggested_cycle_sec": 30, "atr_pct": float(atr_pct)}
+            return {"volatility_level": "high", "suggested_cycle_sec": 1200, "atr_pct": float(atr_pct)}  # 20 minuti
         elif atr_pct > Decimal("0.3"):
-            return {"volatility_level": "normal", "suggested_cycle_sec": 60, "atr_pct": float(atr_pct)}
+            return {"volatility_level": "normal", "suggested_cycle_sec": 1800, "atr_pct": float(atr_pct)}  # 30 minuti
         else:
-            return {"volatility_level": "low", "suggested_cycle_sec": 120, "atr_pct": float(atr_pct)}
+            return {"volatility_level": "low", "suggested_cycle_sec": 3600, "atr_pct": float(atr_pct)}  # 60 minuti
