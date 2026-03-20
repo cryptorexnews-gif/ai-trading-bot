@@ -1,6 +1,6 @@
 # 🤖 Hyperliquid Trading Bot
 
-**AI-Powered Trading Bot for Hyperliquid** | Claude Opus 4.6 | Real-time Dashboard
+**AI-Powered Trading Bot for Hyperliquid** | Claude Opus 4.6 | Real-time Dashboard | **Trend 4H/1D Ultra-Conservativo**
 
 ## 🚀 QUICK START (3 MINUTI)
 
@@ -36,7 +36,7 @@ python hyperliquid_bot_executable_orders.py --single-cycle
 
 ### 5. AVVIA (3 TERMINALI)
 ```
-# TERMINALE 1: BOT
+# TERMINALE 1: BOT (Trend 4H/1D Ultra-Conservativo)
 python hyperliquid_bot_executable_orders.py
 
 # TERMINALE 2: API SERVER
@@ -73,47 +73,55 @@ cd frontend && npm run dev
 | Sezione | Cosa vedi |
 |---------|-----------|
 | **Stats** | Balance • PnL • Margin • Win Rate |
-| **Drawdown** | Barra rossa >8% (stop automatico 12%) |
+| **Drawdown** | Barra rossa >8% (stop automatico 10%) |
 | **TradingView** | Candele live + Orderbook (default 4H) |
 | **Equity** | Curva portfolio reale |
 | **Risk Mgmt** | SL/TP/Trailing/BE attivi |
 | **Trades** | Storia + AI reasoning + CSV Export |
 
-## ⚙️ Configurazione Principale (.env)
+## ⚙️ Configurazione Trend 4H/1D Ultra-Conservativa (.env)
 
 ```
 # MODALITÀ TRADING
 EXECUTION_MODE=paper     # paper (sicuro) / live (reale)
 ENABLE_MAINNET_TRADING=false  # ⚠️ true = SOLDI VERTI!
 
-# RISCHIO
-MAX_DRAWDOWN_PCT=0.12    # Stop 12%
-DAILY_NOTIONAL_LIMIT_USD=500
+# RISCHIO ULTRA-CONSERVATIVO
+MAX_DRAWDOWN_PCT=0.10    # Stop a 10% drawdown (molto protettivo)
+DAILY_NOTIONAL_LIMIT_USD=600  # Limite giornaliero 600 USD
 
-# STRATEGIA TREND 4H/1D
+# STRATEGIA TREND 4H/1D ULTRA-CONSERVATIVA
 PRIMARY_TIMEFRAME=4h     # Trend primario
 SECONDARY_TIMEFRAME=1d   # Trend principale
 ENTRY_TIMEFRAME=1h       # Timing entrata
-MIN_TREND_DURATION_HOURS=24  # Durata minima trend
-VOLUME_CONFIRMATION_THRESHOLD=1.5  # Conferma volume
-MAX_TREND_POSITIONS=2    # Max posizioni trend
-TREND_POSITION_SIZE_PCT=0.03  # 3% portfolio per posizione
-TREND_SL_PCT=0.05        # Stop Loss 5%
-TREND_TP_PCT=0.10        # Take Profit 10%
-TREND_BREAK_EVEN_ACTIVATION_PCT=0.03  # BE @ +3%
-TREND_TRAILING_ACTIVATION_PCT=0.05    # Trailing @ +5%
-TREND_TRAILING_CALLBACK=0.03  # Callback 3%
+MIN_TREND_DURATION_HOURS=36  # Trend deve durare 36 ore
+VOLUME_CONFIRMATION_THRESHOLD=1.6  # Volume 1.6x sopra media
+MAX_TREND_POSITIONS=2    # Max 2 posizioni trend
+TREND_POSITION_SIZE_PCT=0.02  # 2% portfolio per posizione (molto conservativo)
+TREND_SL_PCT=0.04        # Stop Loss 4% per trend
+TREND_TP_PCT=0.08        # Take Profit 8% (R:R 1:2)
+TREND_BREAK_EVEN_ACTIVATION_PCT=0.02  # BE @ +2%
+TREND_TRAILING_ACTIVATION_PCT=0.03    # Trailing @ +3%
+TREND_TRAILING_CALLBACK=0.02  # Callback 2%
+
+# CICLO ANALISI OTTIMIZZATO
+DEFAULT_CYCLE_SEC=1800   # 30 minuti (ottimale per trend 4H/1D)
+MIN_CYCLE_SEC=900        # Minimo 15 minuti
+MAX_CYCLE_SEC=3600       # Massimo 60 minuti
 ```
 
 **Completa**: `.env.example`
 
-## 🛡️ Protezioni Automatiche
+## 🛡️ Protezioni Automatiche Ultra-Conservative
 
 - **Paper Mode** (default)
-- **Drawdown 12%** → Stop trading
-- **Margin 85%** → Chiude peggior posizione
+- **Drawdown 10%** → Stop trading immediato
+- **Margin 65%** → Ampio margine di sicurezza
+- **Position Size 2%** → Esposizione minima per trade
+- **Leverage 4x max** → Molto conservativo
+- **Confidence 78% min** → Altamente selettivo
 - **Circuit Breakers** → API down = stop
-- **Correlazione** → Blocca BTC+ETH long
+- **Correlazione** → Blocca posizioni correlate
 - **Fill Verification** → Conferma ordini eseguiti
 
 ## 📱 Telegram (Opzionale)
@@ -143,7 +151,7 @@ cd frontend && npm run dev
 - **LLM**: ~$0.03/call → ~$10/giorno (20 pairs)
 - **Hyperliquid**: Fee normali maker/taker
 
-**Scalabile**: `DEFAULT_CYCLE_SEC=300` → dimezza costi.
+**Scalabile**: `DEFAULT_CYCLE_SEC=1800` → 30 minuti ottimale per trend.
 
 ## 📄 Licenza
 MIT — Free uso personale/commerciale.
