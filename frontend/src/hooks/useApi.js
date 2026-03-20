@@ -2,6 +2,10 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 
 const API_BASE = '/api'
 
+export function getHeaders() {
+  return {}
+}
+
 export function useApi(endpoint, intervalMs = 5000) {
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(true)
@@ -15,15 +19,18 @@ export function useApi(endpoint, intervalMs = 5000) {
     const currentFetchId = ++fetchIdRef.current
 
     try {
-      const response = await fetch(`${API_BASE}${endpoint}`)
-      
+      const response = await fetch(`${API_BASE}${endpoint}`, {
+        credentials: 'same-origin',
+        headers: getHeaders(),
+      })
+
       if (!response.ok) {
         if (response.status === 401) {
-          throw new Error('401 Unauthorized — Server authentication required')
+          throw new Error('Unauthorized')
         }
-        throw new Error(`HTTP ${response.status}: ${response.statusText}`)
+        throw new Error(`HTTP ${response.status}`)
       }
-      
+
       const json = await response.json()
 
       if (mountedRef.current && currentFetchId === fetchIdRef.current) {

@@ -3,6 +3,7 @@ Log viewer endpoint — serves recent logs with sensitive data sanitized.
 """
 
 import json
+import logging
 import os
 import time
 
@@ -11,21 +12,28 @@ from flask import Blueprint, jsonify, request
 from api.auth import require_api_key
 from api.config import LOG_FILE
 from api.helpers import sanitize_log_message
+from utils.rate_limiter import get_rate_limiter
+
+logger = logging.getLogger(__name__)
 
 logs_bp = Blueprint("logs", __name__)
+_logs_rl = get_rate_limiter("api_logs_endpoint", max_tokens=30, tokens_per_second=1.0)
 
 
 @logs_bp.route("/api/logs", methods=["GET"])
 @require_api_key
 def logs():
-    """Return recent logs with sensitive data redacted."""
-    limit = request.args.get("limit", 100, type=int)
-    limit = min(limit, 200)
+    if not _logs_rl.try_acquire(1):
+        return jsonify({"error": "rate_limited"}), 429
 
-    if not os.path.exists(LOG_FILE):
-        return jsonify({"logs": [], "timestamp": time.time()})
+    limit = request.args.get("limit", 100, type=int)
+    if limit is None or limit < 1 or limit > 200:
+        return jsonify({"error": "invalid_request"}), 400
 
     try:
+        if not os.path.exists(LOG_FILE):
+            return jsonify({"logs": [], "timestamp": time.time()})
+
         with open(LOG_FILE, "r", encoding="utf-8") as f:
             lines = f.readlines()
 
@@ -53,5 +61,6 @@ def logs():
             "total_lines": len(lines),
             "timestamp": time.time()
         })
-    except IOError:
-        return jsonify({"logs": [], "timestamp": time.time()})
+    except Exception:
+        logger.error("Logs endpoint failed", exc_info=True)
+        return jsonify({"error": "internal_error"}), 500
