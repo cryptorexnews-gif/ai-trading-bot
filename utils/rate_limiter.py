@@ -20,9 +20,9 @@ class TokenBucketRateLimiter:
         tokens_per_second: float = 2.0
     ):
         self.name = name
-        self.max_tokens = max_tokens
-        self.tokens_per_second = tokens_per_second
-        self._tokens = float(max_tokens)
+        self.max_tokens = max(1, int(max_tokens))
+        self.tokens_per_second = max(0.01, float(tokens_per_second))
+        self._tokens = float(self.max_tokens)
         self._last_refill = time.monotonic()
         self._lock = threading.Lock()
         self._total_waits = 0
@@ -37,12 +37,14 @@ class TokenBucketRateLimiter:
         )
         self._last_refill = now
 
-    def acquire(self, tokens: int = 1, timeout: float = 30.0) -> bool:
+    def acquire(self, tokens: int = 1, timeout: Optional[float] = None) -> bool:
         """
         Acquire tokens, blocking until available or timeout.
+        If timeout is None, waits indefinitely.
         Returns True if acquired, False if timed out.
         """
-        deadline = time.monotonic() + timeout
+        tokens = max(1, int(tokens))
+        deadline = None if timeout is None else (time.monotonic() + max(0.0, timeout))
         waited = False
         wait_start = time.monotonic()
 
@@ -60,19 +62,20 @@ class TokenBucketRateLimiter:
                         )
                     return True
 
-            if time.monotonic() >= deadline:
+            if deadline is not None and time.monotonic() >= deadline:
                 logger.warning(
                     f"Rate limiter '{self.name}': timeout after {timeout}s"
                 )
                 return False
 
             waited = True
-            # Sleep a short interval before retrying
-            sleep_time = min(0.1, max(0.01, (tokens - self._tokens) / self.tokens_per_second))
+            missing_tokens = max(0.0, tokens - self._tokens)
+            sleep_time = min(0.1, max(0.01, missing_tokens / self.tokens_per_second))
             time.sleep(sleep_time)
 
     def try_acquire(self, tokens: int = 1) -> bool:
         """Non-blocking acquire. Returns True if tokens available."""
+        tokens = max(1, int(tokens))
         with self._lock:
             self._refill()
             if self._tokens >= tokens:

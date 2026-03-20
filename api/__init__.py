@@ -3,7 +3,7 @@ API Server package for Hyperliquid Trading Bot Dashboard.
 Assembles Flask app from modular route blueprints.
 """
 
-from flask import Flask
+from flask import Flask, jsonify
 from flask_cors import CORS
 
 from api.config import CORS_ORIGINS, SECURITY_HEADERS
@@ -33,6 +33,19 @@ def create_app() -> Flask:
         for header, value in SECURITY_HEADERS.items():
             response.headers[header] = value
         return response
+
+    # Uniform JSON error responses
+    @app.errorhandler(404)
+    def not_found(_error):
+        return jsonify({"error": "not_found"}), 404
+
+    @app.errorhandler(405)
+    def method_not_allowed(_error):
+        return jsonify({"error": "method_not_allowed"}), 405
+
+    @app.errorhandler(500)
+    def internal_error(_error):
+        return jsonify({"error": "internal_error"}), 500
 
     # Register blueprints
     app.register_blueprint(health_bp)
