@@ -7,7 +7,7 @@
 ### 1. Installa
 ```bash
 pip install -r requirements.txt
-cd frontend && npm install && cd ..
+npm install
 ```
 
 ### 2. Configura .env (COPIA E MODIFICA)
@@ -43,29 +43,28 @@ python hyperliquid_bot_executable_orders.py
 python api_server.py
 
 # TERMINALE 3: DASHBOARD
-cd frontend && npm run dev
+npm run dev
 ```
 
 ✅ **Dashboard**: [http://localhost:3000](http://localhost:3000)
 
-## ✅ DASHBOARD_API_KEY AUTO-FIX
+## ✅ DASHBOARD_API_KEY CHECK
 
-**Il tuo errore è RISOLTO**:
+Assicurati che `.env` contenga **la stessa chiave** in entrambe le variabili:
 ```
-🚀 DASHBOARD_API_KEY AUTO-GENERATED (add to .env):
-   DASHBOARD_API_KEY=abc123XYZ-super-secure-key-456def789
-   VITE_DASHBOARD_API_KEY=abc123XYZ-super-secure-key-456def789
+DASHBOARD_API_KEY=...
+VITE_DASHBOARD_API_KEY=...
 ```
 
-**COPIA la chiave generata nel tuo `.env`** (stessa per entrambe le righe) e **riavvia** `api_server.py`.
+Poi riavvia `api_server.py` e `npm run dev`.
 
 ## 🛠️ Risoluzione Problemi Comuni
 
 | ❌ Errore | ✅ Soluzione |
 |-----------|-------------|
-| `DASHBOARD_API_KEY not set` | Copia chiave generata da log → `.env` → riavvia |
-| Dashboard vuota | `python api_server.py` (Terminale 2) |
-| 401 Unauthorized | **STESSA CHIAVE** in `DASHBOARD_API_KEY` + `VITE_DASHBOARD_API_KEY` |
+| `DASHBOARD_API_KEY not set` | Imposta `DASHBOARD_API_KEY` e `VITE_DASHBOARD_API_KEY` uguali nel `.env` |
+| Dashboard vuota | Avvia `python api_server.py` (Terminale 2) |
+| 401 Unauthorized | Verifica che la chiave sia uguale tra backend e frontend |
 | No trades | `EXECUTION_MODE=live` + `ENABLE_MAINNET_TRADING=true` |
 
 ## 📊 Dashboard Live
@@ -84,7 +83,7 @@ cd frontend && npm run dev
 ```
 # MODALITÀ TRADING
 EXECUTION_MODE=paper     # paper (sicuro) / live (reale)
-ENABLE_MAINNET_TRADING=false  # ⚠️ true = SOLDI VERTI!
+ENABLE_MAINNET_TRADING=false  # ⚠️ true = SOLDI VERI!
 
 # RISCHIO
 MAX_DRAWDOWN_PCT=0.12    # Stop 12%
@@ -122,9 +121,9 @@ python check_current_positions.py     # Vedi posizioni
 
 ## 🏃‍♂️ Production (Background)
 ```bash
-python hyperliquid_bot_executable_orders.py 
+python hyperliquid_bot_executable_orders.py
 python api_server.py
-cd frontend && npm run dev
+npm run dev
 ```
 
 **Stop**: `Ctrl+C` o `kill -SIGTERM <pid>`

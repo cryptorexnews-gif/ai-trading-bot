@@ -202,9 +202,13 @@ class RiskManager:
         existing_margin = Decimal("0")
         if coin in portfolio.positions:
             pos = portfolio.positions[coin]
-            existing_size = abs(Decimal(str(pos["size"])))
-            existing_price = Decimal(str(pos.get("entry_price", price)))
-            existing_margin = (existing_size * existing_price) / Decimal(str(pos.get("leverage", 1)))
+            # Prefer real margin data from exchange snapshot
+            existing_margin = Decimal(str(pos.get("margin_used", "0")))
+            if existing_margin <= 0:
+                # Fallback if margin_used is unavailable
+                existing_size = abs(Decimal(str(pos.get("size", "0"))))
+                existing_price = Decimal(str(pos.get("entry_price", price)))
+                existing_margin = existing_size * existing_price
 
         new_margin_usage = (portfolio.margin_usage * portfolio.total_balance + margin_needed - existing_margin) / portfolio.total_balance
 

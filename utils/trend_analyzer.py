@@ -14,10 +14,10 @@ class TrendAnalyzer:
 
     def __init__(self, data_fetcher: HyperliquidDataFetcher):
         self.data_fetcher = data_fetcher
-        # Cache per analisi trend (1 giorno)
+        # Cache trend analysis (15 minutes)
         self._trend_cache: Dict[str, Dict[str, Any]] = {}
         self._trend_cache_at: Dict[str, float] = {}
-        self._trend_cache_ttl: float = 86400.0  # 1 giorno
+        self._trend_cache_ttl: float = 900.0  # 15 minuti
 
     @staticmethod
     def _ema_trend_short_mid(short_ema: Decimal, mid_ema: Decimal) -> str:
@@ -85,6 +85,11 @@ class TrendAnalyzer:
         avg_volume = sum(intraday_volumes[-20:]) / Decimal(str(min(20, len(intraday_volumes)))) if intraday_volumes else Decimal("0")
         volume_ratio = (current_volume / avg_volume) if avg_volume > 0 else Decimal("1")
 
+        # 24h volume (sum of last 24 hourly candles)
+        volume_24h = Decimal("0")
+        if intraday_volumes:
+            volume_24h = sum(intraday_volumes[-24:])
+
         # BB position (0-1 scale)
         current_price = intraday_closes[-1]
         bb_upper = bollinger_1h["upper"][-1] if bollinger_1h["upper"] else current_price
@@ -133,7 +138,6 @@ class TrendAnalyzer:
         # 1D timeframe analysis (main trend)
         long_term_context = {}
         daily_trend = "neutral"
-        daily_closes = []
         if daily_candles and len(daily_candles) >= 50:
             daily_closes = [c["close"] for c in daily_candles]
             daily_highs = [c["high"] for c in daily_candles]
@@ -190,7 +194,7 @@ class TrendAnalyzer:
         result = {
             "current_price": current_price,
             "change_24h": change_24h,
-            "volume_24h": current_volume,
+            "volume_24h": volume_24h,
             "funding_rate": Decimal(funding_data.get("funding_rate", "0")),
             "trend_direction": overall_direction,
             "trend_strength": int(trend_strength),

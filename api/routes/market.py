@@ -21,7 +21,7 @@ def _validate_coin(coin_raw: str) -> str:
     if not COIN_PATTERN.match(coin):
         return ""
     if coin not in KNOWN_TRADING_PAIRS:
-        return ""
+        logger.info(f"Coin {coin} non presente in TRADING_PAIRS env, tentativo comunque consentito")
     return coin
 
 

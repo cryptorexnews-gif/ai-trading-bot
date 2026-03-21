@@ -210,30 +210,30 @@ class HyperliquidExchangeClient:
 
     def get_tick_size_and_precision(self, asset_id: int) -> Tuple[Decimal, int]:
         meta = self.get_meta(force_refresh=False)
+        if meta is None:
+            return (Decimal("0.01"), 2)
 
-        if meta is not None:
-            universe = meta.get("universe", [])
-            if 0 <= asset_id < len(universe):
-                asset = universe[asset_id]
-                sz_decimals = asset.get("szDecimals")
-                if sz_decimals is not None:
-                    precision = int(sz_decimals)
-                    tick_size = Decimal("1").scaleb(-precision) if precision > 0 else Decimal("1")
-                    return tick_size, precision
+        universe = meta.get("universe", [])
+        if not (0 <= asset_id < len(universe)):
+            return (Decimal("0.01"), 2)
 
+        coin = universe[asset_id].get("name", "")
         mids = self.get_all_mids()
-        if mids is not None and meta is not None:
-            universe = meta.get("universe", [])
-            if 0 <= asset_id < len(universe):
-                coin = universe[asset_id].get("name", "")
-                raw_price = str(mids.get(coin, "0"))
-                if "." in raw_price:
-                    right_side = raw_price.rstrip("0").split(".")[1]
-                    decimals = len(right_side) if right_side else 0
-                else:
-                    decimals = 0
-                tick_size = Decimal("1").scaleb(-decimals) if decimals > 0 else Decimal("1")
-                return tick_size, decimals
+
+        # Price precision should be derived from market price format (allMids),
+        # not from szDecimals (which is size precision).
+        if mids is not None and coin in mids:
+            raw_price = str(mids.get(coin, "0"))
+            if "." in raw_price:
+                right_side = raw_price.rstrip("0").split(".")[1]
+                decimals = len(right_side) if right_side else 0
+            else:
+                decimals = 0
+
+            # Keep a safe minimum precision for liquid instruments
+            decimals = max(1, min(decimals, 8))
+            tick_size = Decimal("1").scaleb(-decimals) if decimals > 0 else Decimal("1")
+            return tick_size, decimals
 
         default_tick_sizes: Dict[int, Tuple[Decimal, int]] = {
             0: (Decimal("0.1"), 1), 1: (Decimal("0.01"), 2),

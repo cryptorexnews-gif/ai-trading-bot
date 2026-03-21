@@ -394,7 +394,7 @@ Respond with ONLY this JSON (no markdown, no extra text):
             "model": self.model,
             "messages": [{"role": "user", "content": prompt}],
             "max_tokens": self.max_tokens,
-            "temperature": self.temperature,
+            "temperature": float(self.temperature),
         }
 
         def _do_request():
