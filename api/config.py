@@ -86,3 +86,4 @@ _pairs_raw = os.getenv(
     "BTC,ETH,SOL,BNB,ADA,DOGE,XRP,AVAX,LINK,SUI,ARB,OP,NEAR,WIF,PEPE,INJ,TIA,SEI,RENDER,FET"
 )
 KNOWN_TRADING_PAIRS = {p.strip().upper() for p in _pairs_raw.split(",") if p.strip()}
+KNOWN_TRADING_PAIRS.add("BTC")
