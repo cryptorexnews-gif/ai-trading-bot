@@ -230,7 +230,7 @@ def test_wallet_balance() -> bool:
 def test_openrouter() -> bool:
     print_header("6. OPENROUTER (LLM)")
     api_key = os.getenv("OPENROUTER_API_KEY", "")
-    model = os.getenv("LLM_MODEL", "deepseek/deepseek-v3.2")
+    model = os.getenv("LLM_MODEL", "anthropic/claude-opus-4.6")
     if not api_key:
         print_warn("No API key → LLM disabled (fallback hold)")
         return True

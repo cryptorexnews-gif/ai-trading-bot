@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 
 class LLMEngine:
     """
-    LLM Engine using DeepSeek v3.2 via OpenRouter for trend trading decisions.
+    LLM Engine using Claude Opus 4.6 via OpenRouter for trend trading decisions.
     All market data comes from Hyperliquid API; no external data sources.
 
     Security: The API key is stored only in the session headers and never logged.

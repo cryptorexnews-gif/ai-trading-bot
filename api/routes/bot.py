@@ -172,7 +172,7 @@ def config():
         return jsonify({
             "execution_mode": os.getenv("EXECUTION_MODE", "paper"),
             "enable_mainnet_trading": os.getenv("ENABLE_MAINNET_TRADING", "false"),
-            "llm_model": os.getenv("LLM_MODEL", "deepseek/deepseek-v3.2"),
+            "llm_model": os.getenv("LLM_MODEL", "anthropic/claude-opus-4.6"),
             "max_leverage": os.getenv("HARD_MAX_LEVERAGE", "10"),
             "max_drawdown_pct": os.getenv("MAX_DRAWDOWN_PCT", "0.15"),
             "default_sl_pct": os.getenv("TREND_SL_PCT", "0.04"),
