@@ -6,6 +6,7 @@ Testa TUTTO: deps, env, wallet, API, LLM, config, frontend, readiness score.
 Usage: python scripts/test_connection.py
 """
 
+import importlib
 import os
 import sys
 import subprocess
@@ -99,13 +100,10 @@ def test_dependencies() -> bool:
     ok_count = 0
     for module_name, pip_name in required:
         try:
-            parts = module_name.split(".")
-            mod = __import__(parts[0])
-            for part in parts[1:]:
-                mod = getattr(mod, part)
+            importlib.import_module(module_name)
             print_ok(f"{pip_name}")
             ok_count += 1
-        except (ImportError, AttributeError):
+        except ImportError:
             print_fail(f"{pip_name} mancante")
     print_info(f"{ok_count}/{len(required)} deps OK")
     return ok_count == len(required)
