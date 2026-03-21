@@ -316,6 +316,17 @@ class CycleOrchestrator:
             f"leverage={decision['leverage']}, confidence={decision['confidence']}"
         )
 
+        max_allowed_leverage = max(1, int(self.cfg.hard_max_leverage))
+        requested_leverage = int(decision.get("leverage", 1))
+        if requested_leverage > max_allowed_leverage:
+            logger.info(
+                f"{coin} leverage adjusted: {requested_leverage}x -> {max_allowed_leverage}x "
+                f"(current risk cap)"
+            )
+            decision["leverage"] = max_allowed_leverage
+        elif requested_leverage < 1:
+            decision["leverage"] = 1
+
         if not corr_ok and decision["action"] in ["buy", "sell", "increase_position"]:
             logger.info(f"{coin} blocked by correlation risk: {corr_reason}")
             self.metrics.increment("risk_rejections_total")
