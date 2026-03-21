@@ -4,6 +4,7 @@ import { useApi } from '../hooks/useApi'
 import ConnectionStatus from '../components/ConnectionStatus'
 import DrawdownBar from '../components/DrawdownBar'
 import StatCard from '../components/StatCard'
+import TradingView from '../components/TradingView'
 
 function safeNum(v, fallback = 0) {
   const n = parseFloat(v)
@@ -21,6 +22,7 @@ export default function DashboardPage() {
   const metrics = statusData?.metrics || {}
   const stateInfo = statusData?.state || {}
   const perfSummary = perfData?.summary || {}
+  const tradingPairs = configData?.trading_pairs || []
 
   const balance = safeNum(portfolio.total_balance)
   const available = safeNum(portfolio.available_balance)
@@ -43,6 +45,8 @@ export default function DashboardPage() {
       </div>
 
       <DrawdownBar peakValue={stateInfo.peak_portfolio_value} currentBalance={balance} maxDrawdownPct={maxDrawdown} />
+
+      <TradingView tradingPairs={tradingPairs} />
     </div>
   )
 }
