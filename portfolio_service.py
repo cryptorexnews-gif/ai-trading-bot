@@ -34,7 +34,14 @@ class PortfolioService:
 
         margin_summary = user_state.get("marginSummary", {})
         total_balance = Decimal(str(margin_summary.get("accountValue", "0")))
-        available_balance = Decimal(str(margin_summary.get("withdrawable", "0")))
+        available_balance = Decimal(
+            str(
+                user_state.get(
+                    "withdrawable",
+                    margin_summary.get("withdrawable", "0")
+                )
+            )
+        )
         total_margin_used = Decimal(str(margin_summary.get("totalMarginUsed", "0")))
         margin_usage = (total_margin_used / total_balance) if total_balance > 0 else Decimal("0")
 
