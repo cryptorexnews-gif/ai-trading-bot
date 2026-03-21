@@ -68,14 +68,13 @@ def main() -> None:
         f"🚀 Starting API server on http://{host}:{port} "
         f"(mode={execution_mode}, debug={debug}, auth={auth_mode}, CORS: {CORS_ORIGINS})"
     )
-    print(f"\n✅ API Server ready: http://{host}:{port}")
+    logger.info(f"API Server ready: http://{host}:{port}")
     if allow_localhost_bypass and loopback_bound and execution_mode != "live":
-        print("   Local loopback requests: ALLOWED without API key")
-        print("   Non-loopback requests: API key required")
+        logger.info("Local loopback requests: ALLOWED without API key")
+        logger.info("Non-loopback requests: API key required")
     else:
-        print("   API key required for protected endpoints")
-    print("   Test: /api/health")
-    print()
+        logger.info("API key required for protected endpoints")
+    logger.info("Health endpoint available at /api/health")
 
     app.run(host=host, port=port, debug=debug, use_reloader=False)
 

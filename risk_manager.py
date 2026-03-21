@@ -139,6 +139,11 @@ class RiskManager:
             if self.max_order_notional_usd > 0 and notional > self.max_order_notional_usd:
                 return False, "max_order_notional_exceeded"
 
+            if self.max_order_margin_pct > 0 and portfolio.total_balance > 0:
+                max_margin_allowed = portfolio.total_balance * self.max_order_margin_pct
+                if margin_needed > max_margin_allowed:
+                    return False, "order_margin_pct_exceeded"
+
             if margin_needed > portfolio.available_balance:
                 return False, "insufficient_available_balance"
 

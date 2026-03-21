@@ -4,7 +4,6 @@ Extracted from the main bot to enable independent testing.
 """
 
 import logging
-from decimal import Decimal
 
 from exchange_client import HyperliquidExchangeClient
 from models import PortfolioState
@@ -24,13 +23,7 @@ class PortfolioService:
         """Fetch current portfolio state from exchange."""
         user_state = self.exchange_client.get_user_state(self.wallet_address)
         if not user_state:
-            logger.warning("Failed to get user state, returning empty portfolio")
-            return PortfolioState(
-                total_balance=Decimal("0"),
-                available_balance=Decimal("0"),
-                margin_usage=Decimal("0"),
-                positions={}
-            )
+            raise RuntimeError("portfolio_state_unavailable_from_exchange")
 
         balances = get_account_balances(user_state)
         positions = get_open_positions(user_state)

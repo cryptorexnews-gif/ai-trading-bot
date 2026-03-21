@@ -143,6 +143,25 @@ def test_margin_usage_too_high():
     assert reason == "margin_usage_too_high"
 
 
+def test_order_margin_pct_exceeded():
+    rm = _make_risk_manager(max_order_margin_pct=Decimal("0.1"))
+    ps = _make_portfolio(balance="1000", available="1000")
+    order = {"action": "buy", "size": Decimal("0.02"), "leverage": 5, "confidence": 0.9}
+    # Margin needed = 0.02 * 50000 / 5 = 200, max allowed by pct = 100
+    ok, reason = rm.check_order("BTC", order, Decimal("50000"), ps, {}, Decimal("0"), time.time())
+    assert ok is False
+    assert reason == "order_margin_pct_exceeded"
+
+
+def test_order_margin_pct_ok():
+    rm = _make_risk_manager(max_order_margin_pct=Decimal("0.2"))
+    ps = _make_portfolio(balance="1000", available="1000")
+    order = {"action": "buy", "size": Decimal("0.01"), "leverage": 5, "confidence": 0.9}
+    # Margin needed = 100, max allowed by pct = 200
+    ok, reason = rm.check_order("BTC", order, Decimal("50000"), ps, {}, Decimal("0"), time.time())
+    assert ok is True
+
+
 # ─── Position conflict ────────────────────────────────────────────────────────
 
 def test_conflict_buy_while_short():

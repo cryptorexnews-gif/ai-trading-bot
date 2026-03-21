@@ -1,6 +1,6 @@
 # 🤖 Hyperliquid Trading Bot
 
-**AI-Powered Trading Bot for Hyperliquid** | DeepSeek v3.2 | Real-time Dashboard
+**AI-Powered Trading Bot for Hyperliquid** | Claude Opus 4.6 | Real-time Dashboard
 
 ## 🚀 QUICK START (3 MINUTI)
 
@@ -20,7 +20,6 @@ HYPERLIQUID_WALLET_ADDRESS=0xIlTuoWallet
 HYPERLIQUID_PRIVATE_KEY=0xLaTuaChiavePrivata
 OPENROUTER_API_KEY=sk-or-LaTuaChiaveOpenRouter
 DASHBOARD_API_KEY=hyperliquid123-super-secure-key-456
-VITE_DASHBOARD_API_KEY=hyperliquid123-super-secure-key-456  # STESSA CHIAVE!
 ```
 
 ### 3. Test Configurazione
@@ -50,11 +49,12 @@ npm run dev
 
 ## ✅ DASHBOARD_API_KEY CHECK
 
-Assicurati che `.env` contenga **la stessa chiave** in entrambe le variabili:
+Assicurati che `.env` contenga:
 ```
 DASHBOARD_API_KEY=...
-VITE_DASHBOARD_API_KEY=...
 ```
+
+In sviluppo, Vite inoltra automaticamente questa chiave all’API backend via proxy (`X-API-Key`).
 
 Poi riavvia `api_server.py` e `npm run dev`.
 
@@ -62,9 +62,9 @@ Poi riavvia `api_server.py` e `npm run dev`.
 
 | ❌ Errore | ✅ Soluzione |
 |-----------|-------------|
-| `DASHBOARD_API_KEY not set` | Imposta `DASHBOARD_API_KEY` e `VITE_DASHBOARD_API_KEY` uguali nel `.env` |
+| `DASHBOARD_API_KEY not set` | Imposta `DASHBOARD_API_KEY` nel `.env` |
 | Dashboard vuota | Avvia `python api_server.py` (Terminale 2) |
-| 401 Unauthorized | Verifica che la chiave sia uguale tra backend e frontend |
+| 401 Unauthorized | Verifica `DASHBOARD_API_KEY` e riavvia backend/frontend |
 | No trades | `EXECUTION_MODE=live` + `ENABLE_MAINNET_TRADING=true` |
 
 ## 📊 Dashboard Live
@@ -129,7 +129,7 @@ npm run dev
 **Stop**: `Ctrl+C` o `kill -SIGTERM <pid>`
 
 ## 📈 Costi
-- **LLM**: ~$0.03/call → ~$10/giorno (20 pairs)
+- **LLM**: dipende dal modello e dal numero di chiamate
 - **Hyperliquid**: Fee normali maker/taker
 
 **Scalabile**: `DEFAULT_CYCLE_SEC=300` → dimezza costi.

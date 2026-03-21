@@ -25,15 +25,15 @@ class LLMEngine:
         self,
         api_key: str,
         base_url: str = "https://openrouter.ai/api/v1",
-        model: str = "deepseek/deepseek-v3.2",
+        model: str = "anthropic/claude-opus-4.6",
         max_tokens: int = 8192,
-        temperature: float = 0.15
+        temperature: float = 0.2
     ):
         self.base_url = base_url
         self.model = model
         self.max_tokens = max_tokens
         self.temperature = temperature
-        self.request_timeout = 120
+        self.request_timeout = 90
         self.max_retries = 2
 
         # Plain session without retry adapter — retry_request handles retries
