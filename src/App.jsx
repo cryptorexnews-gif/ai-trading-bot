@@ -31,7 +31,6 @@ export default function App() {
   const { data: perfData } = useApi('/performance', 10000)
   const { data: logsData } = useApi('/logs?limit=50', 8000)
   const { data: configData } = useApi('/config', 30000)
-  const { data: runtimeData } = useApi('/runtime-config', 15000)
   const { data: managedData } = useApi('/managed-positions', 5000)
 
   const bot = statusData?.bot || {}
@@ -51,11 +50,8 @@ export default function App() {
   const isRunning = bot.is_running || false
   const mode = bot.execution_mode || configData?.execution_mode || 'paper'
   const maxDrawdown = parseFloat(configData?.max_drawdown_pct || '0.15')
-
-  const runtimePairs = runtimeData?.runtime_config?.trading_pairs || []
-  const configPairs = configData?.trading_pairs || []
-  const tradingPairs = runtimePairs.length > 0 ? runtimePairs : configPairs
-  const tradingPairsCount = tradingPairs.length
+  const tradingPairs = configData?.trading_pairs || []
+  const tradingPairsCount = configData?.trading_pairs_count || tradingPairs.length
 
   const balance = safeNum(portfolio.total_balance)
   const available = safeNum(portfolio.available_balance)
