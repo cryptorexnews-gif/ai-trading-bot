@@ -6,11 +6,32 @@ import CandlestickChart from './trading/CandlestickChart'
 import ChartSkeleton from './trading/ChartSkeleton'
 
 const DEFAULT_SAFE_COINS = ['BTC', 'ETH']
+const DEFAULT_MARKET_COINS = [
+  'BTC', 'ETH', 'SOL', 'BNB', 'XRP', 'ADA', 'DOGE', 'AVAX', 'LINK', 'SUI',
+  'ARB', 'OP', 'NEAR', 'WIF', 'PEPE', 'INJ', 'TIA', 'SEI', 'RENDER', 'FET'
+]
 const CHART_HEIGHT = 500
 
 function safeNum(v, fallback = 0) {
   if (v == null || isNaN(v)) return fallback
   return Number(v)
+}
+
+function mergeCoins(...coinLists) {
+  const merged = []
+  const seen = new Set()
+
+  for (const list of coinLists) {
+    if (!Array.isArray(list)) continue
+    for (const coin of list) {
+      const normalized = String(coin || '').trim().toUpperCase()
+      if (!normalized || seen.has(normalized)) continue
+      seen.add(normalized)
+      merged.push(normalized)
+    }
+  }
+
+  return merged.length > 0 ? merged : DEFAULT_SAFE_COINS
 }
 
 export default function TradingView({ tradingPairs }) {
@@ -27,6 +48,9 @@ export default function TradingView({ tradingPairs }) {
 
   useEffect(() => {
     const fetchConfig = async () => {
+      const baseCoinsFromProps = Array.isArray(tradingPairs) ? tradingPairs : []
+      let fetchedPairs = []
+
       try {
         const res = await fetch(`${apiBase}/config`, {
           headers: getHeaders(),
@@ -35,19 +59,24 @@ export default function TradingView({ tradingPairs }) {
         })
         if (res.ok) {
           const json = await res.json()
-          if (json.trading_pairs && json.trading_pairs.length > 0) {
-            setCoins(json.trading_pairs)
-            if (!json.trading_pairs.includes(selectedCoin)) {
-              setSelectedCoin(json.trading_pairs[0])
-            }
+          if (Array.isArray(json.trading_pairs)) {
+            fetchedPairs = json.trading_pairs
           }
         }
       } catch (err) {
         console.warn('Config fetch failed, using defaults:', err.message)
       }
+
+      const merged = mergeCoins(baseCoinsFromProps, fetchedPairs, DEFAULT_MARKET_COINS)
+      setCoins(merged)
+
+      if (!merged.includes(selectedCoin)) {
+        setSelectedCoin(merged[0])
+      }
     }
+
     fetchConfig()
-  }, [apiBase, selectedCoin])
+  }, [apiBase, selectedCoin, tradingPairs])
 
   const fetchCandles = useCallback(async () => {
     console.log(`Fetching candles for ${selectedCoin} ${interval}`)
