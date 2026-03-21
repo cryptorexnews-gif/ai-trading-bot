@@ -147,7 +147,6 @@ class CycleOrchestrator:
             side = "sell" if pos_size > 0 else "buy"
             close_size = abs(pos_size)
 
-            # Rate limit the close order
             self.hl_rate_limiter.acquire(1)
             result = self.exchange_client.place_order(coin, side, close_size, current_price)
 
@@ -226,7 +225,6 @@ class CycleOrchestrator:
                 }
                 self.state_store.add_trade_record(state, trade_record)
                 self.state_store.save_state(state)
-                # Refresh portfolio after emergency close
                 return self._fetch_portfolio()
             else:
                 logger.error(f"Emergency close FAILED for {worst_coin}: {result}")
@@ -290,7 +288,6 @@ class CycleOrchestrator:
         all_mids: Optional[Dict], recent_trades: List, correlations: Dict
     ) -> Optional[Dict[str, Any]]:
         """Process a single coin: fetch data → LLM → risk check → execute."""
-        # Fetch market data
         self.hl_rate_limiter.acquire(3)
         tech_data = technical_fetcher.get_technical_indicators(coin)
         if not tech_data:
@@ -305,14 +302,12 @@ class CycleOrchestrator:
 
         self._log_coin_indicators(coin, market_data, tech_data)
 
-        # Correlation check
         corr_ok, corr_reason = self.correlation_engine.check_correlation_risk(
             coin, "buy", portfolio.positions, correlations
         )
         if not corr_ok:
             logger.info(f"{coin} correlation risk: {corr_reason}")
 
-        # Get LLM decision
         funding_data = technical_fetcher.get_funding_for_coin(coin)
         decision = self._get_decision(coin, market_data, portfolio, tech_data, all_mids, funding_data, recent_trades, peak, consecutive_losses)
 
@@ -321,33 +316,18 @@ class CycleOrchestrator:
             f"leverage={decision['leverage']}, confidence={decision['confidence']}"
         )
 
-        # Clamp leverage to active risk profile to avoid unnecessary risk rejections
-        requested_leverage = int(decision.get("leverage", 1))
-        max_allowed_leverage = int(self.cfg.hard_max_leverage)
-        clamped_leverage = max(1, min(requested_leverage, max_allowed_leverage))
-        if clamped_leverage != requested_leverage:
-            logger.info(
-                f"{coin} leverage adjusted {requested_leverage}x -> {clamped_leverage}x "
-                f"(profile max={max_allowed_leverage}x)"
-            )
-        decision["leverage"] = clamped_leverage
-
-        # Block correlated trades
         if not corr_ok and decision["action"] in ["buy", "sell", "increase_position"]:
             logger.info(f"{coin} blocked by correlation risk: {corr_reason}")
             self.metrics.increment("risk_rejections_total")
             return None
 
-        # Resolve min size
         min_size = self._resolve_min_size(coin)
         self.risk_manager.min_size_by_coin[coin] = min_size
 
-        # Volatility
         volatility = Decimal("0")
         if tech_data.get("intraday_atr", Decimal("0")) > 0 and market_data.last_price > 0:
             volatility = tech_data["intraday_atr"] / market_data.last_price
 
-        # Risk check
         risk_ok, risk_reason = self.risk_manager.check_order(
             coin, decision, market_data.last_price, portfolio,
             state.get("last_trade_timestamp_by_coin", {}),
@@ -358,14 +338,12 @@ class CycleOrchestrator:
             self.metrics.increment("risk_rejections_total")
             return None
 
-        # Execute
         snapshot = None
         if self.cfg.execution_mode == "live" and self.cfg.enable_mainnet_trading:
             snapshot = self.order_verifier.snapshot_position(self.cfg.wallet_address, coin)
 
         result = self.execution_engine.execute(coin, decision, market_data, portfolio.positions)
 
-        # Verify fill
         fill_status = "unknown"
         if snapshot and result["success"] and decision["action"] in ["buy", "sell", "increase_position"]:
             expected_side = "buy" if decision["action"] in ["buy", "increase_position"] else "sell"
@@ -378,7 +356,6 @@ class CycleOrchestrator:
                 result["success"] = False
                 result["reason"] = "order_not_filled"
 
-        # Record trade
         trade_record = {
             "timestamp": time.time(), "coin": coin, "action": decision["action"],
             "size": str(decision["size"]), "price": str(market_data.last_price),

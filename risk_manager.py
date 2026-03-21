@@ -1,3 +1,4 @@
+= 1.">
 import logging
 from decimal import Decimal
 from typing import Any, Dict, Optional, Tuple
@@ -88,7 +89,8 @@ class RiskManager:
             if confidence < self.min_confidence_manage:
                 return False, "confidence_manage_too_low"
 
-        if leverage < 1 or leverage > self.hard_max_leverage:
+        # Lascia libertà all'LLM sulla leva: validiamo solo leverage minimo.
+        if leverage < 1:
             return False, "leverage_out_of_bounds"
 
         existing_size = Decimal("0")
