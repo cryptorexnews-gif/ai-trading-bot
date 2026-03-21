@@ -109,6 +109,17 @@ class BotConfig:
         self.break_even_offset_pct = _env_decimal("BREAK_EVEN_OFFSET_PCT", "0.001")
         self.correlation_threshold = _env_decimal("CORRELATION_THRESHOLD", "0.7")
 
+        self._normalize_runtime_values()
+
+    def _normalize_runtime_values(self) -> None:
+        """Apply safe minimums to avoid fragile live configuration."""
+        if self.min_trend_duration_hours < 24:
+            self.min_trend_duration_hours = 24
+
+        # If cap is set extremely low, disable it to avoid constant false rejections.
+        if self.max_order_notional_usd > 0 and self.max_order_notional_usd < Decimal("10"):
+            self.max_order_notional_usd = Decimal("0")
+
     @classmethod
     def from_env(cls) -> "BotConfig":
         return cls()
