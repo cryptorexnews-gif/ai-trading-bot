@@ -210,7 +210,7 @@ def test_wallet_balance() -> bool:
         data = resp.json()
         margin = data.get("marginSummary", {})
         balance = float(margin.get("accountValue", 0))
-        available = float(margin.get("withdrawable", 0))
+        available = float(data.get("withdrawable", margin.get("withdrawable", 0)))
         print_ok(f"Balance: ${balance:.2f} | Available: ${available:.2f}")
         positions = [p for p in data.get("assetPositions", []) if float(p.get("position", {}).get("szi", 0)) != 0]
         if positions:

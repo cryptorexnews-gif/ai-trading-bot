@@ -178,20 +178,21 @@ def check_wallet_balance(exchange_client, wallet_address: str) -> HealthCheckRes
 
         margin_summary = state.get("marginSummary", {})
         total_balance = to_decimal(margin_summary.get("accountValue", 0))
+        withdrawable = to_decimal(state.get("withdrawable", margin_summary.get("withdrawable", 0)))
 
         if total_balance <= 0:
             return HealthCheckResult(
                 name="wallet_balance",
                 status=HealthStatus.UNHEALTHY,
                 message="Saldo wallet zero o negativo",
-                details={"balance": str(total_balance)}
+                details={"balance": str(total_balance), "withdrawable": str(withdrawable)}
             )
 
         return HealthCheckResult(
             name="wallet_balance",
             status=HealthStatus.HEALTHY,
             message="Saldo wallet positivo",
-            details={"balance": str(total_balance)}
+            details={"balance": str(total_balance), "withdrawable": str(withdrawable)}
         )
     except Exception as e:
         return HealthCheckResult(

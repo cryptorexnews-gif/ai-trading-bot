@@ -68,7 +68,7 @@ def main():
         margin = user_state["marginSummary"]
         total_account_value = Decimal(str(margin.get("accountValue", 0)))
         total_margin_used = Decimal(str(margin.get("totalMarginUsed", 0)))
-        withdrawable = Decimal(str(margin.get("withdrawable", 0)))
+        withdrawable = Decimal(str(user_state.get("withdrawable", margin.get("withdrawable", 0))))
 
         print(f"💰 Saldo Totale: ${total_account_value:.2f}")
         print(f"💳 Disponibile: ${withdrawable:.2f}")

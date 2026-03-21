@@ -225,7 +225,7 @@ def verify_wallet_balance():
         data = response.json()
         margin = data.get("marginSummary", {})
         balance = margin.get("accountValue", "0")
-        available = margin.get("withdrawable", "0")
+        available = data.get("withdrawable", margin.get("withdrawable", "0"))
         print(f"✅ Saldo: ${balance}")
         print(f"✅ Disponibile: ${available}")
         return True
