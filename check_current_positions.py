@@ -9,6 +9,8 @@ import requests
 from decimal import Decimal
 from dotenv import load_dotenv
 
+from utils.hyperliquid_state import get_account_balances, get_open_positions
+
 load_dotenv()
 
 WALLET_ADDRESS = os.getenv("HYPERLIQUID_WALLET_ADDRESS")
@@ -63,40 +65,35 @@ def main():
         print("❌ Impossibile recuperare stato utente")
         return
 
-    # Visualizza saldo
-    if "marginSummary" in user_state:
-        margin = user_state["marginSummary"]
-        total_account_value = Decimal(str(margin.get("accountValue", 0)))
-        total_margin_used = Decimal(str(margin.get("totalMarginUsed", 0)))
-        withdrawable = Decimal(str(user_state.get("withdrawable", margin.get("withdrawable", 0))))
+    balances = get_account_balances(user_state)
+    total_account_value = balances["total_balance"]
+    withdrawable = balances["available_balance"]
+    total_margin_used = balances["total_margin_used"]
 
-        print(f"💰 Saldo Totale: ${total_account_value:.2f}")
-        print(f"💳 Disponibile: ${withdrawable:.2f}")
-        print(f"📊 Margine Usato: ${total_margin_used:.2f}")
+    print(f"💰 Saldo Totale: ${total_account_value:.2f}")
+    print(f"💳 Disponibile: ${withdrawable:.2f}")
+    print(f"📊 Margine Usato: ${total_margin_used:.2f}")
 
-        if total_account_value > 0:
-            margin_usage = (total_margin_used / total_account_value) * 100
-            print(f"📈 Uso Margine: {margin_usage:.1f}%")
+    if total_account_value > 0:
+        margin_usage = (total_margin_used / total_account_value) * 100
+        print(f"📈 Uso Margine: {margin_usage:.1f}%")
 
     # Visualizza posizioni
     print("\n📊 POSIZIONI CORRENTI:")
-    positions = user_state.get("assetPositions", [])
+    positions = get_open_positions(user_state)
 
-    open_positions = 0
-    for position in positions:
-        position_data = position.get("position", {})
-        coin = position_data.get("coin", "Unknown")
-        size = Decimal(str(position_data.get("szi", 0)))
+    if not positions:
+        print("   Nessuna posizione aperta")
+    else:
+        for coin, pos in positions.items():
+            size = pos["size"]
+            entry_px = pos["entry_price"]
+            unrealized_pnl = pos["unrealized_pnl"]
+            margin_used = pos["margin_used"]
 
-        if size != 0:
-            open_positions += 1
-            entry_px = Decimal(str(position_data.get("entryPx", 0)))
-            unrealized_pnl = Decimal(str(position_data.get("unrealizedPnl", 0)))
-            margin_used = Decimal(str(position_data.get("marginUsed", 0)))
             position_value = abs(size * entry_px)
             leverage = position_value / margin_used if margin_used > 0 else Decimal("0")
 
-            # Ottieni prezzo mid corrente
             current_price = Decimal(str(mids.get(coin, "0"))) if mids and coin in mids else entry_px
             current_value = abs(size * current_price)
 
@@ -109,9 +106,6 @@ def main():
             print(f"     PnL Non Realizzato: ${unrealized_pnl:.4f}")
             print(f"     Margine Usato: ${margin_used:.4f}")
             print(f"     Leverage: {leverage:.2f}x")
-
-    if open_positions == 0:
-        print("   Nessuna posizione aperta")
 
     # Visualizza tassi funding per coin tracciate
     print("\n📊 TASSI FUNDING:")

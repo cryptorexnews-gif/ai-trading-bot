@@ -20,6 +20,8 @@ from dotenv import load_dotenv
 sys.path.insert(0, str(Path(__file__).parent.parent))
 load_dotenv()
 
+from utils.hyperliquid_state import get_account_balances
+
 # ANSI Colors
 GREEN = '\033[92m'
 RED = '\033[91m'
@@ -207,10 +209,12 @@ def test_wallet_balance() -> bool:
         if resp.status_code != 200:
             print_fail(f"HTTP {resp.status_code}")
             return False
+
         data = resp.json()
-        margin = data.get("marginSummary", {})
-        balance = float(margin.get("accountValue", 0))
-        available = float(data.get("withdrawable", margin.get("withdrawable", 0)))
+        balances = get_account_balances(data)
+        balance = float(balances["total_balance"])
+        available = float(balances["available_balance"])
+
         print_ok(f"Balance: ${balance:.2f} | Available: ${available:.2f}")
         positions = [p for p in data.get("assetPositions", []) if float(p.get("position", {}).get("szi", 0)) != 0]
         if positions:

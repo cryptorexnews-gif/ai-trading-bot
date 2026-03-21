@@ -16,6 +16,8 @@ from eth_account.messages import encode_typed_data
 import msgpack
 from Crypto.Hash import keccak
 
+from utils.hyperliquid_state import get_account_balances
+
 load_dotenv()
 
 # Security: Derive Account immediately, raw key is not stored
@@ -223,9 +225,9 @@ def verify_wallet_balance():
     response = requests.post(f"{BASE_URL}/info", json=payload, timeout=INFO_TIMEOUT)
     if response.status_code == 200:
         data = response.json()
-        margin = data.get("marginSummary", {})
-        balance = margin.get("accountValue", "0")
-        available = data.get("withdrawable", margin.get("withdrawable", "0"))
+        balances = get_account_balances(data)
+        balance = balances["total_balance"]
+        available = balances["available_balance"]
         print(f"✅ Saldo: ${balance}")
         print(f"✅ Disponibile: ${available}")
         return True

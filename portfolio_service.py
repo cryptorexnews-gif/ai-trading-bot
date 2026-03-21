@@ -5,10 +5,10 @@ Extracted from the main bot to enable independent testing.
 
 import logging
 from decimal import Decimal
-from typing import Any, Dict
 
 from exchange_client import HyperliquidExchangeClient
 from models import PortfolioState
+from utils.hyperliquid_state import get_account_balances, get_open_positions
 
 logger = logging.getLogger(__name__)
 
@@ -32,35 +32,12 @@ class PortfolioService:
                 positions={}
             )
 
-        margin_summary = user_state.get("marginSummary", {})
-        total_balance = Decimal(str(margin_summary.get("accountValue", "0")))
-        available_balance = Decimal(
-            str(
-                user_state.get(
-                    "withdrawable",
-                    margin_summary.get("withdrawable", "0")
-                )
-            )
-        )
-        total_margin_used = Decimal(str(margin_summary.get("totalMarginUsed", "0")))
-        margin_usage = (total_margin_used / total_balance) if total_balance > 0 else Decimal("0")
-
-        positions: Dict[str, Dict[str, Any]] = {}
-        for pos_wrapper in user_state.get("assetPositions", []):
-            pos = pos_wrapper.get("position", {})
-            coin = pos.get("coin", "")
-            size = Decimal(str(pos.get("szi", "0")))
-            if size != 0 and coin:
-                positions[coin] = {
-                    "size": size,
-                    "entry_price": Decimal(str(pos.get("entryPx", "0"))),
-                    "unrealized_pnl": Decimal(str(pos.get("unrealizedPnl", "0"))),
-                    "margin_used": Decimal(str(pos.get("marginUsed", "0"))),
-                }
+        balances = get_account_balances(user_state)
+        positions = get_open_positions(user_state)
 
         return PortfolioState(
-            total_balance=total_balance,
-            available_balance=available_balance,
-            margin_usage=margin_usage,
+            total_balance=balances["total_balance"],
+            available_balance=balances["available_balance"],
+            margin_usage=balances["margin_usage"],
             positions=positions
         )

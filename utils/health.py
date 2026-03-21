@@ -2,6 +2,7 @@ from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional
 
 from utils.decimals import to_decimal
+from utils.hyperliquid_state import get_account_balances
 
 
 class HealthStatus:
@@ -176,9 +177,9 @@ def check_wallet_balance(exchange_client, wallet_address: str) -> HealthCheckRes
                 message="Impossibile recuperare stato wallet"
             )
 
-        margin_summary = state.get("marginSummary", {})
-        total_balance = to_decimal(margin_summary.get("accountValue", 0))
-        withdrawable = to_decimal(state.get("withdrawable", margin_summary.get("withdrawable", 0)))
+        balances = get_account_balances(state)
+        total_balance = balances["total_balance"]
+        withdrawable = balances["available_balance"]
 
         if total_balance <= 0:
             return HealthCheckResult(
