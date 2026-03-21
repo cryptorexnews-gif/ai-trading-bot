@@ -313,7 +313,8 @@ class CycleOrchestrator:
 
         logger.info(
             f"{coin} decision: action={decision['action']}, size={decision['size']}, "
-            f"leverage={decision['leverage']}, confidence={decision['confidence']}"
+            f"leverage={decision['leverage']}, confidence={decision['confidence']}, "
+            f"sl_pct={decision.get('stop_loss_pct')}, tp_pct={decision.get('take_profit_pct')}"
         )
 
         if not corr_ok and decision["action"] in ["buy", "sell", "increase_position"]:
@@ -373,10 +374,17 @@ class CycleOrchestrator:
                 self.metrics.increment("trades_executed_total")
                 if decision["action"] in ["buy", "sell", "increase_position"]:
                     is_long = decision["action"] in ["buy", "increase_position"]
+                    sl_pct = decision.get("stop_loss_pct")
+                    tp_pct = decision.get("take_profit_pct")
+
                     self.position_manager.register_position(
-                        coin=coin, size=Decimal(str(decision["size"])),
-                        entry_price=market_data.last_price, is_long=is_long,
-                        leverage=decision["leverage"]
+                        coin=coin,
+                        size=Decimal(str(decision["size"])),
+                        entry_price=market_data.last_price,
+                        is_long=is_long,
+                        leverage=decision["leverage"],
+                        sl_pct=sl_pct if isinstance(sl_pct, Decimal) else None,
+                        tp_pct=tp_pct if isinstance(tp_pct, Decimal) else None,
                     )
                 self.notifier.notify_trade(trade_record)
                 logger.info(f"{coin} executed: reason={result['reason']}, notional=${notional}")
@@ -410,8 +418,13 @@ class CycleOrchestrator:
     @staticmethod
     def _fallback_decision() -> Dict[str, Any]:
         return {
-            "action": "hold", "size": Decimal("0"), "leverage": 1,
-            "confidence": 0.0, "reasoning": "LLM unavailable — safe fallback to hold"
+            "action": "hold",
+            "size": Decimal("0"),
+            "leverage": 1,
+            "confidence": 0.0,
+            "stop_loss_pct": None,
+            "take_profit_pct": None,
+            "reasoning": "LLM unavailable — safe fallback to hold"
         }
 
     def _log_coin_indicators(self, coin: str, market_data: MarketData, tech_data: Dict) -> None:

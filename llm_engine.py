@@ -262,22 +262,12 @@ ENTRY TIMING (1H timeframe):
 - Price above VWAP for longs, below VWAP for shorts
 - Bollinger Band position <30% for longs, >70% for shorts (reversion to mean)
 
-POSITION MANAGEMENT FOR TREND TRADING:
-- Initial Stop Loss: 5% from entry (wider for trend trades)
-- Take Profit: 10% minimum (1:2 risk/reward)
-- Break-even: Activate at +3% profit, move SL to entry +0.2%
-- Trailing Stop: Activate at +5% profit, 3% callback
-- Let winners run: If trend remains strong, consider moving TP to 15-20%
-- Exit if: 1D trend breaks (EMA21 crosses EMA50), or volume dries up on moves
-
-SIZING & RISK FOR TREND TRADES:
-- Maximum 2 open trend positions simultaneously
-- Position size: 2-4% of portfolio per trend trade
-- Leverage: 3-5x maximum (conservative for overnight holds)
-- Never exceed 40% portfolio exposure across all positions
-- Blue chips (BTC, ETH): Up to 5x leverage acceptable
-- Altcoins (SOL, AVAX, etc.): Max 3x leverage
-- Meme coins (WIF, PEPE): Avoid or max 2x leverage with tight SL
+STOP-LOSS / TAKE-PROFIT DECISION:
+- You MUST choose dynamic stop_loss_pct and take_profit_pct based on volatility and market structure.
+- Use ATR and trend strength to set distances.
+- In high volatility, use wider SL/TP; in low volatility, tighter levels.
+- Prefer minimum risk/reward around 1:1.5 unless setup quality is very low.
+- For HOLD actions, set stop_loss_pct and take_profit_pct to null.
 
 CRITICAL RULES FOR TREND TRADING:
 - DO NOT counter-trend trade (no buying in downtrend, no selling in uptrend)
@@ -302,6 +292,8 @@ Respond with ONLY this JSON (no markdown, no extra text):
   "size": 0.001,
   "leverage": 4,
   "confidence": 0.85,
+  "stop_loss_pct": 0.03,
+  "take_profit_pct": 0.06,
   "reasoning": "Trend analysis: [timeframe alignment] + [entry timing] + [risk assessment]"
 }}"""
         return prompt.strip()
@@ -340,14 +332,26 @@ Respond with ONLY this JSON (no markdown, no extra text):
             size_match = re.search(r'"size"\s*:\s*([\d.]+)', cleaned)
             leverage_match = re.search(r'"leverage"\s*:\s*(\d+)', cleaned)
             confidence_match = re.search(r'"confidence"\s*:\s*([\d.]+)', cleaned)
+            stop_loss_match = re.search(r'"stop_loss_pct"\s*:\s*(null|[\d.]+)', cleaned)
+            take_profit_match = re.search(r'"take_profit_pct"\s*:\s*(null|[\d.]+)', cleaned)
             reasoning_match = re.search(r'"reasoning"\s*:\s*"([^"]*(?:\\.[^"]*)*)"', cleaned)
 
             if action_match and size_match and leverage_match and confidence_match:
+                stop_loss_pct = None
+                take_profit_pct = None
+
+                if stop_loss_match and stop_loss_match.group(1) != "null":
+                    stop_loss_pct = float(stop_loss_match.group(1))
+                if take_profit_match and take_profit_match.group(1) != "null":
+                    take_profit_pct = float(take_profit_match.group(1))
+
                 return {
                     "action": action_match.group(1),
                     "size": float(size_match.group(1)),
                     "leverage": int(leverage_match.group(1)),
                     "confidence": float(confidence_match.group(1)),
+                    "stop_loss_pct": stop_loss_pct,
+                    "take_profit_pct": take_profit_pct,
                     "reasoning": reasoning_match.group(1) if reasoning_match else "Extracted from partial response"
                 }
         except (ValueError, AttributeError):
@@ -369,7 +373,8 @@ Respond with ONLY this JSON (no markdown, no extra text):
             logger.warning(f"Invalid action from LLM: '{action}'. Defaulting to hold.")
             return {
                 "action": "hold", "size": Decimal("0"), "leverage": 1,
-                "confidence": 0.0, "reasoning": f"Original action '{action}' invalid, defaulting to hold."
+                "confidence": 0.0, "stop_loss_pct": None, "take_profit_pct": None,
+                "reasoning": f"Original action '{action}' invalid, defaulting to hold."
             }
 
         confidence = float(parsed.get("confidence", 0))
@@ -383,9 +388,27 @@ Respond with ONLY this JSON (no markdown, no extra text):
         if size < 0:
             size = Decimal("0")
 
+        stop_loss_pct = None
+        take_profit_pct = None
+
+        if parsed.get("stop_loss_pct") is not None:
+            sl = Decimal(str(parsed.get("stop_loss_pct")))
+            if Decimal("0") < sl <= Decimal("1"):
+                stop_loss_pct = sl
+
+        if parsed.get("take_profit_pct") is not None:
+            tp = Decimal(str(parsed.get("take_profit_pct")))
+            if Decimal("0") < tp <= Decimal("1"):
+                take_profit_pct = tp
+
         return {
-            "action": action, "size": size, "leverage": leverage,
-            "confidence": confidence, "reasoning": str(parsed.get("reasoning", ""))
+            "action": action,
+            "size": size,
+            "leverage": leverage,
+            "confidence": confidence,
+            "stop_loss_pct": stop_loss_pct,
+            "take_profit_pct": take_profit_pct,
+            "reasoning": str(parsed.get("reasoning", ""))
         }
 
     def _call_openrouter(self, prompt: str) -> Optional[str]:
@@ -474,6 +497,7 @@ Respond with ONLY this JSON (no markdown, no extra text):
         logger.info(
             f"LLM decision for {market_data.coin}: "
             f"action={validated['action']}, size={validated['size']}, "
-            f"leverage={validated['leverage']}, confidence={validated['confidence']:.2f}"
+            f"leverage={validated['leverage']}, confidence={validated['confidence']:.2f}, "
+            f"sl_pct={validated.get('stop_loss_pct')}, tp_pct={validated.get('take_profit_pct')}"
         )
         return validated
