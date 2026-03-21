@@ -40,7 +40,7 @@ class BotConfig:
         self.base_url = _env("HYPERLIQUID_BASE_URL", "https://api.hyperliquid.xyz")
 
         self.openrouter_api_key = _env("OPENROUTER_API_KEY", "")
-        self.llm_model = _env("LLM_MODEL", "anthropic/claude-opus-4.6")
+        self.llm_model = _env("LLM_MODEL", "deepseek/deepseek-v3.2")
         self.llm_max_tokens = _env_int("LLM_MAX_TOKENS", 8192)
         self.llm_temperature = _env_decimal("LLM_TEMPERATURE", "0.15")
 

@@ -67,7 +67,7 @@ export default function App() {
             <div>
               <h1 className="text-xl font-bold">Hyperliquid Trading Bot</h1>
               <p className="text-[10px] text-gray-500">
-                Claude Opus 4.6 • {tradingPairsCount} pairs • SL/TP/Trailing/BE • Multi-TF
+                DeepSeek v3.2 • {tradingPairsCount} pairs • SL/TP/Trailing/BE • Multi-TF
               </p>
             </div>
           </div>
@@ -190,7 +190,7 @@ export default function App() {
         {/* Footer */}
         <footer className="text-center text-[10px] text-gray-600 py-4 border-t border-gray-800/50">
           <div className="mb-1">
-            Hyperliquid Trading Bot • {configData?.llm_model || 'claude-opus-4.6'} •
+            Hyperliquid Trading Bot • {configData?.llm_model || 'deepseek/deepseek-v3.2'} •
             {' '}{tradingPairsCount} pairs •
             {' '}SL: {((parseFloat(configData?.default_sl_pct || '0.03')) * 100).toFixed(0)}% •
             {' '}TP: {((parseFloat(configData?.default_tp_pct || '0.05')) * 100).toFixed(0)}% •

@@ -1,6 +1,6 @@
 # 🤖 Hyperliquid Trading Bot
 
-**AI-Powered Trading Bot for Hyperliquid** | Claude Opus 4.6 | Real-time Dashboard
+**AI-Powered Trading Bot for Hyperliquid** | DeepSeek v3.2 | Real-time Dashboard
 
 ## 🚀 QUICK START (3 MINUTI)
 
