@@ -4,8 +4,6 @@ import { useApi } from '../hooks/useApi'
 import ConnectionStatus from '../components/ConnectionStatus'
 import DrawdownBar from '../components/DrawdownBar'
 import StatCard from '../components/StatCard'
-import PositionsTable from '../components/PositionsTable'
-import ManagedPositions from '../components/ManagedPositions'
 
 function safeNum(v, fallback = 0) {
   const n = parseFloat(v)
@@ -17,15 +15,12 @@ export default function DashboardPage() {
   const { data: portfolioData } = useApi('/portfolio', 5000)
   const { data: perfData } = useApi('/performance', 10000)
   const { data: configData } = useApi('/config', 30000)
-  const { data: managedData } = useApi('/managed-positions', 5000)
 
   const bot = statusData?.bot || {}
   const portfolio = bot.portfolio || portfolioData?.portfolio || {}
   const metrics = statusData?.metrics || {}
   const stateInfo = statusData?.state || {}
   const perfSummary = perfData?.summary || {}
-  const positions = portfolio.positions || {}
-  const managedPositions = managedData?.managed_positions || []
 
   const balance = safeNum(portfolio.total_balance)
   const available = safeNum(portfolio.available_balance)
@@ -48,9 +43,6 @@ export default function DashboardPage() {
       </div>
 
       <DrawdownBar peakValue={stateInfo.peak_portfolio_value} currentBalance={balance} maxDrawdownPct={maxDrawdown} />
-
-      <PositionsTable positions={positions} />
-      <ManagedPositions positions={managedPositions} />
     </div>
   )
 }
