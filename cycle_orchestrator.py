@@ -321,6 +321,17 @@ class CycleOrchestrator:
             f"leverage={decision['leverage']}, confidence={decision['confidence']}"
         )
 
+        # Clamp leverage to active risk profile to avoid unnecessary risk rejections
+        requested_leverage = int(decision.get("leverage", 1))
+        max_allowed_leverage = int(self.cfg.hard_max_leverage)
+        clamped_leverage = max(1, min(requested_leverage, max_allowed_leverage))
+        if clamped_leverage != requested_leverage:
+            logger.info(
+                f"{coin} leverage adjusted {requested_leverage}x -> {clamped_leverage}x "
+                f"(profile max={max_allowed_leverage}x)"
+            )
+        decision["leverage"] = clamped_leverage
+
         # Block correlated trades
         if not corr_ok and decision["action"] in ["buy", "sell", "increase_position"]:
             logger.info(f"{coin} blocked by correlation risk: {corr_reason}")
