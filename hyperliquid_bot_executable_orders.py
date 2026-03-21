@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Hyperliquid Trading Bot — Production Entry Point
-Uses Claude Opus 4.6 via OpenRouter for AI-driven trading decisions.
+Uses DeepSeek v3.2 via OpenRouter for AI-driven trading decisions.
 All market data sourced exclusively from Hyperliquid API.
 
 Architecture:
@@ -168,7 +168,7 @@ class HyperliquidBot:
     def _calculate_adaptive_cycle(self) -> int:
         if not self.cfg.enable_adaptive_cycle:
             return self.cfg.default_cycle_sec
-        
+
         # Per trend trading 4H/1D, manteniamo ciclo fisso a 30 minuti
         # per timing ottimale su timeframe 1H
         return self.cfg.default_cycle_sec
@@ -364,7 +364,7 @@ class HyperliquidBot:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Hyperliquid Trading Bot — Claude Opus 4.6 - Trend 4H/1D Ultra-Conservativo")
+    parser = argparse.ArgumentParser(description="Hyperliquid Trading Bot — DeepSeek v3.2 - Trend 4H/1D Ultra-Conservativo")
     parser.add_argument("--single-cycle", action="store_true", help="Run single cycle and exit")
     args = parser.parse_args()
     bot = HyperliquidBot()
