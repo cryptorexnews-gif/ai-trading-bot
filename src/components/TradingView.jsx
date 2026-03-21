@@ -161,7 +161,7 @@ export default function TradingView({ tradingPairs }) {
     setFetchError(null)
 
     fetchCandles()
-    const candleTimer = window.setInterval(fetchCandles, 30000)
+    const candleTimer = window.setInterval(fetchCandles, 10000)
 
     return () => {
       mountedRef.current = false

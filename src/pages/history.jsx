@@ -5,8 +5,8 @@ import ExportButton from '../components/ExportButton'
 import TradeHistory from '../components/TradeHistory'
 
 export default function HistoryPage() {
-  const { data: tradesData } = useApi('/trades?limit=100', 10000)
-  const { data: perfData } = useApi('/performance', 10000)
+  const { data: tradesData } = useApi('/trades?limit=100', 4000)
+  const { data: perfData } = useApi('/performance', 4000)
 
   const trades = tradesData?.trades || []
   const equityCurve = perfData?.equity_curve || []

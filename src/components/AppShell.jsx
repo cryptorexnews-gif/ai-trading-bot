@@ -6,8 +6,8 @@ import StatusBadge from './StatusBadge'
 import PageNav from './PageNav'
 
 export default function AppShell() {
-  const { data: statusData, lastUpdated } = useApi('/status', 5000)
-  const { data: configData } = useApi('/config', 30000)
+  const { data: statusData, lastUpdated } = useApi('/status', 2000)
+  const { data: configData } = useApi('/config', 10000)
 
   const bot = statusData?.bot || {}
   const mode = bot.execution_mode || configData?.execution_mode || 'paper'
