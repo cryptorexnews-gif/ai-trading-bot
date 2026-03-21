@@ -17,6 +17,7 @@ import DrawdownBar from './components/DrawdownBar'
 import ConnectionStatus from './components/ConnectionStatus'
 import ExportButton from './components/ExportButton'
 import RuntimeControls from './components/RuntimeControls'
+import BotControlPanel from './components/BotControlPanel'
 
 function safeNum(v, fallback = 0) {
   const n = parseFloat(v)
@@ -161,6 +162,7 @@ export default function App() {
           </div>
         )}
 
+        <BotControlPanel />
         <RuntimeControls />
 
         {/* Price Chart */}
