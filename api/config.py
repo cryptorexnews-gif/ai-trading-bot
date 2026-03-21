@@ -70,6 +70,7 @@ STATE_PATH = "state/bot_state.json"
 METRICS_PATH = "state/bot_metrics.json"
 LIVE_STATUS_PATH = "state/bot_live_status.json"
 MANAGED_POSITIONS_PATH = "state/managed_positions.json"
+RUNTIME_CONFIG_PATH = "state/runtime_config.json"
 
 # Hyperliquid API
 HYPERLIQUID_BASE_URL = os.getenv("HYPERLIQUID_BASE_URL", "https://api.hyperliquid.xyz")

@@ -16,6 +16,7 @@ import LogViewer from './components/LogViewer'
 import DrawdownBar from './components/DrawdownBar'
 import ConnectionStatus from './components/ConnectionStatus'
 import ExportButton from './components/ExportButton'
+import RuntimeControls from './components/RuntimeControls'
 
 function safeNum(v, fallback = 0) {
   const n = parseFloat(v)
@@ -159,6 +160,8 @@ export default function App() {
             <span className="text-sm text-red-300">{bot.error}</span>
           </div>
         )}
+
+        <RuntimeControls />
 
         {/* Price Chart */}
         <TradingView tradingPairs={tradingPairs} />

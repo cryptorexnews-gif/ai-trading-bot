@@ -35,6 +35,7 @@ from order_verifier import OrderVerifier
 from portfolio_service import PortfolioService
 from position_manager import PositionManager
 from risk_manager import RiskManager
+from runtime_config_store import RuntimeConfigStore
 from state_store import StateStore
 from technical_analyzer_simple import technical_fetcher
 from utils.health import HealthMonitor, HealthStatus, HealthCheckResult, check_disk_space, check_file_writable
@@ -59,6 +60,31 @@ class HyperliquidBot:
         self._next_cycle_sec = self.cfg.default_cycle_sec
         self._shutdown_requested = False
         self._last_portfolio: Optional[PortfolioState] = None
+        self._active_strategy_mode = "trend"
+        self._active_runtime_pairs: List[str] = list(self.cfg.trading_pairs)
+
+        self._base_profile = {
+            "default_cycle_sec": self.cfg.default_cycle_sec,
+            "min_cycle_sec": self.cfg.min_cycle_sec,
+            "max_cycle_sec": self.cfg.max_cycle_sec,
+            "max_trades_per_cycle": self.cfg.max_trades_per_cycle,
+            "hard_max_leverage": self.cfg.hard_max_leverage,
+            "min_confidence_open": self.cfg.min_confidence_open,
+            "min_confidence_manage": self.cfg.min_confidence_manage,
+            "max_order_margin_pct": self.cfg.max_order_margin_pct,
+            "trade_cooldown_sec": self.cfg.trade_cooldown_sec,
+            "daily_notional_limit_usd": self.cfg.daily_notional_limit_usd,
+            "max_drawdown_pct": self.cfg.max_drawdown_pct,
+            "max_single_asset_pct": self.cfg.max_single_asset_pct,
+            "emergency_margin_threshold": self.cfg.emergency_margin_threshold,
+            "trend_sl_pct": self.cfg.trend_sl_pct,
+            "trend_tp_pct": self.cfg.trend_tp_pct,
+            "trend_break_even_activation_pct": self.cfg.trend_break_even_activation_pct,
+            "trend_trailing_activation_pct": self.cfg.trend_trailing_activation_pct,
+            "trend_trailing_callback": self.cfg.trend_trailing_callback,
+            "trend_position_size_pct": self.cfg.trend_position_size_pct,
+            "volume_confirmation_threshold": self.cfg.volume_confirmation_threshold,
+        }
 
         # Build components
         private_key = os.getenv("HYPERLIQUID_PRIVATE_KEY", "")
@@ -72,6 +98,7 @@ class HyperliquidBot:
         )
 
         self.state_store = StateStore(self.cfg.state_path, self.cfg.metrics_path)
+        self.runtime_config_store = RuntimeConfigStore("state/runtime_config.json", self.cfg.trading_pairs)
         self.metrics = MetricsCollector()
         self.notifier = Notifier(enabled=True)
         self.health_monitor = HealthMonitor()
@@ -123,6 +150,8 @@ class HyperliquidBot:
             trading_pairs=list(self.cfg.trading_pairs),
         )
 
+        self._apply_runtime_config(force=True)
+
         signal.signal(signal.SIGINT, self._signal_handler)
         signal.signal(signal.SIGTERM, self._signal_handler)
 
@@ -152,18 +181,117 @@ class HyperliquidBot:
         logging.info(f"Received {signal.Signals(signum).name}, requesting graceful shutdown...")
         self._shutdown_requested = True
 
-    def _validate_trading_pairs(self) -> List[str]:
+    def _validate_trading_pairs(self, pairs: Optional[List[str]] = None) -> List[str]:
         meta = self.exchange_client.get_meta(force_refresh=True)
+        source_pairs = pairs if pairs is not None else list(self.cfg.trading_pairs)
         if not meta:
             logging.warning("Cannot validate trading pairs — meta unavailable")
-            return list(self.cfg.trading_pairs)
+            return source_pairs
         available = {a.get("name") for a in meta.get("universe", [])}
-        valid = [c for c in self.cfg.trading_pairs if c in available]
-        invalid = [c for c in self.cfg.trading_pairs if c not in available]
+        valid = [c for c in source_pairs if c in available]
+        invalid = [c for c in source_pairs if c not in available]
         if invalid:
             logging.warning(f"Trading pairs NOT found on Hyperliquid (removed): {invalid}")
         logging.info(f"Validated {len(valid)} trading pairs: {valid}")
         return valid
+
+    def _apply_strategy_profile(self, strategy_mode: str) -> None:
+        rm = self.orchestrator.risk_manager
+        pm = self.orchestrator.position_manager
+
+        if strategy_mode == "scalping":
+            self.cfg.default_cycle_sec = 300
+            self.cfg.min_cycle_sec = 300
+            self.cfg.max_cycle_sec = 900
+            self.cfg.max_trades_per_cycle = 3
+
+            self.cfg.hard_max_leverage = Decimal("2")
+            self.cfg.min_confidence_open = Decimal("0.66")
+            self.cfg.min_confidence_manage = Decimal("0.45")
+            self.cfg.max_order_margin_pct = Decimal("0.06")
+            self.cfg.trade_cooldown_sec = 120
+            self.cfg.daily_notional_limit_usd = Decimal("25")
+            self.cfg.max_drawdown_pct = Decimal("0.08")
+            self.cfg.max_single_asset_pct = Decimal("0.25")
+            self.cfg.emergency_margin_threshold = Decimal("0.80")
+            self.cfg.trend_position_size_pct = Decimal("0.01")
+            self.cfg.volume_confirmation_threshold = Decimal("1.2")
+            self.cfg.trend_sl_pct = Decimal("0.02")
+            self.cfg.trend_tp_pct = Decimal("0.04")
+            self.cfg.trend_break_even_activation_pct = Decimal("0.01")
+            self.cfg.trend_trailing_activation_pct = Decimal("0.015")
+            self.cfg.trend_trailing_callback = Decimal("0.01")
+        else:
+            self.cfg.default_cycle_sec = self._base_profile["default_cycle_sec"]
+            self.cfg.min_cycle_sec = self._base_profile["min_cycle_sec"]
+            self.cfg.max_cycle_sec = self._base_profile["max_cycle_sec"]
+            self.cfg.max_trades_per_cycle = self._base_profile["max_trades_per_cycle"]
+
+            self.cfg.hard_max_leverage = self._base_profile["hard_max_leverage"]
+            self.cfg.min_confidence_open = self._base_profile["min_confidence_open"]
+            self.cfg.min_confidence_manage = self._base_profile["min_confidence_manage"]
+            self.cfg.max_order_margin_pct = self._base_profile["max_order_margin_pct"]
+            self.cfg.trade_cooldown_sec = self._base_profile["trade_cooldown_sec"]
+            self.cfg.daily_notional_limit_usd = self._base_profile["daily_notional_limit_usd"]
+            self.cfg.max_drawdown_pct = self._base_profile["max_drawdown_pct"]
+            self.cfg.max_single_asset_pct = self._base_profile["max_single_asset_pct"]
+            self.cfg.emergency_margin_threshold = self._base_profile["emergency_margin_threshold"]
+            self.cfg.trend_position_size_pct = self._base_profile["trend_position_size_pct"]
+            self.cfg.volume_confirmation_threshold = self._base_profile["volume_confirmation_threshold"]
+            self.cfg.trend_sl_pct = self._base_profile["trend_sl_pct"]
+            self.cfg.trend_tp_pct = self._base_profile["trend_tp_pct"]
+            self.cfg.trend_break_even_activation_pct = self._base_profile["trend_break_even_activation_pct"]
+            self.cfg.trend_trailing_activation_pct = self._base_profile["trend_trailing_activation_pct"]
+            self.cfg.trend_trailing_callback = self._base_profile["trend_trailing_callback"]
+
+        rm.hard_max_leverage = self.cfg.hard_max_leverage
+        rm.min_confidence_open = self.cfg.min_confidence_open
+        rm.min_confidence_manage = self.cfg.min_confidence_manage
+        rm.max_order_margin_pct = self.cfg.max_order_margin_pct
+        rm.trade_cooldown_sec = self.cfg.trade_cooldown_sec
+        rm.daily_notional_limit_usd = self.cfg.daily_notional_limit_usd
+        rm.max_drawdown_pct = self.cfg.max_drawdown_pct
+        rm.max_single_asset_pct = self.cfg.max_single_asset_pct
+        rm.emergency_margin_threshold = self.cfg.emergency_margin_threshold
+
+        pm.default_sl_pct = self.cfg.trend_sl_pct
+        pm.default_tp_pct = self.cfg.trend_tp_pct
+        pm.default_trailing_callback = self.cfg.trend_trailing_callback
+        pm.trailing_activation_pct = self.cfg.trend_trailing_activation_pct
+        pm.break_even_activation_pct = self.cfg.trend_break_even_activation_pct
+
+        self._next_cycle_sec = self.cfg.default_cycle_sec
+
+    def _apply_runtime_config(self, force: bool = False) -> None:
+        runtime = self.runtime_config_store.load()
+        runtime_mode = str(runtime.get("strategy_mode", "trend")).strip().lower()
+        if runtime_mode not in {"trend", "scalping"}:
+            runtime_mode = "trend"
+
+        runtime_pairs = [str(p).strip().upper() for p in runtime.get("trading_pairs", []) if str(p).strip()]
+        if not runtime_pairs:
+            runtime_pairs = list(self.cfg.trading_pairs)
+
+        validated_pairs = self._validate_trading_pairs(runtime_pairs)
+        if not validated_pairs:
+            validated_pairs = self._validate_trading_pairs(list(self.cfg.trading_pairs))
+
+        mode_changed = runtime_mode != self._active_strategy_mode
+        pairs_changed = validated_pairs != self._active_runtime_pairs
+
+        if not force and not mode_changed and not pairs_changed:
+            return
+
+        self._apply_strategy_profile(runtime_mode)
+        self.orchestrator.trading_pairs = validated_pairs
+        self._active_strategy_mode = runtime_mode
+        self._active_runtime_pairs = list(validated_pairs)
+
+        logging.info(
+            f"Runtime config applied: strategy_mode={runtime_mode}, "
+            f"pairs={validated_pairs}, cycle={self.cfg.default_cycle_sec}s, "
+            f"max_trades_per_cycle={self.cfg.max_trades_per_cycle}"
+        )
 
     def _calculate_adaptive_cycle(self) -> int:
         if not self.cfg.enable_adaptive_cycle:
@@ -326,11 +454,12 @@ class HyperliquidBot:
                 write_live_status(is_running=False, execution_mode=self.cfg.execution_mode, cycle_count=0, last_cycle_duration=0.0, error="Failed to connect to Hyperliquid API")
                 return
 
-        validated_pairs = self._validate_trading_pairs()
-        self.orchestrator.trading_pairs = validated_pairs
+        self._apply_runtime_config(force=True)
         consecutive_failures = 0
 
         while not self._shutdown_requested:
+            self._apply_runtime_config()
+
             if self._run_trading_cycle():
                 consecutive_failures = 0
             else:

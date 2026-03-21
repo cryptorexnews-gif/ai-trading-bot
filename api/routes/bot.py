@@ -6,11 +6,20 @@ import logging
 import os
 import time
 
-from flask import Blueprint, jsonify
+from flask import Blueprint, jsonify, request
 
 from api.auth import require_api_key
-from api.config import LIVE_STATUS_PATH, MANAGED_POSITIONS_PATH, STATE_PATH, METRICS_PATH
+from api.config import (
+    LIVE_STATUS_PATH,
+    MANAGED_POSITIONS_PATH,
+    STATE_PATH,
+    METRICS_PATH,
+    RUNTIME_CONFIG_PATH,
+    COIN_PATTERN,
+    KNOWN_TRADING_PAIRS,
+)
 from api.helpers import read_json_file
+from runtime_config_store import RuntimeConfigStore
 from state_store import StateStore
 from utils.circuit_breaker import get_all_circuit_states
 from utils.rate_limiter import get_all_rate_limiter_stats, get_rate_limiter
@@ -20,6 +29,10 @@ logger = logging.getLogger(__name__)
 bot_bp = Blueprint("bot", __name__)
 
 _state_store = StateStore(STATE_PATH, METRICS_PATH)
+_runtime_store = RuntimeConfigStore(
+    RUNTIME_CONFIG_PATH,
+    [p.strip().upper() for p in os.getenv("TRADING_PAIRS", "BTC,ETH,SOL").split(",") if p.strip()]
+)
 _bot_rl = get_rate_limiter("api_bot_endpoints", max_tokens=100, tokens_per_second=3.0)
 
 
@@ -187,3 +200,63 @@ def config():
     except Exception:
         logger.error("Bot config endpoint failed", exc_info=True)
         return jsonify({"error": "internal_error"}), 500
+
+
+@bot_bp.route("/api/runtime-config", methods=["GET"])
+@require_api_key
+def runtime_config():
+    rate_limit_resp = _rate_limited()
+    if rate_limit_resp:
+        return rate_limit_resp
+
+    runtime = _runtime_store.load()
+    return jsonify({
+        "runtime_config": runtime,
+        "available_pairs": sorted(KNOWN_TRADING_PAIRS),
+        "timestamp": time.time()
+    })
+
+
+@bot_bp.route("/api/runtime-config", methods=["POST"])
+@require_api_key
+def update_runtime_config():
+    rate_limit_resp = _rate_limited()
+    if rate_limit_resp:
+        return rate_limit_resp
+
+    payload = request.get_json(silent=True) or {}
+    strategy_mode = str(payload.get("strategy_mode", "trend")).strip().lower()
+    if strategy_mode not in {"trend", "scalping"}:
+        return jsonify({"error": "invalid_strategy_mode"}), 400
+
+    raw_pairs = payload.get("trading_pairs", [])
+    if not isinstance(raw_pairs, list):
+        return jsonify({"error": "invalid_trading_pairs"}), 400
+
+    normalized_pairs = []
+    for coin in raw_pairs:
+        c = str(coin).strip().upper()
+        if not c:
+            continue
+        if not COIN_PATTERN.match(c):
+            return jsonify({"error": f"invalid_coin_{c}"}), 400
+        if c not in KNOWN_TRADING_PAIRS:
+            return jsonify({"error": f"coin_not_allowed_{c}"}), 400
+        if c not in normalized_pairs:
+            normalized_pairs.append(c)
+
+    if len(normalized_pairs) == 0:
+        return jsonify({"error": "at_least_one_coin_required"}), 400
+    if len(normalized_pairs) > 20:
+        return jsonify({"error": "too_many_coins_max_20"}), 400
+
+    saved = _runtime_store.save({
+        "strategy_mode": strategy_mode,
+        "trading_pairs": normalized_pairs
+    })
+
+    return jsonify({
+        "ok": True,
+        "runtime_config": saved,
+        "message": "runtime_config_updated"
+    })

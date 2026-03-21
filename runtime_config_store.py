@@ -1,0 +1,47 @@
+import time
+from typing import Any, Dict, List
+
+from utils.file_io import atomic_write_json, read_json_file
+
+
+class RuntimeConfigStore:
+    """Persiste la configurazione runtime modificabile dal frontend."""
+
+    def __init__(self, path: str, default_trading_pairs: List[str]):
+        self.path = path
+        self.default_trading_pairs = [p.strip().upper() for p in default_trading_pairs if p.strip()]
+
+    def _default(self) -> Dict[str, Any]:
+        return {
+            "strategy_mode": "trend",
+            "trading_pairs": self.default_trading_pairs or ["BTC", "ETH"],
+            "updated_at": time.time(),
+        }
+
+    def load(self) -> Dict[str, Any]:
+        data = read_json_file(self.path, default=None)
+        if data is None or not isinstance(data, dict):
+            return self._default()
+
+        defaults = self._default()
+        for key, value in defaults.items():
+            if key not in data:
+                data[key] = value
+
+        data["strategy_mode"] = str(data.get("strategy_mode", "trend")).strip().lower()
+        data["trading_pairs"] = [
+            str(p).strip().upper() for p in data.get("trading_pairs", []) if str(p).strip()
+        ] or defaults["trading_pairs"]
+
+        return data
+
+    def save(self, config: Dict[str, Any]) -> Dict[str, Any]:
+        payload = {
+            "strategy_mode": str(config.get("strategy_mode", "trend")).strip().lower(),
+            "trading_pairs": [
+                str(p).strip().upper() for p in config.get("trading_pairs", []) if str(p).strip()
+            ] or self._default()["trading_pairs"],
+            "updated_at": time.time(),
+        }
+        atomic_write_json(self.path, payload)
+        return payload
