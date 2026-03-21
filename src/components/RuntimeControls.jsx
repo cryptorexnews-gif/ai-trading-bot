@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react'
-import { Settings2, Cpu, Coins } from 'lucide-react'
+import { Settings2, Cpu, Coins, Plus } from 'lucide-react'
 import useRuntimeConfig from '../hooks/useRuntimeConfig'
 import Toast from './Toast'
 
@@ -16,11 +16,37 @@ export default function RuntimeControls() {
   } = useRuntimeConfig()
 
   const [toast, setToast] = useState({ type: 'info', message: '' })
+  const [coinInput, setCoinInput] = useState('')
 
   const sortedPairs = useMemo(() => {
     const list = Array.isArray(availablePairs) ? [...availablePairs] : []
     return list.sort((a, b) => a.localeCompare(b))
   }, [availablePairs])
+
+  const onAddCoin = () => {
+    const coin = coinInput.trim().toUpperCase()
+    if (!coin) return
+
+    if (!/^[A-Z0-9]{1,20}$/.test(coin)) {
+      setToast({ type: 'error', message: 'Formato coin non valido.' })
+      return
+    }
+
+    if (!sortedPairs.includes(coin)) {
+      setToast({ type: 'error', message: `Coin ${coin} non disponibile.` })
+      return
+    }
+
+    if (selectedPairs.includes(coin)) {
+      setToast({ type: 'info', message: `${coin} è già selezionata.` })
+      setCoinInput('')
+      return
+    }
+
+    toggleCoin(coin)
+    setCoinInput('')
+    setToast({ type: 'success', message: `${coin} aggiunta alle monete monitorate.` })
+  }
 
   const onSave = async () => {
     try {
@@ -90,6 +116,35 @@ export default function RuntimeControls() {
             <Coins size={12} />
             Monete monitorate dal LLM ({selectedPairs.length})
           </p>
+
+          <div className="flex flex-col sm:flex-row gap-2 mb-3">
+            <input
+              list="runtime-available-coins"
+              value={coinInput}
+              onChange={(e) => setCoinInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault()
+                  onAddCoin()
+                }
+              }}
+              placeholder="Scrivi coin (es. SOL)"
+              className="flex-1 bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-cyan-500"
+            />
+            <button
+              onClick={onAddCoin}
+              className="inline-flex items-center justify-center gap-1 px-3 py-2 rounded-lg bg-cyan-600 hover:bg-cyan-700 text-sm font-medium"
+            >
+              <Plus size={14} />
+              Aggiungi
+            </button>
+            <datalist id="runtime-available-coins">
+              {sortedPairs.map((coin) => (
+                <option key={coin} value={coin} />
+              ))}
+            </datalist>
+          </div>
+
           <div className="max-h-52 overflow-y-auto rounded-lg border border-gray-800 p-3 grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
             {sortedPairs.map((coin) => {
               const active = selectedPairs.includes(coin)
@@ -109,7 +164,7 @@ export default function RuntimeControls() {
             })}
           </div>
           <p className="text-[11px] text-gray-500 mt-2">
-            Il bot userà solo queste coin per analisi e trading automatico.
+            Puoi scrivere la coin oppure selezionarla dai pulsanti; il bot userà solo quelle salvate.
           </p>
         </div>
 
