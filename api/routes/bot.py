@@ -18,7 +18,7 @@ from api.config import (
     COIN_PATTERN,
     KNOWN_TRADING_PAIRS,
 )
-from api.helpers import read_json_file
+from api.helpers import post_hyperliquid_info, read_json_file
 from runtime_config_store import RuntimeConfigStore
 from state_store import StateStore
 from utils.circuit_breaker import get_all_circuit_states
@@ -35,11 +35,42 @@ _runtime_store = RuntimeConfigStore(
 )
 _bot_rl = get_rate_limiter("api_bot_endpoints", max_tokens=100, tokens_per_second=3.0)
 
+_universe_cache = []
+_universe_cache_at = 0.0
+_UNIVERSE_CACHE_TTL_SEC = 300.0
+
 
 def _rate_limited():
     if not _bot_rl.try_acquire(1):
         return jsonify({"error": "rate_limited"}), 429
     return None
+
+
+def _get_hyperliquid_available_pairs():
+    global _universe_cache, _universe_cache_at
+
+    now = time.time()
+    if _universe_cache and (now - _universe_cache_at) < _UNIVERSE_CACHE_TTL_SEC:
+        return list(_universe_cache)
+
+    data = post_hyperliquid_info({"type": "meta"}, timeout=15)
+    if isinstance(data, dict):
+        universe = data.get("universe", [])
+        parsed = []
+        for asset in universe:
+            coin = str(asset.get("name", "")).strip().upper()
+            if coin and COIN_PATTERN.match(coin):
+                parsed.append(coin)
+        parsed = sorted(set(parsed))
+        if parsed:
+            _universe_cache = parsed
+            _universe_cache_at = now
+            return parsed
+
+    if _universe_cache:
+        return list(_universe_cache)
+
+    return sorted(KNOWN_TRADING_PAIRS)
 
 
 @bot_bp.route("/api/status", methods=["GET"])
@@ -212,7 +243,7 @@ def runtime_config():
     runtime = _runtime_store.load()
     return jsonify({
         "runtime_config": runtime,
-        "available_pairs": sorted(KNOWN_TRADING_PAIRS),
+        "available_pairs": _get_hyperliquid_available_pairs(),
         "timestamp": time.time()
     })
 
@@ -233,6 +264,8 @@ def update_runtime_config():
     if not isinstance(raw_pairs, list):
         return jsonify({"error": "invalid_trading_pairs"}), 400
 
+    allowed_pairs = set(_get_hyperliquid_available_pairs())
+
     normalized_pairs = []
     for coin in raw_pairs:
         c = str(coin).strip().upper()
@@ -240,8 +273,8 @@ def update_runtime_config():
             continue
         if not COIN_PATTERN.match(c):
             return jsonify({"error": f"invalid_coin_{c}"}), 400
-        if c not in KNOWN_TRADING_PAIRS:
-            return jsonify({"error": f"coin_not_allowed_{c}"}), 400
+        if c not in allowed_pairs:
+            return jsonify({"error": f"coin_not_available_on_hyperliquid_{c}"}), 400
         if c not in normalized_pairs:
             normalized_pairs.append(c)
 
