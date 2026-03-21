@@ -1,4 +1,4 @@
-from decimal import Decimal
+from decimal import Decimal, ROUND_UP
 from typing import Any, Dict
 
 from exchange_client import HyperliquidExchangeClient
@@ -7,9 +7,33 @@ from utils.decimals import safe_decimal
 
 
 class ExecutionEngine:
+    MIN_ORDER_NOTIONAL_USD = Decimal("10")
+
     def __init__(self, exchange_client: HyperliquidExchangeClient):
         self.exchange_client = exchange_client
         self.allowed_actions = {action.value for action in TradingAction}
+
+    def _adjust_open_size_for_exchange_minimum(self, coin: str, size: Decimal, price: Decimal) -> Decimal:
+        """
+        Adegua la size per rispettare il minimo notional dell'exchange ($10) su ordini di apertura/incremento.
+        Non modifica action o leverage scelti dall'LLM.
+        """
+        if size <= 0 or price <= 0:
+            return size
+
+        notional = size * price
+        if notional >= self.MIN_ORDER_NOTIONAL_USD:
+            return size
+
+        required_size = self.MIN_ORDER_NOTIONAL_USD / price
+        sz_decimals = self.exchange_client.get_sz_decimals(coin)
+
+        if sz_decimals is None or sz_decimals < 0:
+            return required_size
+
+        step = Decimal("1").scaleb(-sz_decimals)
+        adjusted = (required_size / step).to_integral_value(rounding=ROUND_UP) * step
+        return adjusted
 
     def execute(
         self,
@@ -68,7 +92,9 @@ class ExecutionEngine:
             side = "buy" if pos_size > 0 else "sell"
             if not self.exchange_client.set_leverage(coin, leverage):
                 return {"success": False, "notional": Decimal("0"), "reason": "set_leverage_failed"}
-            result = self.exchange_client.place_order(coin, side, size, market_data.last_price)
+
+            adjusted_size = self._adjust_open_size_for_exchange_minimum(coin, size, market_data.last_price)
+            result = self.exchange_client.place_order(coin, side, adjusted_size, market_data.last_price)
             return {
                 "success": bool(result.get("success", False)),
                 "notional": safe_decimal(result.get("notional", "0")),
@@ -79,7 +105,9 @@ class ExecutionEngine:
             side = "buy" if action == TradingAction.BUY.value else "sell"
             if not self.exchange_client.set_leverage(coin, leverage):
                 return {"success": False, "notional": Decimal("0"), "reason": "set_leverage_failed"}
-            result = self.exchange_client.place_order(coin, side, size, market_data.last_price)
+
+            adjusted_size = self._adjust_open_size_for_exchange_minimum(coin, size, market_data.last_price)
+            result = self.exchange_client.place_order(coin, side, adjusted_size, market_data.last_price)
             return {
                 "success": bool(result.get("success", False)),
                 "notional": safe_decimal(result.get("notional", "0")),
