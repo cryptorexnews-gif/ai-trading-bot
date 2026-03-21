@@ -47,6 +47,21 @@ def _rate_limited():
     return None
 
 
+def _fetch_hyperliquid_universe():
+    data = post_hyperliquid_info({"type": "meta"}, timeout=20)
+    if not isinstance(data, dict):
+        return []
+
+    universe = data.get("universe", [])
+    parsed = []
+    for asset in universe:
+        coin = str(asset.get("name", "")).strip().upper()
+        if coin and COIN_PATTERN.match(coin):
+            parsed.append(coin)
+
+    return sorted(set(parsed))
+
+
 def _get_hyperliquid_available_pairs():
     global _universe_cache, _universe_cache_at
 
@@ -54,20 +69,13 @@ def _get_hyperliquid_available_pairs():
     if _universe_cache and (now - _universe_cache_at) < _UNIVERSE_CACHE_TTL_SEC:
         return list(_universe_cache)
 
-    data = post_hyperliquid_info({"type": "meta"}, timeout=15)
-    if isinstance(data, dict):
-        universe = data.get("universe", [])
-        parsed = []
-        for asset in universe:
-            coin = str(asset.get("name", "")).strip().upper()
-            if coin and COIN_PATTERN.match(coin):
-                parsed.append(coin)
-        parsed = sorted(set(parsed))
-        if parsed:
-            _universe_cache = parsed
-            _universe_cache_at = now
-            return parsed
+    fresh = _fetch_hyperliquid_universe()
+    if fresh:
+        _universe_cache = fresh
+        _universe_cache_at = now
+        return fresh
 
+    # Fallback: cache già esistente, altrimenti lista nota
     if _universe_cache:
         return list(_universe_cache)
 
@@ -266,7 +274,9 @@ def update_runtime_config():
     if not isinstance(raw_pairs, list):
         return jsonify({"error": "invalid_trading_pairs"}), 400
 
-    allowed_pairs = set(_get_hyperliquid_available_pairs())
+    # Prova fetch live: se disponibile valida strettamente,
+    # se non disponibile evita falsi negativi bloccanti.
+    live_allowed = set(_fetch_hyperliquid_universe())
 
     normalized_pairs = []
     for coin in raw_pairs:
@@ -275,8 +285,10 @@ def update_runtime_config():
             continue
         if not COIN_PATTERN.match(c):
             return jsonify({"error": f"invalid_coin_{c}"}), 400
-        if c not in allowed_pairs:
+
+        if live_allowed and c not in live_allowed:
             return jsonify({"error": f"coin_not_available_on_hyperliquid_{c}"}), 400
+
         if c not in normalized_pairs:
             normalized_pairs.append(c)
 

@@ -32,20 +32,21 @@ export default function RuntimeControls() {
       return
     }
 
-    if (!sortedPairs.includes(coin)) {
-      setToast({ type: 'error', message: `Coin ${coin} non disponibile.` })
-      return
-    }
-
     if (selectedPairs.includes(coin)) {
       setToast({ type: 'info', message: `${coin} è già selezionata.` })
       setCoinInput('')
       return
     }
 
+    // Consenti aggiunta manuale anche se la lista non è ancora aggiornata lato UI.
     toggleCoin(coin)
     setCoinInput('')
-    setToast({ type: 'success', message: `${coin} aggiunta alle monete monitorate.` })
+    setToast({
+      type: sortedPairs.includes(coin) ? 'success' : 'info',
+      message: sortedPairs.includes(coin)
+        ? `${coin} aggiunta alle monete monitorate.`
+        : `${coin} aggiunta manualmente. Se Hyperliquid non la supporta, il backend lo segnalerà al salvataggio.`,
+    })
   }
 
   const onSave = async () => {
