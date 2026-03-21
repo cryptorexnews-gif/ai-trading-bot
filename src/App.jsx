@@ -13,7 +13,7 @@ export default function App() {
       <Routes>
         <Route path="/" element={<AppShell />}>
           <Route index element={<DashboardPage />} />
-          <Route path="trading" element={<TradingPage />} />
+          <Route path="settings" element={<TradingPage />} />
           <Route path="positions" element={<PositionsPage />} />
           <Route path="history" element={<HistoryPage />} />
           <Route path="system" element={<SystemPage />} />
