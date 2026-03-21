@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react'
-import { Settings2, Cpu, Coins, Plus } from 'lucide-react'
+import { Settings2, Cpu, Coins, Plus, AlertTriangle } from 'lucide-react'
 import useRuntimeConfig from '../hooks/useRuntimeConfig'
 import Toast from './Toast'
 
@@ -7,6 +7,7 @@ export default function RuntimeControls() {
   const {
     loading,
     saving,
+    loadError,
     availablePairs,
     strategyMode,
     setStrategyMode,
@@ -19,9 +20,9 @@ export default function RuntimeControls() {
   const [coinInput, setCoinInput] = useState('')
 
   const sortedPairs = useMemo(() => {
-    const list = Array.isArray(availablePairs) ? [...availablePairs] : []
-    return list.sort((a, b) => a.localeCompare(b))
-  }, [availablePairs])
+    const merged = new Set([...(Array.isArray(availablePairs) ? availablePairs : []), ...selectedPairs])
+    return [...merged].sort((a, b) => a.localeCompare(b))
+  }, [availablePairs, selectedPairs])
 
   const onAddCoin = () => {
     const coin = coinInput.trim().toUpperCase()
@@ -38,7 +39,6 @@ export default function RuntimeControls() {
       return
     }
 
-    // Consenti aggiunta manuale anche se la lista non è ancora aggiornata lato UI.
     toggleCoin(coin)
     setCoinInput('')
     setToast({
@@ -77,6 +77,13 @@ export default function RuntimeControls() {
           <Settings2 size={18} className="text-cyan-400" />
           <h3 className="text-lg font-semibold">Runtime Trading Controls</h3>
         </div>
+
+        {loadError && (
+          <div className="rounded-lg border border-yellow-700/50 bg-yellow-900/20 p-3 flex items-start gap-2">
+            <AlertTriangle size={14} className="text-yellow-400 mt-0.5 shrink-0" />
+            <p className="text-xs text-yellow-200">{loadError}</p>
+          </div>
+        )}
 
         <div>
           <p className="text-xs text-gray-400 mb-2 flex items-center gap-2">
