@@ -211,8 +211,18 @@ export default function CandlestickChart({ candles, height = 500 }) {
         rightBarStaysOnScroll: true,
         barSpacing: 3,
       },
-      handleScroll: true,
-      handleScale: true,
+      handleScroll: {
+        mouseWheel: false,
+        pressedMouseMove: true,
+        horzTouchDrag: true,
+        vertTouchDrag: true,
+      },
+      handleScale: {
+        mouseWheel: false,
+        pinch: true,
+        axisPressedMouseMove: true,
+        axisDoubleClickReset: true,
+      },
     })
 
     const candleSeries = chart.addSeries(CandlestickSeries, {
