@@ -230,6 +230,7 @@ def test_wallet_balance() -> bool:
 def test_openrouter() -> bool:
     print_header("6. OPENROUTER (LLM)")
     api_key = os.getenv("OPENROUTER_API_KEY", "")
+    model = os.getenv("LLM_MODEL", "deepseek/deepseek-v3.2")
     if not api_key:
         print_warn("No API key → LLM disabled (fallback hold)")
         return True
@@ -238,14 +239,14 @@ def test_openrouter() -> bool:
         resp = requests.post(
             "https://openrouter.ai/api/v1/chat/completions",
             headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-            json={"model": "anthropic/claude-opus-4.6", "messages": [{"role": "user", "content": "ok"}], "max_tokens": 5},
+            json={"model": model, "messages": [{"role": "user", "content": "ok"}], "max_tokens": 5},
             timeout=30
         )
         if resp.status_code == 200:
             content = resp.json()["choices"][0]["message"]["content"].strip()
-            print_ok(f"✓ Model OK | Response: '{content}'")
+            print_ok(f"✓ Model OK ({model}) | Response: '{content}'")
             return True
-        print_fail(f"HTTP {resp.status_code}")
+        print_fail(f"{model}: HTTP {resp.status_code}")
         return False
     except Exception as e:
         print_fail(f"Error: {e}")
