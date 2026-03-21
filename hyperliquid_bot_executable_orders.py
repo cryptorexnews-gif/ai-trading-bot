@@ -137,7 +137,7 @@ class HyperliquidBot:
                 break_even_offset_pct=self.cfg.break_even_offset_pct,
             ),
             correlation_engine=CorrelationEngine(correlation_threshold=self.cfg.correlation_threshold),
-            order_verifier=OrderVerifier(exchange_client=self.exchange_client, max_wait_sec=10.0, check_interval=2.0),
+            order_verifier=OrderVerifier(exchange_client=self.exchange_client, max_wait_sec=20.0, check_interval=2.0),
             notifier=self.notifier,
             health_monitor=self.health_monitor,
             portfolio_service=self.portfolio_service,

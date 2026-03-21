@@ -282,6 +282,42 @@ class CycleOrchestrator:
 
         return trades_executed, notional_added
 
+    def _late_confirm_fill(
+        self,
+        coin: str,
+        snapshot: Dict[str, Any],
+        expected_side: str,
+        expected_size: Decimal,
+        tolerance_pct: Decimal = Decimal("0.05")
+    ) -> Tuple[bool, str]:
+        """
+        Secondary confirmation when initial verifier says not_filled.
+        Checks latest portfolio position delta to catch delayed fills.
+        Returns (confirmed, fill_status).
+        """
+        try:
+            latest_portfolio = self.portfolio_service.get_portfolio_state()
+        except Exception:
+            return False, "not_filled"
+
+        size_before = Decimal(str(snapshot.get("size_before", "0")))
+        current_size = Decimal("0")
+        if coin in latest_portfolio.positions:
+            current_size = Decimal(str(latest_portfolio.positions[coin].get("size", 0)))
+
+        actual_change = current_size - size_before
+        expected_change = expected_size if expected_side == "buy" else -expected_size
+
+        if expected_change == 0:
+            return False, "not_filled"
+
+        fill_ratio = abs(actual_change) / abs(expected_change)
+        if fill_ratio >= (Decimal("1") - tolerance_pct):
+            return True, "filled_late"
+        if fill_ratio >= Decimal("0.1"):
+            return True, "partially_filled_late"
+        return False, "not_filled"
+
     def _process_single_coin(
         self, coin: str, portfolio: PortfolioState, state: Dict,
         daily_notional_used: Decimal, peak: Decimal, consecutive_losses: int,
@@ -348,14 +384,27 @@ class CycleOrchestrator:
         fill_status = "unknown"
         if snapshot and result["success"] and decision["action"] in ["buy", "sell", "increase_position"]:
             expected_side = "buy" if decision["action"] in ["buy", "increase_position"] else "sell"
+            expected_size = Decimal(str(decision["size"]))
+
             verification = self.order_verifier.verify_fill(
-                self.cfg.wallet_address, coin, expected_side, Decimal(str(decision["size"])), snapshot
+                self.cfg.wallet_address, coin, expected_side, expected_size, snapshot
             )
             fill_status = verification.get("fill_status", "unknown")
+
             if fill_status == "not_filled":
-                logger.warning(f"{coin} order NOT FILLED — marking as failed")
-                result["success"] = False
-                result["reason"] = "order_not_filled"
+                late_confirmed, late_status = self._late_confirm_fill(
+                    coin=coin,
+                    snapshot=snapshot,
+                    expected_side=expected_side,
+                    expected_size=expected_size
+                )
+                if late_confirmed:
+                    fill_status = late_status
+                    logger.info(f"{coin} late fill confirmation succeeded: {late_status}")
+                else:
+                    logger.warning(f"{coin} order NOT FILLED — marking as failed")
+                    result["success"] = False
+                    result["reason"] = "order_not_filled"
 
         trade_record = {
             "timestamp": time.time(), "coin": coin, "action": decision["action"],
