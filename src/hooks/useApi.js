@@ -17,7 +17,7 @@ export function getHeaders() {
   return {}
 }
 
-export function useApi(endpoint, intervalMs = 2000) {
+export function useApi(endpoint, intervalMs = 1000) {
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)

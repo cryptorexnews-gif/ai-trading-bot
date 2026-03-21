@@ -4,8 +4,8 @@ import PositionsTable from '../components/PositionsTable'
 import ManagedPositions from '../components/ManagedPositions'
 
 export default function PositionsPage() {
-  const { data: portfolioData } = useApi('/portfolio', 2000)
-  const { data: managedData } = useApi('/managed-positions', 2000)
+  const { data: portfolioData } = useApi('/portfolio', 1000)
+  const { data: managedData } = useApi('/managed-positions', 1000)
 
   const portfolio = portfolioData?.portfolio || {}
   const positions = portfolio.positions || {}

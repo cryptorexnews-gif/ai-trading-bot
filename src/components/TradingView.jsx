@@ -89,7 +89,7 @@ export default function TradingView({ tradingPairs }) {
         {
           headers: getHeaders(),
           credentials: 'same-origin',
-          signal: AbortSignal.timeout(15000)
+          signal: AbortSignal.timeout(10000)
         }
       )
 
@@ -161,7 +161,7 @@ export default function TradingView({ tradingPairs }) {
     setFetchError(null)
 
     fetchCandles()
-    const candleTimer = window.setInterval(fetchCandles, 10000)
+    const candleTimer = window.setInterval(fetchCandles, 2000)
 
     return () => {
       mountedRef.current = false

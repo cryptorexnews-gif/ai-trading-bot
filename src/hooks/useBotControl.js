@@ -27,7 +27,7 @@ export default function useBotControl() {
 
     const timer = setInterval(() => {
       loadStatus().catch(() => {})
-    }, 2000)
+    }, 1000)
 
     return () => clearInterval(timer)
   }, [loadStatus])
