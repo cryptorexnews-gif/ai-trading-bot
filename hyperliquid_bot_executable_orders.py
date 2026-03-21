@@ -293,6 +293,14 @@ class HyperliquidBot:
             f"max_trades_per_cycle={self.cfg.max_trades_per_cycle}"
         )
 
+    def _format_cycle_label(self, cycle_seconds: int) -> str:
+        if cycle_seconds <= 0:
+            return "0s"
+        if cycle_seconds % 60 == 0:
+            minutes = cycle_seconds // 60
+            return "1 minuto" if minutes == 1 else f"{minutes} minuti"
+        return f"{cycle_seconds}s"
+
     def _calculate_adaptive_cycle(self) -> int:
         if not self.cfg.enable_adaptive_cycle:
             return self.cfg.default_cycle_sec
@@ -307,7 +315,10 @@ class HyperliquidBot:
         self.orchestrator.set_cycle_count(self._cycle_count)
         try:
             logging.info("=" * 60)
-            logging.info(f"Starting trading cycle #{self._cycle_count} (30 minuti)")
+            logging.info(
+                f"Starting trading cycle #{self._cycle_count} "
+                f"({self._format_cycle_label(self._next_cycle_sec)})"
+            )
 
             self.orchestrator._run_health_check(self._cycle_count)
 
@@ -426,7 +437,8 @@ class HyperliquidBot:
         logging.info(f"LLM model: {self.cfg.llm_model}")
         logging.info(f"Trading pairs ({len(self.cfg.trading_pairs)}): {self.cfg.trading_pairs}")
         logging.info(
-            f"Strategy: Trend 4H/1D Ultra-Conservativo — Ciclo 30 minuti\n"
+            f"Strategy: Trend 4H/1D Ultra-Conservativo\n"
+            f"  • Ciclo base: {self._format_cycle_label(self.cfg.default_cycle_sec)}\n"
             f"  • SL Trend: {float(self.cfg.trend_sl_pct)*100}% / TP Trend: {float(self.cfg.trend_tp_pct)*100}% (R:R 1:2)\n"
             f"  • Position Size: {float(self.cfg.trend_position_size_pct)*100}% del portfolio\n"
             f"  • Max Trend Positions: {self.cfg.max_trend_positions}\n"
