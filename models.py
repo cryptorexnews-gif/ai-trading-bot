@@ -148,6 +148,8 @@ class ManagedPosition:
     trailing_stop: TrailingStopConfig = field(default_factory=TrailingStopConfig)
     break_even: BreakEvenConfig = field(default_factory=BreakEvenConfig)
     opened_at: float = 0.0
+    stop_loss_order_id: Optional[int] = None
+    take_profit_order_id: Optional[int] = None
 
     def should_stop_loss(self, current_price: Decimal) -> bool:
         if not self.stop_loss.enabled:
@@ -195,6 +197,8 @@ class ManagedPosition:
             "is_long": self.is_long,
             "leverage": self.leverage,
             "opened_at": self.opened_at,
+            "stop_loss_order_id": self.stop_loss_order_id,
+            "take_profit_order_id": self.take_profit_order_id,
             "stop_loss": {
                 "enabled": self.stop_loss.enabled,
                 "percentage": str(self.stop_loss.percentage),
@@ -227,6 +231,9 @@ class ManagedPosition:
         ts_data = data.get("trailing_stop", {})
         be_data = data.get("break_even", {})
 
+        sl_order_id_raw = data.get("stop_loss_order_id")
+        tp_order_id_raw = data.get("take_profit_order_id")
+
         return ManagedPosition(
             coin=data["coin"],
             size=Decimal(str(data["size"])),
@@ -234,6 +241,8 @@ class ManagedPosition:
             is_long=data["is_long"],
             leverage=int(data.get("leverage", 1)),
             opened_at=float(data.get("opened_at", 0)),
+            stop_loss_order_id=int(sl_order_id_raw) if sl_order_id_raw is not None else None,
+            take_profit_order_id=int(tp_order_id_raw) if tp_order_id_raw is not None else None,
             stop_loss=StopLossConfig(
                 enabled=sl_data.get("enabled", True),
                 percentage=Decimal(str(sl_data.get("percentage", "0.03"))),
@@ -288,7 +297,7 @@ class PortfolioState:
 
     def get_total_exposure(self) -> Decimal:
         total = Decimal("0")
-        for coin, pos in self.positions.items():
+        for _coin, pos in self.positions.items():
             size = abs(Decimal(str(pos.get("size", 0))))
             entry = Decimal(str(pos.get("entry_price", 0)))
             total += size * entry
@@ -296,7 +305,7 @@ class PortfolioState:
 
     def get_total_unrealized_pnl(self) -> Decimal:
         total = Decimal("0")
-        for coin, pos in self.positions.items():
+        for _coin, pos in self.positions.items():
             total += Decimal(str(pos.get("unrealized_pnl", 0)))
         return total
 

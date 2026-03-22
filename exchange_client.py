@@ -1,7 +1,7 @@
 import logging
 import time
 from decimal import Decimal
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import msgpack
 import requests
@@ -47,7 +47,6 @@ class HyperliquidExchangeClient:
 
         self.session = create_robust_session()
 
-        # Security: Derive Account immediately, never store raw private key
         self.account = Account.from_key(private_key)
 
         self._meta_cache: Optional[Dict[str, Any]] = None
@@ -124,8 +123,10 @@ class HyperliquidExchangeClient:
 
         def _do_post():
             response = self.session.post(
-                f"{self.base_url}/exchange", json=payload,
-                headers={"Content-Type": "application/json"}, timeout=timeout
+                f"{self.base_url}/exchange",
+                json=payload,
+                headers={"Content-Type": "application/json"},
+                timeout=timeout
             )
             if response.status_code != 200:
                 logger.error(f"/exchange failed status={response.status_code}")
@@ -200,7 +201,6 @@ class HyperliquidExchangeClient:
         return None
 
     def get_reference_price(self, coin: str, fallback_price: Decimal) -> Decimal:
-        """Get best reference price from allMids. Falls back to provided price."""
         mids = self.get_all_mids()
         if mids and coin in mids:
             mid_price = safe_decimal(mids[coin], Decimal("0"))
@@ -220,8 +220,6 @@ class HyperliquidExchangeClient:
         coin = universe[asset_id].get("name", "")
         mids = self.get_all_mids()
 
-        # Price precision should be derived from market price format (allMids),
-        # not from szDecimals (which is size precision).
         if mids is not None and coin in mids:
             raw_price = str(mids.get(coin, "0"))
             if "." in raw_price:
@@ -230,7 +228,6 @@ class HyperliquidExchangeClient:
             else:
                 decimals = 0
 
-            # Keep a safe minimum precision for liquid instruments
             decimals = max(1, min(decimals, 8))
             tick_size = Decimal("1").scaleb(-decimals) if decimals > 0 else Decimal("1")
             return tick_size, decimals
@@ -261,14 +258,18 @@ class HyperliquidExchangeClient:
     def _l1_payload(self, phantom_agent: Dict[str, str]) -> Dict[str, Any]:
         return {
             "domain": {
-                "chainId": 1337, "name": "Exchange",
-                "verifyingContract": "0x0000000000000000000000000000000000000000", "version": "1",
+                "chainId": 1337,
+                "name": "Exchange",
+                "verifyingContract": "0x0000000000000000000000000000000000000000",
+                "version": "1",
             },
             "types": {
                 "Agent": [{"name": "source", "type": "string"}, {"name": "connectionId", "type": "bytes32"}],
                 "EIP712Domain": [
-                    {"name": "name", "type": "string"}, {"name": "version", "type": "string"},
-                    {"name": "chainId", "type": "uint256"}, {"name": "verifyingContract", "type": "address"},
+                    {"name": "name", "type": "string"},
+                    {"name": "version", "type": "string"},
+                    {"name": "chainId", "type": "uint256"},
+                    {"name": "verifyingContract", "type": "address"},
                 ],
             },
             "primaryType": "Agent",
@@ -282,6 +283,16 @@ class HyperliquidExchangeClient:
         structured_data = encode_typed_data(full_message=data)
         signed = self.account.sign_message(structured_data)
         return {"r": hex(signed.r), "s": hex(signed.s), "v": signed.v}
+
+    def _extract_order_ids(self, exchange_result: Dict[str, Any]) -> List[int]:
+        ids: List[int] = []
+        statuses = exchange_result.get("response", {}).get("data", {}).get("statuses", [])
+        for status in statuses:
+            resting = status.get("resting", {})
+            oid = resting.get("oid")
+            if oid is not None:
+                ids.append(int(oid))
+        return ids
 
     def set_leverage(self, coin: str, leverage: int) -> bool:
         leverage = max(1, leverage)
@@ -344,7 +355,14 @@ class HyperliquidExchangeClient:
         limit_price = limit_price.quantize(quantizer)
 
         size_str = str(size.normalize())
-        order_wire = {"a": asset_id, "b": is_buy, "p": str(limit_price), "s": size_str, "r": False, "t": {"limit": {"tif": "Gtc"}}}
+        order_wire = {
+            "a": asset_id,
+            "b": is_buy,
+            "p": str(limit_price),
+            "s": size_str,
+            "r": False,
+            "t": {"limit": {"tif": "Gtc"}}
+        }
         action = {"type": "order", "orders": [order_wire], "grouping": "na"}
         nonce = int(time.time() * 1000)
         signature = self.sign_l1_action_exact(action, None, nonce, None, True)
@@ -366,3 +384,170 @@ class HyperliquidExchangeClient:
         notional = abs(size * limit_price)
         logger.info(f"LIVE order success {coin} {side.upper()} size={size_str} limit={limit_price}")
         return {"success": True, "mode": "live", "filled_price": str(limit_price), "notional": str(notional)}
+
+    def place_trigger_order(
+        self,
+        coin: str,
+        side: str,
+        size: Decimal,
+        trigger_price: Decimal,
+        tpsl: str,
+        reduce_only: bool = True,
+        is_market: bool = True,
+    ) -> Dict[str, Any]:
+        """
+        Place a trigger order (TP/SL) on Hyperliquid.
+        tpsl must be "tp" or "sl".
+        """
+        if tpsl not in {"tp", "sl"}:
+            return {"success": False, "reason": "invalid_tpsl"}
+
+        if self.execution_mode != "live" or not self.enable_mainnet_trading:
+            logger.info(f"PAPER trigger order {coin} {tpsl.upper()} {side.upper()} size={size} trigger={trigger_price}")
+            return {"success": True, "mode": "paper", "order_id": None}
+
+        asset_id = self.get_asset_id(coin)
+        if asset_id is None:
+            logger.error(f"Asset ID not found for trigger order {coin}")
+            return {"success": False, "reason": "asset_not_found"}
+
+        is_buy = side.lower() == "buy"
+        tick_size, precision = self.get_tick_size_and_precision(asset_id)
+
+        rounded_ticks = (trigger_price / tick_size).quantize(Decimal("1"))
+        trigger_price = rounded_ticks * tick_size
+        quantizer = Decimal("1").scaleb(-precision)
+        trigger_price = trigger_price.quantize(quantizer)
+
+        order_wire = {
+            "a": asset_id,
+            "b": is_buy,
+            "p": str(trigger_price),
+            "s": str(size.normalize()),
+            "r": bool(reduce_only),
+            "t": {
+                "trigger": {
+                    "isMarket": bool(is_market),
+                    "triggerPx": str(trigger_price),
+                    "tpsl": tpsl
+                }
+            }
+        }
+
+        action = {"type": "order", "orders": [order_wire], "grouping": "positionTpsl"}
+        nonce = int(time.time() * 1000)
+        signature = self.sign_l1_action_exact(action, None, nonce, None, True)
+        payload = {"action": action, "nonce": nonce, "signature": signature, "vaultAddress": None}
+
+        result = self._post_exchange(payload)
+        if result is None:
+            return {"success": False, "reason": "http_error"}
+        if result.get("status") != "ok":
+            logger.error(f"Exchange rejected trigger order for {coin}: {result}")
+            return {"success": False, "reason": "exchange_rejected"}
+
+        statuses = result.get("response", {}).get("data", {}).get("statuses", [])
+        for status in statuses:
+            if "error" in status:
+                logger.error(f"Trigger order status error for {coin}: {status}")
+                return {"success": False, "reason": "status_error"}
+
+        order_ids = self._extract_order_ids(result)
+        order_id = order_ids[0] if order_ids else None
+
+        logger.info(
+            f"LIVE trigger order placed {coin} {tpsl.upper()} {side.upper()} "
+            f"size={size} trigger={trigger_price} oid={order_id}"
+        )
+        return {"success": True, "order_id": order_id}
+
+    def cancel_order(self, coin: str, order_id: int) -> bool:
+        """Cancel a single order by oid."""
+        if self.execution_mode != "live" or not self.enable_mainnet_trading:
+            logger.info(f"PAPER cancel order {coin} oid={order_id}")
+            return True
+
+        asset_id = self.get_asset_id(coin)
+        if asset_id is None:
+            logger.error(f"Asset ID not found for cancel {coin} oid={order_id}")
+            return False
+
+        action = {"type": "cancel", "cancels": [{"a": asset_id, "o": int(order_id)}]}
+        nonce = int(time.time() * 1000)
+        signature = self.sign_l1_action_exact(action, None, nonce, None, True)
+        payload = {"action": action, "nonce": nonce, "signature": signature, "vaultAddress": None}
+
+        result = self._post_exchange(payload)
+        if result is None:
+            return False
+        if result.get("status") != "ok":
+            logger.warning(f"Cancel rejected for {coin} oid={order_id}: {result}")
+            return False
+
+        logger.info(f"Cancel success {coin} oid={order_id}")
+        return True
+
+    def upsert_protective_orders(
+        self,
+        coin: str,
+        position_size: Decimal,
+        is_long: bool,
+        stop_loss_price: Decimal,
+        take_profit_price: Decimal,
+        current_stop_order_id: Optional[int] = None,
+        current_take_profit_order_id: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        """
+        Replace on-exchange protective SL/TP orders for an open position.
+        Cancels existing protective orders if provided, then places new SL and TP triggers.
+        """
+        if self.execution_mode != "live" or not self.enable_mainnet_trading:
+            return {
+                "success": True,
+                "stop_loss_order_id": None,
+                "take_profit_order_id": None,
+            }
+
+        close_side = "sell" if is_long else "buy"
+        close_size = abs(position_size)
+
+        if close_size <= 0:
+            return {"success": False, "reason": "invalid_size"}
+
+        if current_stop_order_id is not None:
+            self.cancel_order(coin, current_stop_order_id)
+        if current_take_profit_order_id is not None:
+            self.cancel_order(coin, current_take_profit_order_id)
+
+        sl_res = self.place_trigger_order(
+            coin=coin,
+            side=close_side,
+            size=close_size,
+            trigger_price=stop_loss_price,
+            tpsl="sl",
+            reduce_only=True,
+            is_market=True,
+        )
+        if not sl_res.get("success"):
+            return {"success": False, "reason": f"stop_loss_place_failed:{sl_res.get('reason', 'unknown')}"}
+
+        tp_res = self.place_trigger_order(
+            coin=coin,
+            side=close_side,
+            size=close_size,
+            trigger_price=take_profit_price,
+            tpsl="tp",
+            reduce_only=True,
+            is_market=True,
+        )
+        if not tp_res.get("success"):
+            sl_oid = sl_res.get("order_id")
+            if sl_oid is not None:
+                self.cancel_order(coin, sl_oid)
+            return {"success": False, "reason": f"take_profit_place_failed:{tp_res.get('reason', 'unknown')}"}
+
+        return {
+            "success": True,
+            "stop_loss_order_id": sl_res.get("order_id"),
+            "take_profit_order_id": tp_res.get("order_id"),
+        }

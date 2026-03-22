@@ -1,6 +1,4 @@
-import json
 import logging
-import os
 import time
 from decimal import Decimal
 from typing import Any, Dict, List, Optional, Tuple
@@ -8,12 +6,9 @@ from typing import Any, Dict, List, Optional, Tuple
 from models import (
     BreakEvenConfig,
     ManagedPosition,
-    PortfolioState,
-    PositionSide,
     StopLossConfig,
     TakeProfitConfig,
     TrailingStopConfig,
-    TradingAction,
 )
 from utils.file_io import atomic_write_json, read_json_file
 
@@ -54,12 +49,9 @@ class PositionManager:
         data = read_json_file(MANAGED_POSITIONS_PATH, default=None)
         if data is None:
             return
-        try:
-            for coin, pos_data in data.items():
-                self._managed[coin] = ManagedPosition.from_dict(pos_data)
-            logger.info(f"Loaded {len(self._managed)} managed positions from disk")
-        except (KeyError, ValueError) as e:
-            logger.warning(f"Failed to load managed positions: {e}")
+        for coin, pos_data in data.items():
+            self._managed[coin] = ManagedPosition.from_dict(pos_data)
+        logger.info(f"Loaded {len(self._managed)} managed positions from disk")
 
     def _save_state(self) -> None:
         """Persist managed positions to disk atomically with restrictive permissions."""
@@ -76,16 +68,11 @@ class PositionManager:
         Updates size and entry_price for existing positions that changed.
         Adds managed entries for new positions found on exchange.
         """
-        # Remove managed positions no longer on exchange
-        closed_coins = [
-            coin for coin in self._managed
-            if coin not in exchange_positions
-        ]
+        closed_coins = [coin for coin in self._managed if coin not in exchange_positions]
         for coin in closed_coins:
             logger.info(f"Position {coin} closed on exchange, removing from managed")
             del self._managed[coin]
 
-        # Add or update positions found on exchange
         for coin, pos in exchange_positions.items():
             size = Decimal(str(pos.get("size", 0)))
             if size == 0:
@@ -95,7 +82,6 @@ class PositionManager:
             is_long = size > 0
 
             if coin not in self._managed:
-                # New position — create managed entry
                 if entry_price <= 0:
                     logger.warning(f"Skipping managed position for {coin}: entry_price={entry_price}")
                     continue
@@ -137,7 +123,6 @@ class PositionManager:
                     f"break_even=ON@{float(self.break_even_activation_pct)*100}%"
                 )
             else:
-                # Existing position — update size, entry_price, and direction if changed
                 existing = self._managed[coin]
                 new_size = abs(size)
                 new_is_long = size > 0
@@ -147,22 +132,20 @@ class PositionManager:
                 entry_changed = entry_price > 0 and entry_price != existing.entry_price
 
                 if direction_changed:
-                    # Direction flipped — this shouldn't happen (close first), but handle it
                     logger.warning(f"Position {coin} direction changed, resetting managed state")
                     self.remove_position(coin)
-                    # Will be re-added on next sync
                     continue
 
                 if size_changed:
+                    old_size = existing.size
                     existing.size = new_size
-                    logger.info(f"Updated {coin} size: {existing.size} -> {new_size}")
+                    logger.info(f"Updated {coin} size: {old_size} -> {new_size}")
 
                 if entry_changed:
                     old_entry = existing.entry_price
                     existing.entry_price = entry_price
-                    # Recalculate SL/TP if entry changed and break-even not yet activated
                     if not existing.break_even.activated:
-                        existing.stop_loss.price = None  # Reset to percentage-based
+                        existing.stop_loss.price = None
                     logger.info(f"Updated {coin} entry: ${old_entry} -> ${entry_price}")
 
         self._save_state()
@@ -185,12 +168,10 @@ class PositionManager:
 
             current_price = current_prices[coin]
 
-            # Guard against zero entry price
             if managed.entry_price <= 0:
                 logger.warning(f"Skipping risk check for {coin}: entry_price={managed.entry_price}")
                 continue
 
-            # === Break-even check (doesn't close, moves SL) ===
             if managed.check_break_even(current_price):
                 be_price = managed.break_even.get_break_even_price(managed.entry_price, managed.is_long)
                 logger.info(
@@ -198,23 +179,24 @@ class PositionManager:
                     f"(entry=${managed.entry_price}, current=${current_price})"
                 )
 
-            # === Trailing stop (highest priority for close) ===
             if managed.should_trailing_stop(current_price):
                 ts_price = managed.trailing_stop.get_trailing_stop_price(managed.is_long)
                 actions.append({
-                    "coin": coin, "trigger": "trailing_stop", "action": "close_position",
-                    "size": managed.size, "is_long": managed.is_long,
-                    "current_price": current_price, "trigger_price": ts_price,
+                    "coin": coin,
+                    "trigger": "trailing_stop",
+                    "action": "close_position",
+                    "size": managed.size,
+                    "is_long": managed.is_long,
+                    "current_price": current_price,
+                    "trigger_price": ts_price,
                     "entry_price": managed.entry_price,
                     "reasoning": f"Trailing stop triggered for {coin}: price=${current_price} hit trailing stop at ${ts_price}"
                 })
                 continue
 
-            # Update trailing stop extremes even if not triggered
             if managed.trailing_stop.enabled:
                 managed.trailing_stop.update_extreme(current_price, managed.is_long)
 
-            # === Stop-loss ===
             if managed.should_stop_loss(current_price):
                 sl_price = managed.stop_loss.calculate_stop_price(managed.entry_price, managed.is_long)
                 if managed.break_even.activated and managed.stop_loss.price is not None:
@@ -222,21 +204,28 @@ class PositionManager:
 
                 trigger_name = "break_even_stop" if managed.break_even.activated else "stop_loss"
                 actions.append({
-                    "coin": coin, "trigger": trigger_name, "action": "close_position",
-                    "size": managed.size, "is_long": managed.is_long,
-                    "current_price": current_price, "trigger_price": sl_price,
+                    "coin": coin,
+                    "trigger": trigger_name,
+                    "action": "close_position",
+                    "size": managed.size,
+                    "is_long": managed.is_long,
+                    "current_price": current_price,
+                    "trigger_price": sl_price,
                     "entry_price": managed.entry_price,
                     "reasoning": f"{'Break-even stop' if managed.break_even.activated else 'Stop-loss'} triggered for {coin}: price=${current_price} breached SL at ${sl_price}"
                 })
                 continue
 
-            # === Take-profit ===
             if managed.should_take_profit(current_price):
                 tp_price = managed.take_profit.calculate_tp_price(managed.entry_price, managed.is_long)
                 actions.append({
-                    "coin": coin, "trigger": "take_profit", "action": "close_position",
-                    "size": managed.size, "is_long": managed.is_long,
-                    "current_price": current_price, "trigger_price": tp_price,
+                    "coin": coin,
+                    "trigger": "take_profit",
+                    "action": "close_position",
+                    "size": managed.size,
+                    "is_long": managed.is_long,
+                    "current_price": current_price,
+                    "trigger_price": tp_price,
                     "entry_price": managed.entry_price,
                     "reasoning": f"Take-profit triggered for {coin}: price=${current_price} reached TP at ${tp_price}"
                 })
@@ -254,7 +243,7 @@ class PositionManager:
         sl_pct: Optional[Decimal] = None,
         tp_pct: Optional[Decimal] = None,
         trailing: Optional[bool] = None,
-        is_trend: bool = False,  # New parameter for trend positions
+        is_trend: bool = False,
     ) -> None:
         """Register a new position with risk management."""
         if entry_price <= 0:
@@ -273,17 +262,24 @@ class PositionManager:
                 activation_price = entry_price * (Decimal("1") - self.trailing_activation_pct)
 
         self._managed[coin] = ManagedPosition(
-            coin=coin, size=abs(size), entry_price=entry_price,
-            is_long=is_long, leverage=leverage, opened_at=time.time(),
+            coin=coin,
+            size=abs(size),
+            entry_price=entry_price,
+            is_long=is_long,
+            leverage=leverage,
+            opened_at=time.time(),
             stop_loss=StopLossConfig(enabled=True, percentage=sl_pct),
             take_profit=TakeProfitConfig(enabled=True, percentage=tp_pct),
             trailing_stop=TrailingStopConfig(
-                enabled=use_trailing, callback_rate=self.default_trailing_callback,
+                enabled=use_trailing,
+                callback_rate=self.default_trailing_callback,
                 activation_price=activation_price,
             ),
             break_even=BreakEvenConfig(
-                enabled=True, activation_pct=self.break_even_activation_pct,
-                offset_pct=self.break_even_offset_pct, activated=False,
+                enabled=True,
+                activation_pct=self.break_even_activation_pct,
+                offset_pct=self.break_even_offset_pct,
+                activated=False,
             ),
         )
         self._save_state()
@@ -293,6 +289,68 @@ class PositionManager:
             f"size={size} entry=${entry_price} SL={float(sl_pct)*100}% TP={float(tp_pct)*100}% "
             f"BE@{float(self.break_even_activation_pct)*100}%"
         )
+
+    def update_position_risk(
+        self,
+        coin: str,
+        sl_pct: Optional[Decimal] = None,
+        tp_pct: Optional[Decimal] = None,
+    ) -> bool:
+        """
+        Update SL/TP percentages for an existing managed position.
+        Returns True if at least one parameter was updated.
+        """
+        if coin not in self._managed:
+            return False
+
+        pos = self._managed[coin]
+        changed = False
+
+        if sl_pct is not None and sl_pct > 0 and sl_pct != pos.stop_loss.percentage:
+            pos.stop_loss.percentage = sl_pct
+            if not pos.break_even.activated:
+                pos.stop_loss.price = None
+            changed = True
+
+        if tp_pct is not None and tp_pct > 0 and tp_pct != pos.take_profit.percentage:
+            pos.take_profit.percentage = tp_pct
+            pos.take_profit.price = None
+            changed = True
+
+        if changed:
+            self._save_state()
+            logger.info(
+                f"Updated risk params for {coin}: "
+                f"SL={float(pos.stop_loss.percentage)*100:.2f}% "
+                f"TP={float(pos.take_profit.percentage)*100:.2f}%"
+            )
+
+        return changed
+
+    def set_protective_order_ids(
+        self,
+        coin: str,
+        stop_loss_order_id: Optional[int],
+        take_profit_order_id: Optional[int],
+    ) -> None:
+        if coin not in self._managed:
+            return
+        pos = self._managed[coin]
+        pos.stop_loss_order_id = stop_loss_order_id
+        pos.take_profit_order_id = take_profit_order_id
+        self._save_state()
+
+    def clear_protective_order_ids(self, coin: str) -> None:
+        self.set_protective_order_ids(coin, None, None)
+
+    def get_protective_order_ids(self, coin: str) -> Tuple[Optional[int], Optional[int]]:
+        pos = self._managed.get(coin)
+        if not pos:
+            return None, None
+        return pos.stop_loss_order_id, pos.take_profit_order_id
+
+    def get_position(self, coin: str) -> Optional[ManagedPosition]:
+        return self._managed.get(coin)
 
     def remove_position(self, coin: str) -> None:
         """Remove a managed position (after close)."""
@@ -330,6 +388,8 @@ class PositionManager:
                 "lowest_tracked": str(pos.trailing_stop.lowest_price) if pos.trailing_stop.lowest_price else None,
                 "break_even_activated": pos.break_even.activated,
                 "break_even_activation_pct": str(pos.break_even.activation_pct),
+                "stop_loss_order_id": pos.stop_loss_order_id,
+                "take_profit_order_id": pos.take_profit_order_id,
                 "opened_at": pos.opened_at,
             })
         return statuses
@@ -349,27 +409,27 @@ class PositionManager:
             if coin not in current_prices:
                 continue
 
-            # Get current 1D trend
             tech_data = technical_fetcher.get_technical_indicators(coin)
             if not tech_data:
                 continue
 
             lt_context = tech_data.get("long_term_context", {})
             current_1d_trend = lt_context.get("trend", "neutral")
-
-            # Determine position direction
             position_trend = "bullish" if managed.is_long else "bearish"
 
-            # If trend has reversed, close the position
             if current_1d_trend != position_trend and current_1d_trend in ["bullish", "bearish"]:
                 logger.warning(
                     f"Trend reversal detected for {coin}: position {position_trend} vs current 1D {current_1d_trend}. "
                     f"Closing position."
                 )
                 actions.append({
-                    "coin": coin, "trigger": "trend_reversal", "action": "close_position",
-                    "size": managed.size, "is_long": managed.is_long,
-                    "current_price": current_prices[coin], "trigger_price": current_prices[coin],
+                    "coin": coin,
+                    "trigger": "trend_reversal",
+                    "action": "close_position",
+                    "size": managed.size,
+                    "is_long": managed.is_long,
+                    "current_price": current_prices[coin],
+                    "trigger_price": current_prices[coin],
                     "entry_price": managed.entry_price,
                     "reasoning": f"Trend reversal on 1D: {position_trend} → {current_1d_trend}"
                 })

@@ -82,6 +82,85 @@ class CycleOrchestrator:
         """Set current cycle count for live status updates."""
         self._cycle_count = count
 
+    # ─── Helpers: on-exchange protection ──────────────────────────────────
+
+    def _live_orders_enabled(self) -> bool:
+        return self.cfg.execution_mode == "live" and self.cfg.enable_mainnet_trading
+
+    def _cancel_exchange_protective_orders(self, coin: str) -> None:
+        if not self._live_orders_enabled():
+            self.position_manager.clear_protective_order_ids(coin)
+            return
+
+        managed = self.position_manager.get_position(coin)
+        if not managed:
+            return
+
+        if managed.stop_loss_order_id is not None:
+            self.exchange_client.cancel_order(coin, managed.stop_loss_order_id)
+        if managed.take_profit_order_id is not None:
+            self.exchange_client.cancel_order(coin, managed.take_profit_order_id)
+
+        self.position_manager.clear_protective_order_ids(coin)
+
+    def _sync_exchange_protective_orders(self, coin: str) -> bool:
+        managed = self.position_manager.get_position(coin)
+        if not managed:
+            return False
+
+        sl_price = managed.stop_loss.calculate_stop_price(managed.entry_price, managed.is_long)
+        if managed.break_even.activated and managed.stop_loss.price is not None:
+            sl_price = managed.stop_loss.price
+
+        tp_price = managed.take_profit.calculate_tp_price(managed.entry_price, managed.is_long)
+
+        if not self._live_orders_enabled():
+            self.position_manager.clear_protective_order_ids(coin)
+            return True
+
+        result = self.exchange_client.upsert_protective_orders(
+            coin=coin,
+            position_size=managed.size,
+            is_long=managed.is_long,
+            stop_loss_price=sl_price,
+            take_profit_price=tp_price,
+            current_stop_order_id=managed.stop_loss_order_id,
+            current_take_profit_order_id=managed.take_profit_order_id,
+        )
+
+        if not result.get("success"):
+            logger.warning(f"{coin} protective order sync failed: {result.get('reason', 'unknown')}")
+            return False
+
+        self.position_manager.set_protective_order_ids(
+            coin,
+            result.get("stop_loss_order_id"),
+            result.get("take_profit_order_id"),
+        )
+        logger.info(
+            f"{coin} protective orders synced on exchange: "
+            f"SL oid={result.get('stop_loss_order_id')} TP oid={result.get('take_profit_order_id')}"
+        )
+        return True
+
+    def _update_protection_without_trade(self, coin: str, decision: Dict[str, Any]) -> bool:
+        sl_pct = decision.get("stop_loss_pct")
+        tp_pct = decision.get("take_profit_pct")
+
+        if sl_pct is None and tp_pct is None:
+            return False
+
+        changed = self.position_manager.update_position_risk(
+            coin=coin,
+            sl_pct=sl_pct if isinstance(sl_pct, Decimal) else None,
+            tp_pct=tp_pct if isinstance(tp_pct, Decimal) else None,
+        )
+        if not changed:
+            return False
+
+        self._sync_exchange_protective_orders(coin)
+        return True
+
     # ─── Phase 1: Health Check ────────────────────────────────────────────
 
     def _run_health_check(self, cycle_count: int) -> None:
@@ -152,6 +231,7 @@ class CycleOrchestrator:
 
             if result.get("success"):
                 triggered += 1
+                self._cancel_exchange_protective_orders(coin)
                 self.position_manager.remove_position(coin)
                 self._send_trigger_notification(trigger, coin, entry_price, trigger_price, current_price)
                 self._record_trigger_trade(coin, close_size, current_price, result, action_info, trigger)
@@ -213,6 +293,7 @@ class CycleOrchestrator:
             self.hl_rate_limiter.acquire(1)
             result = self.exchange_client.place_order(worst_coin, side, close_size, current_price)
             if result.get("success"):
+                self._cancel_exchange_protective_orders(worst_coin)
                 self.position_manager.remove_position(worst_coin)
                 logger.info(f"Emergency close executed for {worst_coin}")
                 state = self.state_store.load_state()
@@ -295,10 +376,7 @@ class CycleOrchestrator:
         Checks latest portfolio position delta to catch delayed fills.
         Returns (confirmed, fill_status).
         """
-        try:
-            latest_portfolio = self.portfolio_service.get_portfolio_state()
-        except Exception:
-            return False, "not_filled"
+        latest_portfolio = self.portfolio_service.get_portfolio_state()
 
         size_before = Decimal(str(snapshot.get("size_before", "0")))
         current_size = Decimal("0")
@@ -345,7 +423,10 @@ class CycleOrchestrator:
             logger.info(f"{coin} correlation risk: {corr_reason}")
 
         funding_data = technical_fetcher.get_funding_for_coin(coin)
-        decision = self._get_decision(coin, market_data, portfolio, tech_data, all_mids, funding_data, recent_trades, peak, consecutive_losses)
+        decision = self._get_decision(
+            coin, market_data, portfolio, tech_data, all_mids,
+            funding_data, recent_trades, peak, consecutive_losses
+        )
 
         logger.info(
             f"{coin} decision: action={decision['action']}, size={decision['size']}, "
@@ -374,6 +455,13 @@ class CycleOrchestrator:
             logger.info(f"{coin} risk rejected: {risk_reason}")
             self.metrics.increment("risk_rejections_total")
             return None
+
+        if decision["action"] == "hold" and coin in portfolio.positions:
+            updated = self._update_protection_without_trade(coin, decision)
+            if updated:
+                logger.info(f"{coin} hold with SL/TP update applied")
+            self.metrics.increment("holds_total")
+            return {"trades": 0, "notional": Decimal("0"), "failed": False}
 
         snapshot = None
         if self.cfg.execution_mode == "live" and self.cfg.enable_mainnet_trading:
@@ -421,6 +509,7 @@ class CycleOrchestrator:
             if notional > 0:
                 state.setdefault("last_trade_timestamp_by_coin", {})[coin] = time.time()
                 self.metrics.increment("trades_executed_total")
+
                 if decision["action"] in ["buy", "sell", "increase_position"]:
                     is_long = decision["action"] in ["buy", "increase_position"]
                     sl_pct = decision.get("stop_loss_pct")
@@ -435,17 +524,26 @@ class CycleOrchestrator:
                         sl_pct=sl_pct if isinstance(sl_pct, Decimal) else None,
                         tp_pct=tp_pct if isinstance(tp_pct, Decimal) else None,
                     )
+                    self._sync_exchange_protective_orders(coin)
+
+                elif decision["action"] == "close_position":
+                    self._cancel_exchange_protective_orders(coin)
+                    self.position_manager.remove_position(coin)
+
+                elif decision["action"] == "reduce_position":
+                    self._sync_exchange_protective_orders(coin)
+
                 self.notifier.notify_trade(trade_record)
                 logger.info(f"{coin} executed: reason={result['reason']}, notional=${notional}")
                 return {"trades": 1, "notional": notional, "failed": False}
-            else:
-                self.metrics.increment("holds_total")
-                logger.info(f"{coin}: hold (no trade)")
-                return {"trades": 0, "notional": Decimal("0"), "failed": False}
-        else:
-            self.metrics.increment("execution_failures_total")
-            logger.warning(f"{coin} execution failed: {result.get('reason', 'unknown')}")
-            return {"trades": 0, "notional": Decimal("0"), "failed": True}
+
+            self.metrics.increment("holds_total")
+            logger.info(f"{coin}: hold (no trade)")
+            return {"trades": 0, "notional": Decimal("0"), "failed": False}
+
+        self.metrics.increment("execution_failures_total")
+        logger.warning(f"{coin} execution failed: {result.get('reason', 'unknown')}")
+        return {"trades": 0, "notional": Decimal("0"), "failed": True}
 
     def _get_decision(self, coin, market_data, portfolio, tech_data, all_mids, funding_data, recent_trades, peak, consecutive_losses):
         """Get trading decision from LLM or fallback."""
@@ -500,14 +598,22 @@ class CycleOrchestrator:
             mid_price = Decimal(str(mids[coin]))
             if mid_price > 0:
                 raw_min = Decimal("1") / mid_price
-                if raw_min < Decimal("0.001"): resolved = Decimal("0.001")
-                elif raw_min < Decimal("0.01"): resolved = Decimal("0.01")
-                elif raw_min < Decimal("0.1"): resolved = Decimal("0.1")
-                elif raw_min < Decimal("1"): resolved = Decimal("1")
-                elif raw_min < Decimal("10"): resolved = Decimal("10")
-                elif raw_min < Decimal("100"): resolved = Decimal("100")
-                elif raw_min < Decimal("1000"): resolved = Decimal("1000")
-                else: resolved = Decimal("10000")
+                if raw_min < Decimal("0.001"):
+                    resolved = Decimal("0.001")
+                elif raw_min < Decimal("0.01"):
+                    resolved = Decimal("0.01")
+                elif raw_min < Decimal("0.1"):
+                    resolved = Decimal("0.1")
+                elif raw_min < Decimal("1"):
+                    resolved = Decimal("1")
+                elif raw_min < Decimal("10"):
+                    resolved = Decimal("10")
+                elif raw_min < Decimal("100"):
+                    resolved = Decimal("100")
+                elif raw_min < Decimal("1000"):
+                    resolved = Decimal("1000")
+                else:
+                    resolved = Decimal("10000")
                 self._dynamic_min_sizes[coin] = resolved
                 logger.info(f"Dynamic min size for {coin}: {resolved} (price=${mid_price})")
                 return resolved
