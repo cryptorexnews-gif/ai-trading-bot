@@ -1,3 +1,4 @@
+SL and SL->TP) with higher default values and dedicated env vars.">
 #!/usr/bin/env python3
 """
 Test live sequenziale:
@@ -25,7 +26,8 @@ Parametri test (opzionali):
 - TEST_TICK_SIZE=          # opzionale, es: 0.1 (override manuale)
 - TEST_POSITION_WAIT_ATTEMPTS=10
 - TEST_POSITION_WAIT_SEC=1
-- TEST_CONFIRM_WAIT_SEC=2
+- TEST_WAIT_AFTER_ENTRY_SEC=8
+- TEST_WAIT_AFTER_SL_SEC=8
 - TEST_TRIGGER_CONFIRM_ATTEMPTS=15
 - TEST_TRIGGER_CONFIRM_SLEEP_SEC=1
 """
@@ -218,7 +220,8 @@ def main() -> None:
     tick_override_raw = os.getenv("TEST_TICK_SIZE", "").strip()
     position_wait_attempts = int(os.getenv("TEST_POSITION_WAIT_ATTEMPTS", "10"))
     position_wait_sec = float(os.getenv("TEST_POSITION_WAIT_SEC", "1"))
-    confirm_wait_sec = float(os.getenv("TEST_CONFIRM_WAIT_SEC", "2"))
+    wait_after_entry_sec = float(os.getenv("TEST_WAIT_AFTER_ENTRY_SEC", "8"))
+    wait_after_sl_sec = float(os.getenv("TEST_WAIT_AFTER_SL_SEC", "8"))
     trigger_confirm_attempts = int(os.getenv("TEST_TRIGGER_CONFIRM_ATTEMPTS", "15"))
     trigger_confirm_sleep_sec = float(os.getenv("TEST_TRIGGER_CONFIRM_SLEEP_SEC", "1"))
 
@@ -238,8 +241,10 @@ def main() -> None:
         raise RuntimeError("TEST_POSITION_WAIT_ATTEMPTS deve essere >= 1")
     if position_wait_sec <= 0:
         raise RuntimeError("TEST_POSITION_WAIT_SEC deve essere > 0")
-    if confirm_wait_sec < 0:
-        raise RuntimeError("TEST_CONFIRM_WAIT_SEC deve essere >= 0")
+    if wait_after_entry_sec < 0:
+        raise RuntimeError("TEST_WAIT_AFTER_ENTRY_SEC deve essere >= 0")
+    if wait_after_sl_sec < 0:
+        raise RuntimeError("TEST_WAIT_AFTER_SL_SEC deve essere >= 0")
     if trigger_confirm_attempts < 1:
         raise RuntimeError("TEST_TRIGGER_CONFIRM_ATTEMPTS deve essere >= 1")
     if trigger_confirm_sleep_sec <= 0:
@@ -384,9 +389,9 @@ def main() -> None:
         f"close_side={close_side} close_size={close_size}"
     )
 
-    if confirm_wait_sec > 0:
-        logger.info(f"Attesa conferma post-entry: {confirm_wait_sec}s")
-        time.sleep(confirm_wait_sec)
+    if wait_after_entry_sec > 0:
+        logger.info(f"Attesa post-entry prima dello SL: {wait_after_entry_sec}s")
+        time.sleep(wait_after_entry_sec)
 
     logger.info(f"STEP 2/3 STOP LOSS: trigger={sl_trigger}")
     sl_id, sl_confirmed = place_single_protective_order_with_confirmation(
@@ -402,9 +407,9 @@ def main() -> None:
     )
     logger.info(f"Stop loss creato: oid={sl_id}, confirmed={sl_confirmed}")
 
-    if confirm_wait_sec > 0:
-        logger.info(f"Attesa conferma post-SL: {confirm_wait_sec}s")
-        time.sleep(confirm_wait_sec)
+    if wait_after_sl_sec > 0:
+        logger.info(f"Attesa post-SL prima del TP: {wait_after_sl_sec}s")
+        time.sleep(wait_after_sl_sec)
 
     logger.info(f"STEP 3/3 TAKE PROFIT: trigger={tp_trigger}")
     tp_id, tp_confirmed = place_single_protective_order_with_confirmation(
