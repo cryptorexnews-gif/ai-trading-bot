@@ -1,6 +1,6 @@
 import logging
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 from exchange.signing import sign_l1_action_exact, sign_l1_action_exact_legacy
 
@@ -60,34 +60,6 @@ class SignedActionService:
             s["v"] = raw_v - 27
         return s
 
-    def _payload_variants(
-        self,
-        action: Dict[str, Any],
-        nonce: int,
-        signature: Dict[str, Any],
-        vault_address_override: Optional[str],
-    ) -> List[Dict[str, Any]]:
-        base = {
-            "action": action,
-            "nonce": nonce,
-            "signature": signature,
-        }
-
-        payloads: List[Dict[str, Any]] = []
-
-        # Variant A: omit vaultAddress when None
-        if vault_address_override is None:
-            payloads.append(dict(base))
-            payload_with_null = dict(base)
-            payload_with_null["vaultAddress"] = None
-            payloads.append(payload_with_null)
-        else:
-            payload_with_vault = dict(base)
-            payload_with_vault["vaultAddress"] = vault_address_override
-            payloads.append(payload_with_vault)
-
-        return payloads
-
     def _post_with_signature_strategy(
         self,
         action: Dict[str, Any],
@@ -107,21 +79,14 @@ class SignedActionService:
         if use_recovery_v:
             signature = self._with_recovery_v(signature)
 
-        payloads = self._payload_variants(
-            action=action,
-            nonce=nonce,
-            signature=signature,
-            vault_address_override=vault_address_override,
-        )
+        payload = {
+            "action": action,
+            "nonce": nonce,
+            "signature": signature,
+            "vaultAddress": vault_address_override,
+        }
 
-        last_result: Optional[Dict[str, Any]] = None
-        for payload in payloads:
-            last_result = self._post_exchange(payload, timeout)
-            if last_result is None:
-                continue
-            if not self._is_auth_error(last_result):
-                return last_result
-        return last_result
+        return self._post_exchange(payload, timeout)
 
     def post_signed_action_once(
         self,
@@ -148,7 +113,6 @@ class SignedActionService:
         if now < self._auth_block_until:
             return {"status": "err", "response": "auth_cooldown_active"}
 
-        # Strategy matrix in descending preference
         attempts = [
             ("padded", False),
             ("legacy", False),
