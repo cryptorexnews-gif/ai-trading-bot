@@ -10,29 +10,64 @@ const actionColors = {
   change_leverage: 'bg-purple-600',
 }
 
-export default function TradeHistory({ trades }) {
+const manageActions = new Set(['close_position', 'reduce_position', 'change_leverage'])
+const openActions = new Set(['buy', 'sell', 'increase_position'])
+
+function toNum(v, fallback = 0) {
+  const n = parseFloat(v)
+  return Number.isNaN(n) ? fallback : n
+}
+
+function getRequiredMinConfidence(action, minOpen, minManage) {
+  if (openActions.has(action)) return minOpen
+  if (manageActions.has(action)) return minManage
+  return Number.POSITIVE_INFINITY
+}
+
+export default function TradeHistory({
+  trades,
+  minConfidenceOpen = 0.72,
+  minConfidenceManage = 0.5
+}) {
   const [filterCoin, setFilterCoin] = useState('all')
   const [expandedIdx, setExpandedIdx] = useState(null)
 
-  const coins = useMemo(() => {
+  const eligibleTrades = useMemo(() => {
     if (!trades) return []
-    const unique = [...new Set(trades.map(t => t.coin).filter(Boolean))]
+    return trades.filter((trade) => {
+      const action = String(trade.action || '').toLowerCase()
+      const confidence = toNum(trade.confidence, 0)
+      const required = getRequiredMinConfidence(action, minConfidenceOpen, minConfidenceManage)
+      return confidence >= required
+    })
+  }, [trades, minConfidenceOpen, minConfidenceManage])
+
+  const coins = useMemo(() => {
+    if (!eligibleTrades) return []
+    const unique = [...new Set(eligibleTrades.map(t => t.coin).filter(Boolean))]
     return unique.sort()
-  }, [trades])
+  }, [eligibleTrades])
 
   const filteredTrades = useMemo(() => {
-    if (!trades) return []
-    if (filterCoin === 'all') return trades
-    return trades.filter(t => t.coin === filterCoin)
-  }, [trades, filterCoin])
+    if (!eligibleTrades) return []
+    if (filterCoin === 'all') return eligibleTrades
+    return eligibleTrades.filter(t => t.coin === filterCoin)
+  }, [eligibleTrades, filterCoin])
 
-  if (!trades || trades.length === 0) {
+  if (!filteredTrades || filteredTrades.length === 0) {
     return (
       <div className="bg-gray-900 rounded-xl p-6 border border-gray-800">
-        <h3 className="text-lg font-semibold mb-4">Trade History</h3>
+        <h3 className="text-lg font-semibold mb-2">Recent Bot Decisions</h3>
+        <p className="text-xs text-gray-500 mb-4">
+          Showing only decisions above operational confidence thresholds
+          {' '}(
+          open ≥ {(minConfidenceOpen * 100).toFixed(0)}%,
+          manage ≥ {(minConfidenceManage * 100).toFixed(0)}%
+          )
+        </p>
         <div className="flex flex-col items-center justify-center py-8 text-gray-500">
           <div className="text-4xl mb-2">📋</div>
-          <p className="text-sm">No trades yet</p>
+          <p className="text-sm">No qualifying decisions yet</p>
         </div>
       </div>
     )
@@ -41,10 +76,15 @@ export default function TradeHistory({ trades }) {
   return (
     <div className="bg-gray-900 rounded-xl p-6 border border-gray-800">
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between mb-4 gap-2">
-        <h3 className="text-lg font-semibold">
-          Trade History
-          <span className="text-sm font-normal text-gray-500 ml-2">({filteredTrades.length})</span>
-        </h3>
+        <div>
+          <h3 className="text-lg font-semibold">
+            Recent Bot Decisions
+            <span className="text-sm font-normal text-gray-500 ml-2">({filteredTrades.length})</span>
+          </h3>
+          <p className="text-[10px] text-gray-500 mt-1">
+            Open ≥ {(minConfidenceOpen * 100).toFixed(0)}% • Manage ≥ {(minConfidenceManage * 100).toFixed(0)}%
+          </p>
+        </div>
         <div className="flex items-center gap-2">
           <span className="text-xs text-gray-500">Filter:</span>
           <select
