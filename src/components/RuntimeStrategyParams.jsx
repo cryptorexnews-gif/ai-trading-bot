@@ -24,7 +24,7 @@ const FIELDS = [
   { key: 'trailing_callback', label: 'Trailing callback (%)', step: '0.1', percent: true },
 ]
 
-export default function RuntimeStrategyParams({ strategyMode, strategyParams, onChange }) {
+export default function RuntimeStrategyParams({ strategyMode, strategyParams, defaultPreset, onChange }) {
   return (
     <div>
       <p className="text-xs text-gray-400 mb-2 flex items-center gap-2">
@@ -33,20 +33,24 @@ export default function RuntimeStrategyParams({ strategyMode, strategyParams, on
       </p>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5">
-        {FIELDS.map((field) => (
-          <label key={field.key} className="bg-gray-800/40 border border-gray-700 rounded-lg p-2 flex flex-col gap-1">
-            <span className="text-[11px] text-gray-400">{field.label}</span>
-            <input
-              value={strategyParams[field.key] ?? ''}
-              onChange={(e) => onChange(field.key, e.target.value)}
-              inputMode="decimal"
-              type="number"
-              step={field.step}
-              placeholder={field.percent ? 'es. 2 = 2%' : 'valore diretto'}
-              className="bg-gray-900 border border-gray-700 rounded px-2 py-1.5 text-sm text-white focus:outline-none focus:border-cyan-500"
-            />
-          </label>
-        ))}
+        {FIELDS.map((field) => {
+          const defaultValue = defaultPreset?.[field.key] ?? '—'
+          return (
+            <label key={field.key} className="bg-gray-800/40 border border-gray-700 rounded-lg p-2 flex flex-col gap-1">
+              <span className="text-[11px] text-gray-400">{field.label}</span>
+              <input
+                value={strategyParams[field.key] ?? ''}
+                onChange={(e) => onChange(field.key, e.target.value)}
+                inputMode="decimal"
+                type="number"
+                step={field.step}
+                placeholder={field.percent ? 'es. 2 = 2%' : 'valore diretto'}
+                className="bg-gray-900 border border-gray-700 rounded px-2 py-1.5 text-sm text-white focus:outline-none focus:border-cyan-500"
+              />
+              <span className="text-[10px] text-gray-500">Default preset: {defaultValue}</span>
+            </label>
+          )
+        })}
       </div>
       <p className="text-[11px] text-gray-500 mt-2">
         Regola unica: inserisci sempre numeri diretti. Esempi: <strong>1</strong> = 1 secondo, 1 USD, 1x; per percentuali <strong>2</strong> = 2%.

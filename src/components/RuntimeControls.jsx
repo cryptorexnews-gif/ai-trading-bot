@@ -4,6 +4,26 @@ import useRuntimeConfig from '../hooks/useRuntimeConfig'
 import RuntimeStrategyParams from './RuntimeStrategyParams'
 import Toast from './Toast'
 
+function PresetCard({ title, preset, active }) {
+  const entries = Object.entries(preset || {})
+  return (
+    <div className={`rounded-lg border p-3 ${active ? 'border-cyan-500 bg-cyan-900/10' : 'border-gray-700 bg-gray-800/30'}`}>
+      <div className="flex items-center justify-between mb-2">
+        <p className="text-xs font-semibold text-gray-200">{title}</p>
+        {active && <span className="text-[10px] px-1.5 py-0.5 rounded bg-cyan-700/30 text-cyan-300">Attivo</span>}
+      </div>
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-1">
+        {entries.map(([k, v]) => (
+          <div key={k} className="text-[11px] text-gray-400 flex items-center justify-between gap-2">
+            <span className="truncate">{k}</span>
+            <span className="text-gray-200 font-mono">{String(v)}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 export default function RuntimeControls() {
   const {
     loading,
@@ -15,6 +35,8 @@ export default function RuntimeControls() {
     selectedPairs,
     toggleCoin,
     strategyParams,
+    strategyPresets,
+    activePreset,
     setStrategyParam,
     save,
   } = useRuntimeConfig()
@@ -120,9 +142,15 @@ export default function RuntimeControls() {
           </p>
         </div>
 
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+          <PresetCard title="Preset Trend (default)" preset={strategyPresets.trend} active={strategyMode === 'trend'} />
+          <PresetCard title="Preset Scalping (default)" preset={strategyPresets.scalping} active={strategyMode === 'scalping'} />
+        </div>
+
         <RuntimeStrategyParams
           strategyMode={strategyMode}
           strategyParams={strategyParams}
+          defaultPreset={activePreset}
           onChange={setStrategyParam}
         />
 

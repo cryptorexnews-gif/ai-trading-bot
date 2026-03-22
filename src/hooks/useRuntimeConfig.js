@@ -273,6 +273,7 @@ export default function useRuntimeConfig() {
   }, [apiBase, selectedPairs, strategyMode, strategyParams])
 
   const mergedPreviewParams = useMemo(() => ({ ...defaultParams, ...strategyParams }), [defaultParams, strategyParams])
+  const activePreset = useMemo(() => strategyPresets[strategyMode] || {}, [strategyPresets, strategyMode])
 
   return {
     loading,
@@ -284,6 +285,9 @@ export default function useRuntimeConfig() {
     selectedPairs,
     toggleCoin,
     strategyParams: mergedPreviewParams,
+    defaultParams,
+    strategyPresets,
+    activePreset,
     setStrategyParam,
     resetStrategyParams,
     save,
