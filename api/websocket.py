@@ -1,5 +1,6 @@
 import hmac
 import json
+import logging
 import os
 import time
 from decimal import Decimal
@@ -7,13 +8,29 @@ from ipaddress import ip_address
 from typing import Any, Dict
 
 from flask import request
-from flask_sock import Sock
+
+try:
+    from flask_sock import Sock  # type: ignore
+    _WS_ENABLED = True
+except ModuleNotFoundError:
+    _WS_ENABLED = False
+
+    class Sock:  # fallback no-op
+        def init_app(self, app):
+            return None
+
+        def route(self, _path):
+            def decorator(func):
+                return func
+            return decorator
 
 from api.config import API_AUTH_KEY, LIVE_STATUS_PATH, METRICS_PATH, STATE_PATH
 from api.helpers import post_hyperliquid_info, read_json_file
 from state_store import StateStore
 from utils.circuit_breaker import get_all_circuit_states
 from utils.rate_limiter import get_all_rate_limiter_stats
+
+logger = logging.getLogger(__name__)
 
 sock = Sock()
 _state_store = StateStore(STATE_PATH, METRICS_PATH)
@@ -56,7 +73,6 @@ def _is_authorized() -> bool:
     if not API_AUTH_KEY:
         return False
 
-    # Support both query string and header auth for WS (proxy-friendly)
     provided_query = request.args.get("api_key", "")
     provided_header = request.headers.get("X-API-Key", "")
     provided = provided_query or provided_header
@@ -95,6 +111,10 @@ def _build_status_payload() -> Dict[str, Any]:
 
 @sock.route("/ws/status")
 def ws_status(ws):
+    if not _WS_ENABLED:
+        logger.warning("WebSocket endpoint /ws/status requested but flask_sock is not installed")
+        return
+
     if not _is_authorized():
         ws.close()
         return
@@ -110,6 +130,10 @@ def ws_status(ws):
 
 @sock.route("/ws/market")
 def ws_market(ws):
+    if not _WS_ENABLED:
+        logger.warning("WebSocket endpoint /ws/market requested but flask_sock is not installed")
+        return
+
     if not _is_authorized():
         ws.close()
         return
