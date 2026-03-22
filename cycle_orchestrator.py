@@ -78,6 +78,9 @@ class CycleOrchestrator:
         self.trading_pairs = trading_pairs
         self._cycle_count: int = 0
 
+        self._protective_sync_max_attempts = 12
+        self._protective_sync_base_sleep_sec = 1.0
+
         self.coin_processor = CoinCycleProcessor(
             cfg=self.cfg,
             execution_engine=self.execution_engine,
@@ -122,12 +125,21 @@ class CycleOrchestrator:
 
         self.position_manager.clear_protective_order_ids(coin)
 
+    def _verify_protective_orders_present(self, coin: str, sl_id: Optional[int], tp_id: Optional[int]) -> bool:
+        if sl_id is None or tp_id is None:
+            return False
+        return self.exchange_client.are_order_ids_open(
+            user=self.cfg.wallet_address,
+            coin=coin,
+            order_ids=[sl_id, tp_id],
+        )
+
     def _sync_exchange_protective_orders(self, coin: str) -> bool:
         if not self._live_orders_enabled():
             self.position_manager.clear_protective_order_ids(coin)
             return True
 
-        max_attempts = 3
+        max_attempts = self._protective_sync_max_attempts
         for attempt in range(1, max_attempts + 1):
             refreshed_portfolio = self.portfolio_service.get_portfolio_state()
             self.position_manager.sync_with_exchange(refreshed_portfolio.positions)
@@ -139,7 +151,7 @@ class CycleOrchestrator:
                     f"position not visible yet on exchange"
                 )
                 if attempt < max_attempts:
-                    time.sleep(1.5)
+                    time.sleep(self._protective_sync_base_sleep_sec)
                     continue
                 return False
 
@@ -159,31 +171,42 @@ class CycleOrchestrator:
                 current_take_profit_order_id=managed.take_profit_order_id,
             )
 
-            if result.get("success"):
-                self.position_manager.set_protective_order_ids(
-                    coin,
-                    result.get("stop_loss_order_id"),
-                    result.get("take_profit_order_id"),
+            if not result.get("success"):
+                logger.warning(
+                    f"{coin} protective sync attempt {attempt}/{max_attempts} failed: "
+                    f"{result.get('reason', 'unknown')}"
                 )
-                logger.info(
-                    f"{coin} protective orders synced on exchange: "
-                    f"SL oid={result.get('stop_loss_order_id')} TP oid={result.get('take_profit_order_id')}"
-                )
-                return True
+                if attempt < max_attempts:
+                    backoff = self._protective_sync_base_sleep_sec + min(2.0, attempt * 0.15)
+                    time.sleep(backoff)
+                continue
 
-            logger.warning(
-                f"{coin} protective sync attempt {attempt}/{max_attempts} failed: "
-                f"{result.get('reason', 'unknown')}"
+            sl_id = result.get("stop_loss_order_id")
+            tp_id = result.get("take_profit_order_id")
+
+            if not self._verify_protective_orders_present(coin, sl_id, tp_id):
+                logger.warning(
+                    f"{coin} protective sync attempt {attempt}/{max_attempts}: "
+                    f"orders not yet confirmed on exchange (sl_id={sl_id}, tp_id={tp_id})"
+                )
+                if attempt < max_attempts:
+                    time.sleep(self._protective_sync_base_sleep_sec)
+                continue
+
+            self.position_manager.set_protective_order_ids(coin, sl_id, tp_id)
+            logger.info(
+                f"{coin} protective orders confirmed on exchange: "
+                f"SL oid={sl_id} TP oid={tp_id}"
             )
-            if attempt < max_attempts:
-                time.sleep(1.5)
+            return True
 
+        logger.error(f"{coin} failed to confirm TP/SL on exchange after {max_attempts} attempts")
         return False
 
     def _ensure_protective_orders_for_open_positions(self, portfolio: PortfolioState) -> None:
         """
-        Ensure every managed open position has TP/SL order ids.
-        If one is missing, force a sync/recreate on exchange.
+        Ensure every managed open position has TP/SL order ids and that they truly exist on Hyperliquid.
+        If missing or stale, force recreate/sync.
         """
         if not self._live_orders_enabled():
             return
@@ -198,11 +221,16 @@ class CycleOrchestrator:
                 continue
 
             sl_id, tp_id = self.position_manager.get_protective_order_ids(coin)
-            if sl_id is None or tp_id is None:
-                logger.warning(f"{coin} missing protective orders (sl_id={sl_id}, tp_id={tp_id}), recreating")
+            ids_present = sl_id is not None and tp_id is not None
+            ids_confirmed = self._verify_protective_orders_present(coin, sl_id, tp_id) if ids_present else False
+
+            if not ids_present or not ids_confirmed:
+                logger.warning(
+                    f"{coin} protective orders missing/stale (sl_id={sl_id}, tp_id={tp_id}, confirmed={ids_confirmed}), recreating"
+                )
                 synced = self._sync_exchange_protective_orders(coin)
                 if not synced:
-                    logger.error(f"{coin} failed to recreate protective TP/SL in this cycle")
+                    logger.error(f"{coin} failed to enforce TP/SL on exchange in this cycle")
 
     def _update_protection_without_trade(self, coin: str, decision: Dict[str, Any]) -> bool:
         sl_pct = decision.get("stop_loss_pct")

@@ -1,7 +1,7 @@
 import logging
 import time
 from decimal import Decimal
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from eth_account import Account
 
@@ -244,6 +244,34 @@ class HyperliquidExchangeClient:
 
     def get_user_state(self, user: str) -> Optional[Dict[str, Any]]:
         return self._post_info({"type": "clearinghouseState", "user": user})
+
+    def get_open_orders(self, user: str) -> List[Dict[str, Any]]:
+        data = self._post_info({"type": "openOrders", "user": user})
+        return data if isinstance(data, list) else []
+
+    def are_order_ids_open(self, user: str, coin: str, order_ids: List[int]) -> bool:
+        wanted = {int(oid) for oid in order_ids if oid is not None}
+        if not wanted:
+            return False
+
+        open_orders = self.get_open_orders(user)
+        found = set()
+
+        for order in open_orders:
+            if not isinstance(order, dict):
+                continue
+            order_coin = str(order.get("coin", "")).strip().upper()
+            if order_coin != coin.upper():
+                continue
+            oid = order.get("oid")
+            if oid is None:
+                continue
+            try:
+                found.add(int(oid))
+            except (TypeError, ValueError):
+                continue
+
+        return wanted.issubset(found)
 
     def get_asset_id(self, coin: str) -> Optional[int]:
         meta = self.get_meta(force_refresh=False)
