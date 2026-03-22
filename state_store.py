@@ -119,7 +119,10 @@ class StateStore:
         return history[-count:] if history else []
 
     @staticmethod
-    def _is_failed_transaction(trade: Dict[str, Any]) -> bool:
+    def _is_failed_transaction(trade: Any) -> bool:
+        if not isinstance(trade, dict):
+            return True
+
         if not bool(trade.get("success", False)):
             return True
 
@@ -159,6 +162,10 @@ class StateStore:
         executed_trades = 0
 
         for t in history:
+            if not isinstance(t, dict):
+                failed_executions += 1
+                continue
+
             action = str(t.get("action", "")).strip().lower()
             trigger = str(t.get("trigger", "")).strip().lower()
 

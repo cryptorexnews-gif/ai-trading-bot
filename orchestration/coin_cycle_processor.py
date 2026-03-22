@@ -205,7 +205,14 @@ class CoinCycleProcessor:
                 self.metrics.increment("trades_executed_total")
 
                 if decision["action"] in ["buy", "sell", "increase_position"]:
-                    is_long = decision["action"] in ["buy", "increase_position"]
+                    if decision["action"] == "buy":
+                        is_long = True
+                    elif decision["action"] == "sell":
+                        is_long = False
+                    else:
+                        existing_size = Decimal(str(portfolio.positions.get(coin, {}).get("size", 0)))
+                        is_long = existing_size >= 0
+
                     sl_pct = decision.get("stop_loss_pct")
                     tp_pct = decision.get("take_profit_pct")
 
