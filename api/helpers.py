@@ -2,122 +2,20 @@
 Shared helper functions for API routes.
 """
 
-import logging
-import re
 from typing import Any, Optional
 
-import requests
-
-from api.config import HYPERLIQUID_BASE_URL
-from utils.hyperliquid_errors import (
-    AuthenticationError,
-    ExchangeRejectedError,
-    HyperliquidAPIError,
-    RateLimitError,
-    UpstreamServerError,
-)
-from utils.retry import retry_request
+from api.services.hyperliquid_proxy_service import post_hyperliquid_info as _post_hyperliquid_info
+from api.services.log_sanitizer_service import sanitize_log_message as _sanitize_log_message
 
 # Re-export from shared utils so routes can import from one place
 from utils.file_io import read_json_file  # noqa: F401
 
-logger = logging.getLogger(__name__)
-
-# ─── Hyperliquid proxy ────────────────────────────────────────────────────────
-
-
-def _raise_hyperliquid_http_error(status_code: int, endpoint_type: str) -> None:
-    if status_code in (401, 403):
-        raise AuthenticationError(f"hyperliquid_auth_error type={endpoint_type} status={status_code}")
-    if status_code == 429:
-        raise RateLimitError(f"hyperliquid_rate_limited type={endpoint_type}")
-    if status_code >= 500:
-        raise UpstreamServerError(f"hyperliquid_upstream_error type={endpoint_type} status={status_code}")
-    raise ExchangeRejectedError(f"hyperliquid_request_rejected type={endpoint_type} status={status_code}")
-
 
 def post_hyperliquid_info(payload: dict, timeout: int = 15) -> Optional[Any]:
     """POST to Hyperliquid /info endpoint. Returns parsed JSON or None."""
-
-    endpoint_type = payload.get("type", "unknown")
-
-    def _do_request():
-        return requests.post(f"{HYPERLIQUID_BASE_URL}/info", json=payload, timeout=timeout)
-
-    try:
-        response = retry_request(
-            _do_request,
-            max_attempts=3,
-            initial_delay=1.0,
-            max_delay=8.0,
-            backoff_factor=2.0,
-            jitter=True,
-            logger_instance=logger,
-        )
-        if response.status_code != 200:
-            _raise_hyperliquid_http_error(response.status_code, endpoint_type)
-        return response.json()
-    except AuthenticationError as e:
-        logger.error(str(e))
-        return None
-    except RateLimitError as e:
-        logger.warning(str(e))
-        return None
-    except UpstreamServerError as e:
-        logger.error(str(e))
-        return None
-    except ExchangeRejectedError as e:
-        logger.error(str(e))
-        return None
-    except requests.exceptions.HTTPError as e:
-        status_code = getattr(e.response, "status_code", 0) or 0
-        try:
-            _raise_hyperliquid_http_error(status_code, endpoint_type)
-        except AuthenticationError as mapped:
-            logger.error(str(mapped))
-        except RateLimitError as mapped:
-            logger.warning(str(mapped))
-        except UpstreamServerError as mapped:
-            logger.error(str(mapped))
-        except ExchangeRejectedError as mapped:
-            logger.error(str(mapped))
-        return None
-    except requests.exceptions.Timeout:
-        logger.error(f"Hyperliquid /info timeout for type={endpoint_type}")
-        return None
-    except requests.exceptions.ConnectionError as e:
-        logger.error(f"Hyperliquid /info connection error: {e}")
-        return None
-    except requests.exceptions.RequestException as e:
-        logger.error(f"Hyperliquid /info request error: {e}")
-        return None
-    except HyperliquidAPIError as e:
-        logger.error(f"Hyperliquid API error: {e}")
-        return None
-
-
-# ─── Log sanitization ─────────────────────────────────────────────────────────
-
-SENSITIVE_REPLACEMENTS = [
-    (re.compile(r'(?i)\b(?:private[_-]?key|secret|mnemonic)\s*[:=]\s*["\']?[^"\',\s]+["\']?'), '[REDACTED_SECRET_FIELD]'),
-    (re.compile(r'\b0x[a-fA-F0-9]{64}\b'), '[REDACTED_PRIVATE_KEY]'),
-    (re.compile(r'(?<![A-Za-z0-9])(?:[a-fA-F0-9]{64})(?![A-Za-z0-9])'), '[REDACTED_HEX_SECRET]'),
-    (re.compile(r'\b0x[a-fA-F0-9]{40}\b'), '[REDACTED_WALLET]'),
-    (re.compile(r'\bsk-or-[A-Za-z0-9_-]{16,}\b'), '[REDACTED_OPENROUTER_KEY]'),
-    (re.compile(r'(?i)\bBearer\s+[A-Za-z0-9\-._~+/]+=*'), 'Bearer [REDACTED_TOKEN]'),
-    (re.compile(r'\b\d{8,}:[A-Za-z0-9_-]{20,}\b'), '[REDACTED_BOT_TOKEN]'),
-    (re.compile(r'\b(?:AKIA|ASIA)[A-Z0-9]{16}\b'), '[REDACTED_ACCESS_KEY]'),
-    (re.compile(r'\b[a-zA-Z0-9_]{6,}\.\.\.[a-zA-Z0-9_]{3,}\b'), '[REDACTED_PARTIAL_SECRET]'),
-    (re.compile(r'"(private_key|api_key|wallet|token|secret)"\s*:\s*"[^"]*"', re.IGNORECASE), r'"\1":"[REDACTED]"'),
-]
+    return _post_hyperliquid_info(payload=payload, timeout=timeout)
 
 
 def sanitize_log_message(message: str) -> str:
     """Redact sensitive patterns from log messages before serving to dashboard."""
-    if not isinstance(message, str):
-        message = str(message)
-
-    sanitized = message
-    for pattern, replacement in SENSITIVE_REPLACEMENTS:
-        sanitized = pattern.sub(replacement, sanitized)
-    return sanitized
+    return _sanitize_log_message(message)
