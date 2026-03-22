@@ -1,4 +1,3 @@
-TP protective order flow without bulk path.">
 """
 TP protective order creation with confirmation and rollback,
 using the same trading user as entry orders.
