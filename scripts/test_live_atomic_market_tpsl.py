@@ -1,10 +1,11 @@
-SL and SL->TP) with higher default values and dedicated env vars.">
 #!/usr/bin/env python3
 """
 Test live sequenziale:
 1) apertura posizione (entry)
 2) impostazione stop loss (transazione separata)
 3) impostazione take profit (transazione separata)
+
+Ogni step attende conferma prima di procedere al successivo.
 
 ATTENZIONE: usa soldi reali se ENABLE_MAINNET_TRADING=true.
 
@@ -26,6 +27,8 @@ Parametri test (opzionali):
 - TEST_TICK_SIZE=          # opzionale, es: 0.1 (override manuale)
 - TEST_POSITION_WAIT_ATTEMPTS=10
 - TEST_POSITION_WAIT_SEC=1
+- TEST_ENTRY_CONFIRM_ATTEMPTS=20
+- TEST_ENTRY_CONFIRM_SLEEP_SEC=1
 - TEST_WAIT_AFTER_ENTRY_SEC=8
 - TEST_WAIT_AFTER_SL_SEC=8
 - TEST_TRIGGER_CONFIRM_ATTEMPTS=15
@@ -73,6 +76,15 @@ def mask_wallet(wallet: str) -> str:
     if not wallet or len(wallet) < 12:
         return "invalid_wallet"
     return f"{wallet[:6]}...{wallet[-4:]}"
+
+
+def get_position_size(client: HyperliquidExchangeClient, wallet: str, coin: str) -> Decimal:
+    user_state = client.get_user_state(wallet)
+    if not isinstance(user_state, dict):
+        return Decimal("0")
+    positions = get_open_positions(user_state)
+    pos = positions.get(coin, {})
+    return Decimal(str(pos.get("size", "0")))
 
 
 def normalize_size_for_min_notional(
@@ -126,6 +138,41 @@ def fetch_open_position_with_retry(
     return None
 
 
+def wait_position_delta_confirmation(
+    client: HyperliquidExchangeClient,
+    wallet: str,
+    coin: str,
+    size_before: Decimal,
+    side: str,
+    min_abs_delta: Decimal,
+    attempts: int,
+    sleep_sec: float,
+) -> Tuple[bool, Decimal]:
+    expected_buy = side == "buy"
+    for attempt in range(1, attempts + 1):
+        current_size = get_position_size(client, wallet, coin)
+        delta = current_size - size_before
+
+        if expected_buy and delta >= min_abs_delta:
+            logger.info(
+                f"Conferma entry BUY al tentativo {attempt}/{attempts}: "
+                f"size_before={size_before}, size_now={current_size}, delta={delta}"
+            )
+            return True, current_size
+
+        if (not expected_buy) and delta <= -min_abs_delta:
+            logger.info(
+                f"Conferma entry SELL al tentativo {attempt}/{attempts}: "
+                f"size_before={size_before}, size_now={current_size}, delta={delta}"
+            )
+            return True, current_size
+
+        time.sleep(sleep_sec)
+
+    current_size = get_position_size(client, wallet, coin)
+    return False, current_size
+
+
 def wait_order_open_confirmation(
     client: HyperliquidExchangeClient,
     wallet: str,
@@ -154,7 +201,7 @@ def place_single_protective_order_with_confirmation(
     tpsl: str,
     confirm_attempts: int,
     confirm_sleep_sec: float,
-) -> Tuple[int, bool]:
+) -> int:
     result = client.place_trigger_order(
         coin=coin,
         side=close_side,
@@ -180,7 +227,10 @@ def place_single_protective_order_with_confirmation(
         attempts=confirm_attempts,
         sleep_sec=confirm_sleep_sec,
     )
-    return int(order_id), confirmed
+    if not confirmed:
+        raise RuntimeError(f"Order {tpsl.upper()} oid={order_id} non confermato su exchange")
+
+    return int(order_id)
 
 
 def main() -> None:
@@ -220,6 +270,8 @@ def main() -> None:
     tick_override_raw = os.getenv("TEST_TICK_SIZE", "").strip()
     position_wait_attempts = int(os.getenv("TEST_POSITION_WAIT_ATTEMPTS", "10"))
     position_wait_sec = float(os.getenv("TEST_POSITION_WAIT_SEC", "1"))
+    entry_confirm_attempts = int(os.getenv("TEST_ENTRY_CONFIRM_ATTEMPTS", "20"))
+    entry_confirm_sleep_sec = float(os.getenv("TEST_ENTRY_CONFIRM_SLEEP_SEC", "1"))
     wait_after_entry_sec = float(os.getenv("TEST_WAIT_AFTER_ENTRY_SEC", "8"))
     wait_after_sl_sec = float(os.getenv("TEST_WAIT_AFTER_SL_SEC", "8"))
     trigger_confirm_attempts = int(os.getenv("TEST_TRIGGER_CONFIRM_ATTEMPTS", "15"))
@@ -241,6 +293,10 @@ def main() -> None:
         raise RuntimeError("TEST_POSITION_WAIT_ATTEMPTS deve essere >= 1")
     if position_wait_sec <= 0:
         raise RuntimeError("TEST_POSITION_WAIT_SEC deve essere > 0")
+    if entry_confirm_attempts < 1:
+        raise RuntimeError("TEST_ENTRY_CONFIRM_ATTEMPTS deve essere >= 1")
+    if entry_confirm_sleep_sec <= 0:
+        raise RuntimeError("TEST_ENTRY_CONFIRM_SLEEP_SEC deve essere > 0")
     if wait_after_entry_sec < 0:
         raise RuntimeError("TEST_WAIT_AFTER_ENTRY_SEC deve essere >= 0")
     if wait_after_sl_sec < 0:
@@ -321,6 +377,9 @@ def main() -> None:
             f"(size={normalized_size}, mid={mid_price})"
         )
 
+    size_before_entry = get_position_size(client, wallet, coin)
+    logger.info(f"Posizione prima dell'entry su {coin}: size={size_before_entry}")
+
     is_entry_buy = side == "buy"
     if is_entry_buy:
         entry_limit = mid_price * (Decimal("1") + ioc_buffer_pct)
@@ -347,6 +406,23 @@ def main() -> None:
         raise RuntimeError(f"Entry order fallito: {entry_result}")
 
     logger.info(f"Entry order successo: {entry_result}")
+
+    min_delta = normalized_size * Decimal("0.8")
+    entry_confirmed, size_after_entry = wait_position_delta_confirmation(
+        client=client,
+        wallet=wallet,
+        coin=coin,
+        size_before=size_before_entry,
+        side=side,
+        min_abs_delta=min_delta,
+        attempts=entry_confirm_attempts,
+        sleep_sec=entry_confirm_sleep_sec,
+    )
+    if not entry_confirmed:
+        raise RuntimeError(
+            f"Entry non confermata su posizione entro timeout: "
+            f"size_before={size_before_entry}, size_now={size_after_entry}, min_delta={min_delta}"
+        )
 
     pos = fetch_open_position_with_retry(
         client=client,
@@ -394,7 +470,7 @@ def main() -> None:
         time.sleep(wait_after_entry_sec)
 
     logger.info(f"STEP 2/3 STOP LOSS: trigger={sl_trigger}")
-    sl_id, sl_confirmed = place_single_protective_order_with_confirmation(
+    sl_id = place_single_protective_order_with_confirmation(
         client=client,
         wallet=wallet,
         coin=coin,
@@ -405,14 +481,17 @@ def main() -> None:
         confirm_attempts=trigger_confirm_attempts,
         confirm_sleep_sec=trigger_confirm_sleep_sec,
     )
-    logger.info(f"Stop loss creato: oid={sl_id}, confirmed={sl_confirmed}")
+    logger.info(f"Stop loss creato e confermato: oid={sl_id}")
 
     if wait_after_sl_sec > 0:
         logger.info(f"Attesa post-SL prima del TP: {wait_after_sl_sec}s")
         time.sleep(wait_after_sl_sec)
 
+    if not client.are_order_ids_open(wallet, coin, [sl_id]):
+        raise RuntimeError(f"SL oid={sl_id} non più aperto prima dell'invio TP")
+
     logger.info(f"STEP 3/3 TAKE PROFIT: trigger={tp_trigger}")
-    tp_id, tp_confirmed = place_single_protective_order_with_confirmation(
+    tp_id = place_single_protective_order_with_confirmation(
         client=client,
         wallet=wallet,
         coin=coin,
@@ -423,7 +502,7 @@ def main() -> None:
         confirm_attempts=trigger_confirm_attempts,
         confirm_sleep_sec=trigger_confirm_sleep_sec,
     )
-    logger.info(f"Take profit creato: oid={tp_id}, confirmed={tp_confirmed}")
+    logger.info(f"Take profit creato e confermato: oid={tp_id}")
 
     both_open = client.are_order_ids_open(wallet, coin, [sl_id, tp_id])
     logger.info(f"Verifica finale ordini protettivi aperti (SL+TP): {both_open}")
