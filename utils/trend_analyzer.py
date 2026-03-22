@@ -90,8 +90,15 @@ class TrendAnalyzer:
         if intraday_volumes:
             volume_24h = sum(intraday_volumes[-24:])
 
-        # BB position (0-1 scale)
+        # Current price: prefer live mid from Hyperliquid allMids, fallback to last 1H close
         current_price = intraday_closes[-1]
+        mids = self.data_fetcher.get_all_mids()
+        if isinstance(mids, dict) and coin in mids:
+            mid_price = Decimal(str(mids.get(coin, "0")))
+            if mid_price > 0:
+                current_price = mid_price
+
+        # BB position (0-1 scale)
         bb_upper = bollinger_1h["upper"][-1] if bollinger_1h["upper"] else current_price
         bb_lower = bollinger_1h["lower"][-1] if bollinger_1h["lower"] else current_price
         bb_range = bb_upper - bb_lower
@@ -181,13 +188,12 @@ class TrendAnalyzer:
 
         trends_aligned = trend_strength >= 2
 
-        # Current price and change
+        # 24h change: use current live price vs previous 1D close when available
         change_24h = Decimal("0")
         if daily_candles and len(daily_candles) >= 2:
             prev_close = daily_candles[-2]["close"]
-            last_close = daily_candles[-1]["close"]
             if prev_close != 0:
-                change_24h = (last_close - prev_close) / prev_close
+                change_24h = (current_price - prev_close) / prev_close
 
         funding_data = self.data_fetcher.get_funding_for_coin(coin)
 

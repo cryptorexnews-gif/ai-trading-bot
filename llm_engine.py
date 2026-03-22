@@ -19,6 +19,8 @@ class LLMEngine:
     All market data comes from Hyperliquid API; no external data sources.
     """
 
+    REQUIRED_MODEL = "deepseek/deepseek-v3.2"
+
     def __init__(
         self,
         api_key: str,
@@ -28,7 +30,15 @@ class LLMEngine:
         temperature: float = 0.2
     ):
         self.base_url = base_url
-        self.model = model
+
+        # Enforce exclusive DeepSeek v3.2 usage
+        requested_model = str(model or "").strip()
+        if requested_model != self.REQUIRED_MODEL:
+            logger.warning(
+                f"LLM model '{requested_model}' non consentito: forzato a '{self.REQUIRED_MODEL}'"
+            )
+        self.model = self.REQUIRED_MODEL
+
         self.max_tokens = max_tokens
         self.temperature = temperature
         self.request_timeout = 90

@@ -24,12 +24,28 @@ class HyperliquidDataFetcher:
         self._meta_cache: Optional[Dict[str, Any]] = None
         self._meta_cache_at: float = 0.0
         self._meta_cache_ttl: float = 86400.0  # 1 giorno (24 ore)
+
+        # Mids: cache molto corta per evitare dati stantii in trading live
         self._mids_cache: Optional[Dict[str, str]] = None
         self._mids_cache_at: float = 0.0
-        self._mids_cache_ttl: float = 3600.0  # 1 ora per prezzi mid
+        self._mids_cache_ttl: float = 5.0  # 5 secondi
+
+        # Funding/OI: dati meno sensibili al secondo, ma più freschi di prima
         self._funding_cache: Optional[List[Dict[str, Any]]] = None
         self._funding_cache_at: float = 0.0
-        self._funding_cache_ttl: float = 3600.0  # 1 ora per funding
+        self._funding_cache_ttl: float = 60.0  # 60 secondi
+
+        # Candle cache per ridurre carico API e latenza ciclo
+        self._candles_cache: Dict[str, Dict[str, Any]] = {}
+        self._candle_cache_ttl_by_interval: Dict[str, float] = {
+            "1m": 10.0,
+            "3m": 15.0,
+            "5m": 20.0,
+            "15m": 30.0,
+            "1h": 60.0,
+            "4h": 120.0,
+            "1d": 300.0,
+        }
 
     def _d(self, value: Any) -> Decimal:
         """Convert to Decimal safely."""
@@ -111,12 +127,33 @@ class HyperliquidDataFetcher:
 
         return {"funding_rate": "0", "open_interest": "0", "premium": "0", "max_leverage": 10}
 
+    def _candle_cache_key(self, coin: str, interval: str, limit: int) -> str:
+        return f"{coin.upper()}:{interval}:{int(limit)}"
+
+    def _candle_cache_ttl(self, interval: str) -> float:
+        return self._candle_cache_ttl_by_interval.get(interval, 20.0)
+
     def get_candle_snapshot(self, coin: str, interval: str = "5m", limit: int = 100) -> Optional[List[Dict[str, Any]]]:
         """Get candle data for a coin."""
-        now_ms = int(time.time() * 1000)
+        cache_key = self._candle_cache_key(coin, interval, limit)
+        now = time.time()
+        ttl = self._candle_cache_ttl(interval)
+
+        cached = self._candles_cache.get(cache_key)
+        if cached and (now - float(cached.get("at", 0.0))) < ttl:
+            candles = cached.get("data")
+            if isinstance(candles, list):
+                return [dict(c) for c in candles]
+
+        now_ms = int(now * 1000)
         interval_ms_map = {
-            "1m": 60_000, "3m": 180_000, "5m": 300_000,
-            "15m": 900_000, "1h": 3_600_000, "4h": 14_400_000, "1d": 86_400_000
+            "1m": 60_000,
+            "3m": 180_000,
+            "5m": 300_000,
+            "15m": 900_000,
+            "1h": 3_600_000,
+            "4h": 14_400_000,
+            "1d": 86_400_000
         }
         interval_ms = interval_ms_map.get(interval, 300_000)
         start_ms = now_ms - (interval_ms * limit)
@@ -142,4 +179,10 @@ class HyperliquidDataFetcher:
                 "close": self._d(candle.get("c", "0")),
                 "volume": self._d(candle.get("v", "0")),
             })
-        return candles
+
+        self._candles_cache[cache_key] = {
+            "at": now,
+            "data": candles,
+        }
+
+        return [dict(c) for c in candles]
