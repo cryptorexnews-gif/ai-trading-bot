@@ -14,6 +14,7 @@ from api.routes.trading import trading_bp
 from api.routes.market import market_bp
 from api.routes.logs import logs_bp
 from api.routes.metrics import metrics_bp
+from api.websocket import sock
 
 
 def create_app() -> Flask:
@@ -26,6 +27,9 @@ def create_app() -> Flask:
     # Custom JSON provider for Decimal serialization
     app.json_provider_class = CustomJSONProvider
     app.json = CustomJSONProvider(app)
+
+    # WebSocket support
+    sock.init_app(app)
 
     # Security headers
     @app.after_request

@@ -1,10 +1,11 @@
 import React from 'react'
 import { useApi } from '../hooks/useApi'
+import useRealtimeStatus from '../hooks/useRealtimeStatus'
 import CircuitBreakerStatus from '../components/CircuitBreakerStatus'
 import LogViewer from '../components/LogViewer'
 
 export default function SystemPage() {
-  const { data: statusData } = useApi('/status', 3000)
+  const { data: statusData } = useRealtimeStatus()
   const { data: logsData } = useApi('/logs?limit=100', 3000)
 
   const breakers = statusData?.circuit_breakers || {}
