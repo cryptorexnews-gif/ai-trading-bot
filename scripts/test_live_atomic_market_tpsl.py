@@ -17,6 +17,7 @@ Parametri test (opzionali):
 - TEST_SL_PCT=0.03
 - TEST_TP_PCT=0.06
 - TEST_IOC_BUFFER_PCT=0.01
+- TEST_MIN_NOTIONAL_USD=10.5
 - TEST_TICK_SIZE=          # opzionale, es: 0.1 (override manuale)
 - TEST_POSITION_WAIT_ATTEMPTS=10
 - TEST_POSITION_WAIT_SEC=1
@@ -31,6 +32,7 @@ from pathlib import Path
 from typing import Dict, Optional
 
 from dotenv import load_dotenv
+from eth_account import Account
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
 if str(ROOT_DIR) not in sys.path:
@@ -56,6 +58,40 @@ def round_to_tick(price: Decimal, tick_size: Decimal) -> Decimal:
         return price
     units = (price / tick_size).to_integral_value(rounding=ROUND_DOWN)
     return units * tick_size
+
+
+def mask_wallet(wallet: str) -> str:
+    if not wallet or len(wallet) < 12:
+        return "invalid_wallet"
+    return f"{wallet[:6]}...{wallet[-4:]}"
+
+
+def normalize_size_for_min_notional(
+    raw_size: Decimal,
+    mid_price: Decimal,
+    min_notional_usd: Decimal,
+    sz_decimals: Optional[int],
+) -> Decimal:
+    if mid_price <= 0:
+        return Decimal("0")
+
+    size = normalize_size_for_decimals(raw_size, sz_decimals if sz_decimals is not None else -1)
+    if size <= 0:
+        return Decimal("0")
+
+    current_notional = size * mid_price
+    if current_notional >= min_notional_usd:
+        return size
+
+    required_size = min_notional_usd / mid_price
+    size = normalize_size_for_decimals(required_size, sz_decimals if sz_decimals is not None else -1)
+
+    # Se dopo normalizzazione siamo ancora sotto minimo, aggiunge 1 step
+    if size * mid_price < min_notional_usd and sz_decimals is not None and sz_decimals >= 0:
+        step = Decimal("1").scaleb(-sz_decimals)
+        size = size + step
+
+    return size
 
 
 def fetch_open_position_with_retry(
@@ -98,6 +134,13 @@ def main() -> None:
     if not enable_mainnet:
         raise RuntimeError("ENABLE_MAINNET_TRADING deve essere true per questo test")
 
+    derived = Account.from_key(private_key).address
+    if derived.lower() != wallet.lower():
+        raise RuntimeError(
+            f"Mismatch key/address: derived={derived} env={wallet}. "
+            f"Correggi .env prima del test."
+        )
+
     coin = os.getenv("TEST_COIN", "ETH").strip().upper()
     side = os.getenv("TEST_SIDE", "buy").strip().lower()
     if side not in {"buy", "sell"}:
@@ -108,6 +151,7 @@ def main() -> None:
     sl_pct = d("TEST_SL_PCT", "0.03")
     tp_pct = d("TEST_TP_PCT", "0.06")
     ioc_buffer_pct = d("TEST_IOC_BUFFER_PCT", "0.01")
+    min_notional_usd = d("TEST_MIN_NOTIONAL_USD", "10.5")
     tick_override_raw = os.getenv("TEST_TICK_SIZE", "").strip()
     position_wait_attempts = int(os.getenv("TEST_POSITION_WAIT_ATTEMPTS", "10"))
     position_wait_sec = float(os.getenv("TEST_POSITION_WAIT_SEC", "1"))
@@ -122,6 +166,8 @@ def main() -> None:
         raise RuntimeError("TEST_TP_PCT deve essere tra 0 e 2")
     if ioc_buffer_pct < 0 or ioc_buffer_pct > 0.2:
         raise RuntimeError("TEST_IOC_BUFFER_PCT fuori range ragionevole")
+    if min_notional_usd < Decimal("10"):
+        raise RuntimeError("TEST_MIN_NOTIONAL_USD deve essere >= 10")
     if position_wait_attempts < 1:
         raise RuntimeError("TEST_POSITION_WAIT_ATTEMPTS deve essere >= 1")
     if position_wait_sec <= 0:
@@ -129,8 +175,11 @@ def main() -> None:
 
     logger.warning("TEST LIVE REALE ATTIVO: questo script può aprire una posizione con soldi reali")
     logger.info(
+        f"Wallet diagnostics: derived={mask_wallet(derived)} env={mask_wallet(wallet)}"
+    )
+    logger.info(
         f"Parametri test: coin={coin}, side={side}, margin={margin_usd}, "
-        f"leverage={leverage}, sl_pct={sl_pct}, tp_pct={tp_pct}"
+        f"leverage={leverage}, sl_pct={sl_pct}, tp_pct={tp_pct}, min_notional={min_notional_usd}"
     )
 
     client = HyperliquidExchangeClient(
@@ -138,6 +187,11 @@ def main() -> None:
         private_key=private_key,
         enable_mainnet_trading=enable_mainnet,
         execution_mode=execution_mode,
+    )
+
+    logger.info(
+        f"Client diagnostics: signer={client.get_wallet_address_masked()} "
+        f"trading_user={mask_wallet(client.get_trading_user_address())}"
     )
 
     mids = client.get_all_mids(force_refresh=True)
@@ -176,9 +230,21 @@ def main() -> None:
     notional_usd = margin_usd * Decimal(str(leverage))
     raw_size = notional_usd / mid_price
     sz_decimals = client.get_sz_decimals(coin)
-    normalized_size = normalize_size_for_decimals(raw_size, sz_decimals if sz_decimals is not None else -1)
+    normalized_size = normalize_size_for_min_notional(
+        raw_size=raw_size,
+        mid_price=mid_price,
+        min_notional_usd=min_notional_usd,
+        sz_decimals=sz_decimals,
+    )
     if normalized_size <= 0:
         raise RuntimeError(f"Size normalizzata non valida: {normalized_size}")
+
+    expected_notional = normalized_size * mid_price
+    if expected_notional < Decimal("10"):
+        raise RuntimeError(
+            f"Notional ancora sotto minimo dopo normalizzazione: {expected_notional} "
+            f"(size={normalized_size}, mid={mid_price})"
+        )
 
     is_entry_buy = side == "buy"
     if is_entry_buy:
@@ -192,7 +258,7 @@ def main() -> None:
 
     logger.info(
         f"ENTRY: side={side.upper()} size={normalized_size} desired_limit={entry_limit} "
-        f"(notional~{(normalized_size * mid_price):.4f})"
+        f"(notional@mid~{expected_notional:.4f})"
     )
 
     entry_result = client.place_order(
