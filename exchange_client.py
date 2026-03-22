@@ -170,6 +170,57 @@ class HyperliquidExchangeClient:
             logger.error(f"/exchange unexpected error: {type(e).__name__}: {str(e)}")
             return None
 
+    def _is_vault_not_registered_error(self, result: Optional[Dict[str, Any]]) -> bool:
+        if not isinstance(result, dict):
+            return False
+        if result.get("status") != "err":
+            return False
+        message = str(result.get("response", "")).lower()
+        return "vault not registered" in message
+
+    def _post_signed_action_once(
+        self,
+        action: Dict[str, Any],
+        vault_address: Optional[str],
+        timeout: Optional[int] = None,
+    ) -> Optional[Dict[str, Any]]:
+        nonce = int(time.time() * 1000)
+        signature = self.sign_l1_action_exact(action, vault_address, nonce, None, True)
+        payload = {
+            "action": action,
+            "nonce": nonce,
+            "signature": signature,
+            "vaultAddress": vault_address
+        }
+        return self._post_exchange(payload, timeout=timeout)
+
+    def _post_signed_action_with_vault_fallback(
+        self,
+        action: Dict[str, Any],
+        timeout: Optional[int] = None,
+    ) -> Optional[Dict[str, Any]]:
+        result = self._post_signed_action_once(action, self.vault_address, timeout=timeout)
+
+        if self.vault_address and self._is_vault_not_registered_error(result):
+            old_vault = self.vault_address
+            logger.warning(
+                f"Vault not registered for signer (vault={self._mask_address(old_vault)}). "
+                "Retrying once without vault."
+            )
+            retry_result = self._post_signed_action_once(action, None, timeout=timeout)
+
+            if isinstance(retry_result, dict) and retry_result.get("status") == "ok":
+                logger.warning(
+                    "Retry without vault succeeded. Disabling vault mode for subsequent requests."
+                )
+                self.vault_address = None
+                os.environ["HYPERLIQUID_VAULT_ADDRESS"] = ""
+                return retry_result
+
+            return retry_result
+
+        return result
+
     def get_meta(self, force_refresh: bool = False) -> Optional[Dict[str, Any]]:
         now = time.time()
         if not force_refresh and self._meta_cache and (now - self._meta_cache_at) < self.meta_cache_ttl_sec:
@@ -332,11 +383,8 @@ class HyperliquidExchangeClient:
             return False
 
         action = {"type": "updateLeverage", "asset": asset_id, "isCross": True, "leverage": leverage}
-        nonce = int(time.time() * 1000)
-        signature = self.sign_l1_action_exact(action, self.vault_address, nonce, None, True)
-        payload = {"action": action, "nonce": nonce, "signature": signature, "vaultAddress": self.vault_address}
+        result = self._post_signed_action_with_vault_fallback(action)
 
-        result = self._post_exchange(payload)
         if result is None:
             return False
         if result.get("status") == "ok":
@@ -386,11 +434,8 @@ class HyperliquidExchangeClient:
             "t": {"limit": {"tif": "Gtc"}}
         }
         action = {"type": "order", "orders": [order_wire], "grouping": "na"}
-        nonce = int(time.time() * 1000)
-        signature = self.sign_l1_action_exact(action, self.vault_address, nonce, None, True)
-        payload = {"action": action, "nonce": nonce, "signature": signature, "vaultAddress": self.vault_address}
 
-        result = self._post_exchange(payload)
+        result = self._post_signed_action_with_vault_fallback(action)
         if result is None:
             return {"success": False, "mode": "live", "reason": "http_error", "notional": "0"}
         if result.get("status") != "ok":
@@ -457,11 +502,8 @@ class HyperliquidExchangeClient:
         }
 
         action = {"type": "order", "orders": [order_wire], "grouping": "positionTpsl"}
-        nonce = int(time.time() * 1000)
-        signature = self.sign_l1_action_exact(action, self.vault_address, nonce, None, True)
-        payload = {"action": action, "nonce": nonce, "signature": signature, "vaultAddress": self.vault_address}
 
-        result = self._post_exchange(payload)
+        result = self._post_signed_action_with_vault_fallback(action)
         if result is None:
             return {"success": False, "reason": "http_error"}
         if result.get("status") != "ok":
@@ -495,11 +537,8 @@ class HyperliquidExchangeClient:
             return False
 
         action = {"type": "cancel", "cancels": [{"a": asset_id, "o": int(order_id)}]}
-        nonce = int(time.time() * 1000)
-        signature = self.sign_l1_action_exact(action, self.vault_address, nonce, None, True)
-        payload = {"action": action, "nonce": nonce, "signature": signature, "vaultAddress": self.vault_address}
 
-        result = self._post_exchange(payload)
+        result = self._post_signed_action_with_vault_fallback(action)
         if result is None:
             return False
         if result.get("status") != "ok":
