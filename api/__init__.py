@@ -11,6 +11,7 @@ from api.json_provider import CustomJSONProvider
 from api.routes.health import health_bp
 from api.routes.bot import bot_bp
 from api.routes.bot_control import bot_control_bp
+from api.routes.runtime_config import runtime_config_bp
 from api.routes.trading import trading_bp
 from api.routes.market import market_bp
 from api.routes.logs import logs_bp
@@ -56,6 +57,7 @@ def create_app() -> Flask:
     app.register_blueprint(health_bp)
     app.register_blueprint(bot_bp)
     app.register_blueprint(bot_control_bp)
+    app.register_blueprint(runtime_config_bp)
     app.register_blueprint(trading_bp)
     app.register_blueprint(market_bp)
     app.register_blueprint(logs_bp)
