@@ -1,4 +1,3 @@
-60%.">
 import React from 'react'
 import { useApi } from '../hooks/useApi'
 import EquityChart from '../components/EquityChart'
