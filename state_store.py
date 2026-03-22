@@ -133,6 +133,7 @@ class StateStore:
                 "losses": 0,
                 "holds": 0,
                 "failed_executions": 0,
+                "classified_trades": 0,
                 "consecutive_losses": 0
             }
 
@@ -142,41 +143,49 @@ class StateStore:
         wins = 0
         losses = 0
         holds = 0
+        failed_executions = 0
+        total_trades = 0
 
         for t in history:
             action = str(t.get("action", "")).strip().lower()
             success = bool(t.get("success", False))
+            trigger = str(t.get("trigger", "")).strip().lower()
 
-            # Failed transactions are excluded from any count.
             if not success:
+                failed_executions += 1
                 continue
 
             if action in hold_actions or action not in trade_actions:
                 holds += 1
                 continue
 
-            # If realized_pnl exists, classify properly.
+            total_trades += 1
+
+            # Preferred: explicit realized pnl if present
             if "realized_pnl" in t:
                 realized = Decimal(str(t.get("realized_pnl", "0")))
-                if realized < 0:
-                    losses += 1
-                elif realized > 0:
+                if realized > 0:
                     wins += 1
-                else:
-                    # break-even: no win/loss impact
-                    pass
-            else:
-                # Legacy behavior without realized pnl
-                wins += 1
+                elif realized < 0:
+                    losses += 1
+                continue
 
-        actual_trades = wins + losses
+            # Fallback classification from close triggers when pnl not available
+            if trigger in {"take_profit", "trailing_stop"}:
+                wins += 1
+            elif trigger in {"stop_loss", "break_even_stop", "emergency"}:
+                losses += 1
+
+        classified_trades = wins + losses
+        win_rate = (wins / classified_trades * 100) if classified_trades > 0 else 0.0
 
         return {
-            "total_trades": actual_trades,
+            "total_trades": total_trades,
             "wins": wins,
             "losses": losses,
             "holds": holds,
-            "failed_executions": 0,
-            "win_rate": (wins / actual_trades * 100) if actual_trades > 0 else 0.0,
+            "failed_executions": failed_executions,
+            "classified_trades": classified_trades,
+            "win_rate": win_rate,
             "consecutive_losses": state.get("consecutive_losses", 0)
         }
