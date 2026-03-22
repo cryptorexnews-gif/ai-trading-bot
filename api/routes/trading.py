@@ -1,17 +1,13 @@
 import logging
-import time
 
 from flask import Blueprint, Response, jsonify, request
 
 from api.auth import require_api_key
 from api.rate_limit_utils import build_rate_limiter, rate_limited_response
 from api.services.trade_history_service import (
-    build_daily_notional,
-    build_equity_curve,
-    build_export_csv,
-    build_performance_summary,
-    fetch_user_fills,
-    serialize_trades_payload,
+    build_export_csv_for_wallet,
+    build_performance_response_payload,
+    build_trades_response_payload,
     wallet_address,
 )
 
@@ -37,8 +33,7 @@ def trades():
         return jsonify({"error": "wallet_not_configured"}), 500
 
     try:
-        fills = fetch_user_fills(wallet)
-        return jsonify(serialize_trades_payload(fills, limit))
+        return jsonify(build_trades_response_payload(wallet, limit))
     except Exception:
         logger.error("Trading trades endpoint failed", exc_info=True)
         return jsonify({"error": "internal_error"}), 500
@@ -56,8 +51,7 @@ def export_trades():
         return jsonify({"error": "wallet_not_configured"}), 500
 
     try:
-        fills = fetch_user_fills(wallet)
-        csv_text = build_export_csv(fills)
+        csv_text = build_export_csv_for_wallet(wallet)
         return Response(
             csv_text,
             mimetype="text/csv",
@@ -80,19 +74,7 @@ def performance():
         return jsonify({"error": "wallet_not_configured"}), 500
 
     try:
-        fills = fetch_user_fills(wallet)
-        summary = build_performance_summary(fills)
-        daily_notional = build_daily_notional(fills)
-        equity_curve = build_equity_curve(fills)
-
-        return jsonify({
-            "summary": summary,
-            "equity_curve": equity_curve,
-            "equity_snapshots": [],
-            "daily_notional": daily_notional,
-            "source": "hyperliquid_user_fills",
-            "timestamp": time.time()
-        })
+        return jsonify(build_performance_response_payload(wallet))
     except Exception:
         logger.error("Trading performance endpoint failed", exc_info=True)
         return jsonify({"error": "internal_error"}), 500

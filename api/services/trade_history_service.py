@@ -220,3 +220,29 @@ def build_equity_curve(fills: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             "fee": str(fill.get("fee", "0")),
         })
     return curve
+
+
+def build_trades_response_payload(wallet: str, limit: int) -> Dict[str, Any]:
+    fills = fetch_user_fills(wallet)
+    return serialize_trades_payload(fills, limit)
+
+
+def build_performance_response_payload(wallet: str) -> Dict[str, Any]:
+    fills = fetch_user_fills(wallet)
+    summary = build_performance_summary(fills)
+    daily_notional = build_daily_notional(fills)
+    equity_curve = build_equity_curve(fills)
+
+    return {
+        "summary": summary,
+        "equity_curve": equity_curve,
+        "equity_snapshots": [],
+        "daily_notional": daily_notional,
+        "source": "hyperliquid_user_fills",
+        "timestamp": time.time(),
+    }
+
+
+def build_export_csv_for_wallet(wallet: str) -> str:
+    fills = fetch_user_fills(wallet)
+    return build_export_csv(fills)
