@@ -42,14 +42,14 @@ export default function RuntimeStrategyParams({ strategyMode, strategyParams, on
               inputMode="decimal"
               type="number"
               step={field.step}
-              placeholder={field.percent ? 'es. 2 = 2%' : ''}
+              placeholder={field.percent ? 'es. 2 = 2%' : 'valore diretto'}
               className="bg-gray-900 border border-gray-700 rounded px-2 py-1.5 text-sm text-white focus:outline-none focus:border-cyan-500"
             />
           </label>
         ))}
       </div>
       <p className="text-[11px] text-gray-500 mt-2">
-        Per i campi in percentuale inserisci valori semplici: esempio <strong>2</strong> significa <strong>2%</strong>.
+        Regola unica: inserisci sempre numeri diretti. Esempi: <strong>1</strong> = 1 secondo, 1 USD, 1x; per percentuali <strong>2</strong> = 2%.
       </p>
     </div>
   )
