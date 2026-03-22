@@ -4,7 +4,6 @@ Flask API server entrypoint for the Hyperliquid bot dashboard.
 
 import logging
 import os
-from ipaddress import ip_address
 
 from dotenv import load_dotenv
 
@@ -12,38 +11,18 @@ load_dotenv()
 
 from api import create_app
 from api.config import API_AUTH_KEY, CORS_ORIGINS
+from api.security_utils import env_bool, is_loopback_ip
 
 logger = logging.getLogger(__name__)
 app = create_app()
-
-
-def _env_bool(key: str, default: bool = False) -> bool:
-    val = os.getenv(key, "").strip().lower()
-    if val in ("true", "1", "yes", "on"):
-        return True
-    if val in ("false", "0", "no", "off"):
-        return False
-    return default
-
-
-def _is_loopback_host(host: str) -> bool:
-    if not host:
-        return False
-    candidate = host.strip()
-    if candidate == "localhost":
-        return True
-    try:
-        return ip_address(candidate).is_loopback
-    except ValueError:
-        return False
 
 
 def main() -> None:
     host = os.getenv("API_HOST", "127.0.0.1")
     port = int(os.getenv("API_PORT", "5000"))
     debug = os.getenv("API_DEBUG", "false").lower() == "true"
-    allow_localhost_bypass = _env_bool("ALLOW_LOCALHOST_BYPASS", True)
-    loopback_bound = _is_loopback_host(host)
+    allow_localhost_bypass = env_bool("ALLOW_LOCALHOST_BYPASS", True)
+    loopback_bound = is_loopback_ip(host)
 
     env_mode = os.getenv("EXECUTION_MODE", "live").lower()
     if env_mode != "live":
