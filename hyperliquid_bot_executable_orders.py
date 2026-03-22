@@ -97,7 +97,6 @@ class HyperliquidBot:
             paper_slippage_bps=self.cfg.paper_slippage_bps,
             info_timeout=self.cfg.info_timeout,
             exchange_timeout=self.cfg.exchange_timeout,
-            vault_address=self.cfg.vault_address,
         )
 
         self.state_store = StateStore(self.cfg.state_path, self.cfg.metrics_path)

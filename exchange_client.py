@@ -16,11 +16,7 @@ from exchange.order_builder import (
     build_trigger_order_action,
     build_update_leverage_action,
 )
-from exchange.parsers import (
-    extract_order_ids,
-    is_user_or_api_wallet_not_found_error,
-    is_vault_not_registered_error,
-)
+from exchange.parsers import extract_order_ids, is_master_wallet_not_found_error
 from exchange.signing import sign_l1_action_exact
 from exchange.transport import post_exchange_with_circuit_breaker, post_json_with_circuit_breaker
 from utils.circuit_breaker import get_or_create_circuit_breaker
@@ -32,7 +28,7 @@ logger = logging.getLogger(__name__)
 
 class HyperliquidExchangeClient:
     """
-    Hyperliquid client (live-only):
+    Hyperliquid client (live-only, master wallet mode):
     - HTTP + circuit breaker
     - EIP-712 signing
     - order payload builder separato
@@ -49,7 +45,6 @@ class HyperliquidExchangeClient:
         paper_slippage_bps: Decimal = Decimal("5"),
         info_timeout: int = 15,
         exchange_timeout: int = 30,
-        vault_address: Optional[str] = None,
     ):
         self.base_url = base_url
         self.enable_mainnet_trading = enable_mainnet_trading
@@ -58,9 +53,6 @@ class HyperliquidExchangeClient:
         self.paper_slippage_bps = paper_slippage_bps
         self.info_timeout = info_timeout
         self.exchange_timeout = exchange_timeout
-
-        requested_vault = str(vault_address).strip() if vault_address is not None else ""
-        self.vault_address: Optional[str] = requested_vault if requested_vault else None
 
         self.session = create_robust_session()
         self.account = Account.from_key(private_key)
@@ -77,25 +69,17 @@ class HyperliquidExchangeClient:
 
         logger.info(
             f"Exchange client initialized: base_url={self.base_url}, mode={self.execution_mode}, "
-            f"mainnet={self.enable_mainnet_trading}, signer={self.get_wallet_address_masked()}, "
-            f"vault={self.get_vault_address_masked()}"
+            f"mainnet={self.enable_mainnet_trading}, signer={self.get_wallet_address_masked()} (master-only)"
         )
 
     def __repr__(self) -> str:
         return (
             f"<HyperliquidExchangeClient base_url={self.base_url} "
-            f"mode={self.execution_mode} signer={self.get_wallet_address_masked()} "
-            f"vault={self.get_vault_address_masked()}>"
+            f"mode={self.execution_mode} signer={self.get_wallet_address_masked()} master_only=True>"
         )
 
     def __str__(self) -> str:
         return self.__repr__()
-
-    @staticmethod
-    def _mask_address(address: Optional[str]) -> str:
-        if not address or len(address) < 12:
-            return "none"
-        return f"{address[:6]}...{address[-4:]}"
 
     def _live_orders_enabled(self) -> bool:
         return self.execution_mode == "live" and self.enable_mainnet_trading
@@ -112,6 +96,12 @@ class HyperliquidExchangeClient:
             if isinstance(status, dict) and "error" in status:
                 return str(status.get("error", "status_error"))
         return None
+
+    @staticmethod
+    def _mask_address(address: Optional[str]) -> str:
+        if not address or len(address) < 12:
+            return "none"
+        return f"{address[:6]}...{address[-4:]}"
 
     def _next_nonce(self) -> int:
         current_ms = int(time.time() * 1000)
@@ -145,14 +135,12 @@ class HyperliquidExchangeClient:
     def _post_signed_action_once(
         self,
         action: Dict[str, Any],
-        vault_address: Optional[str],
         timeout: Optional[int] = None,
     ) -> Optional[Dict[str, Any]]:
         nonce = self._next_nonce()
         signature = sign_l1_action_exact(
             account=self.account,
             action=action,
-            vault_address=vault_address,
             nonce=nonce,
             expires_after=None,
             is_mainnet=True,
@@ -161,61 +149,33 @@ class HyperliquidExchangeClient:
             "action": action,
             "nonce": nonce,
             "signature": signature,
-            "vaultAddress": vault_address,
+            "vaultAddress": None,
         }
         return self._post_exchange(payload, timeout=timeout)
 
-    def _post_signed_action_with_vault_fallback(
+    def _post_signed_action_with_master_retry(
         self,
         action: Dict[str, Any],
         timeout: Optional[int] = None,
     ) -> Optional[Dict[str, Any]]:
-        result = self._post_signed_action_once(action, self.vault_address, timeout=timeout)
-
-        if self.vault_address and is_vault_not_registered_error(result):
-            old_vault = self.vault_address
-            logger.warning(
-                f"Vault not registered for signer (vault={self._mask_address(old_vault)}). "
-                "Retrying once without vault."
-            )
-            retry_result = self._post_signed_action_once(action, None, timeout=timeout)
-            if self._is_ok_result(retry_result):
-                logger.warning("Retry without vault succeeded. Disabling vault mode for subsequent requests.")
-                self.vault_address = None
-                result = retry_result
-            else:
-                result = retry_result
-
-        if self.vault_address and is_user_or_api_wallet_not_found_error(result):
-            old_vault = self.vault_address
-            logger.warning(
-                f"Wallet/API wallet not found with vault={self._mask_address(old_vault)}. "
-                "Retrying once without vault to validate signer mode."
-            )
-            retry_result = self._post_signed_action_once(action, None, timeout=timeout)
-            if self._is_ok_result(retry_result):
-                logger.warning("Retry without vault succeeded. Disabling vault mode for subsequent requests.")
-                self.vault_address = None
-                result = retry_result
-            else:
-                result = retry_result
+        result = self._post_signed_action_once(action, timeout=timeout)
 
         max_wallet_error_retries = 3
         attempt = 0
-        while is_user_or_api_wallet_not_found_error(result) and attempt < max_wallet_error_retries:
+        while is_master_wallet_not_found_error(result) and attempt < max_wallet_error_retries:
             attempt += 1
             backoff_sec = 0.25 * attempt
             logger.warning(
-                f"Exchange reported wallet/API wallet not found (attempt {attempt}/{max_wallet_error_retries}). "
+                f"Exchange reported master wallet not found (attempt {attempt}/{max_wallet_error_retries}). "
                 f"Retrying with fresh nonce in {backoff_sec:.2f}s."
             )
             time.sleep(backoff_sec)
-            result = self._post_signed_action_once(action, self.vault_address, timeout=timeout)
+            result = self._post_signed_action_once(action, timeout=timeout)
 
-        if is_user_or_api_wallet_not_found_error(result):
+        if is_master_wallet_not_found_error(result):
             logger.error(
-                "Persistent wallet/API wallet not found after retries. "
-                f"Signer={self.get_wallet_address_masked()} vault={self.get_vault_address_masked()}"
+                "Persistent master wallet auth error after retries. "
+                f"Signer={self.get_wallet_address_masked()}"
             )
 
         return result
@@ -254,9 +214,6 @@ class HyperliquidExchangeClient:
 
     def get_wallet_address_masked(self) -> str:
         return self._mask_address(self.account.address)
-
-    def get_vault_address_masked(self) -> str:
-        return self._mask_address(self.vault_address)
 
     @staticmethod
     def validate_wallet_address(private_key: str, expected_address: str) -> bool:
@@ -354,7 +311,7 @@ class HyperliquidExchangeClient:
             return False
 
         action = build_update_leverage_action(asset_id=asset_id, leverage=leverage)
-        result = self._post_signed_action_with_vault_fallback(action)
+        result = self._post_signed_action_with_master_retry(action)
         if result is None:
             return False
         if self._is_ok_result(result):
@@ -387,7 +344,7 @@ class HyperliquidExchangeClient:
             reduce_only=reduce_only,
         )
 
-        result = self._post_signed_action_with_vault_fallback(action)
+        result = self._post_signed_action_with_master_retry(action)
         if result is None:
             return {"success": False, "mode": "live", "reason": "http_error", "notional": "0"}
         if not self._is_ok_result(result):
@@ -442,7 +399,7 @@ class HyperliquidExchangeClient:
             is_market=is_market,
         )
 
-        result = self._post_signed_action_with_vault_fallback(action)
+        result = self._post_signed_action_with_master_retry(action)
         if result is None:
             return {"success": False, "reason": "http_error"}
         if not self._is_ok_result(result):
@@ -474,7 +431,7 @@ class HyperliquidExchangeClient:
             return False
 
         action = build_cancel_action(asset_id=asset_id, order_id=order_id)
-        result = self._post_signed_action_with_vault_fallback(action)
+        result = self._post_signed_action_with_master_retry(action)
         if result is None:
             return False
         if not self._is_ok_result(result):
