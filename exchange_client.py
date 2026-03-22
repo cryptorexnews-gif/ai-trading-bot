@@ -279,6 +279,35 @@ class HyperliquidExchangeClient:
 
         return ""
 
+    @staticmethod
+    def _extract_reduce_only(order: Dict[str, Any]) -> bool:
+        if not isinstance(order, dict):
+            return False
+
+        candidates: List[Any] = [
+            order.get("r"),
+            order.get("reduceOnly"),
+            order.get("isReduceOnly"),
+        ]
+
+        nested_order = order.get("order", {})
+        if isinstance(nested_order, dict):
+            candidates.extend(
+                [
+                    nested_order.get("r"),
+                    nested_order.get("reduceOnly"),
+                    nested_order.get("isReduceOnly"),
+                ]
+            )
+
+        for c in candidates:
+            if isinstance(c, bool):
+                if c:
+                    return True
+            elif str(c).strip().lower() in {"true", "1"}:
+                return True
+        return False
+
     def _next_nonce(self) -> int:
         current_ms = int(time.time() * 1000)
         if current_ms <= self._last_nonce:
@@ -502,6 +531,53 @@ class HyperliquidExchangeClient:
                 continue
             self.cancel_order(coin, oid)
             logger.warning(f"Cancelled duplicate {tpsl.upper()} order for {coin}, oid={oid}, keep_oid={keep_oid}")
+
+    def _cancel_existing_coin_protective_orders(self, coin: str, close_side: str) -> int:
+        """
+        Cancella trigger reduce-only esistenti per coin+side (tipicamente TP/SL stale),
+        usato prima di una ricreazione pulita delle protezioni.
+        """
+        open_orders = self.get_open_orders(self.account.address)
+        to_cancel: List[int] = []
+
+        for order in open_orders:
+            if not isinstance(order, dict):
+                continue
+
+            order_coin = str(order.get("coin", order.get("symbol", ""))).strip().upper()
+            if not order_coin and isinstance(order.get("order"), dict):
+                order_coin = str(order["order"].get("coin", order["order"].get("symbol", ""))).strip().upper()
+            if order_coin != coin.upper():
+                continue
+
+            order_side = self._extract_order_side(order)
+            if order_side != close_side:
+                continue
+
+            trigger_px = self._extract_trigger_px(order)
+            if trigger_px <= 0:
+                continue
+
+            if not self._extract_reduce_only(order):
+                continue
+
+            oid = self._extract_order_oid(order)
+            if oid is None:
+                continue
+
+            to_cancel.append(oid)
+
+        cancelled = 0
+        for oid in sorted(set(to_cancel)):
+            if self.cancel_order(coin, oid):
+                cancelled += 1
+
+        if cancelled > 0:
+            logger.warning(
+                f"Cancelled {cancelled} stale protective trigger orders for {coin} side={close_side.upper()}"
+            )
+
+        return cancelled
 
     def get_wallet_address_masked(self) -> str:
         return self._mask_address(self.account.address)
@@ -945,6 +1021,8 @@ class HyperliquidExchangeClient:
                 "stop_loss_order_id": existing_sl_id,
                 "take_profit_order_id": existing_tp_id,
             }
+
+        self._cancel_existing_coin_protective_orders(coin, close_side)
 
         if current_stop_order_id is not None:
             self.cancel_order(coin, current_stop_order_id)
