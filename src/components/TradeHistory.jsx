@@ -136,10 +136,8 @@ export default function TradeHistory({
                       {(parseFloat(trade.confidence || 0) * 100).toFixed(0)}%
                     </td>
                     <td className="py-2 px-2 text-center">
-                      <span className={`text-[10px] px-1.5 py-0.5 rounded ${
-                        trade.mode === 'live' ? 'bg-red-900/50 text-red-300' : 'bg-gray-700 text-gray-400'
-                      }`}>
-                        {trade.mode || 'paper'}
+                      <span className="text-[10px] px-1.5 py-0.5 rounded bg-red-900/50 text-red-300">
+                        {trade.mode || 'live'}
                       </span>
                     </td>
                     <td className="py-2 px-2 text-center">

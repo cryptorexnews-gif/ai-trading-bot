@@ -118,7 +118,7 @@ def test_env_vars() -> bool:
     private_key = os.getenv("HYPERLIQUID_PRIVATE_KEY", "")
     openrouter_key = os.getenv("OPENROUTER_API_KEY", "")
     dashboard_key = os.getenv("DASHBOARD_API_KEY", "")
-    mode = os.getenv("EXECUTION_MODE", "paper")
+    mode = os.getenv("EXECUTION_MODE", "live")
     mainnet = os.getenv("ENABLE_MAINNET_TRADING", "false")
     ok = True
     if wallet:
@@ -134,12 +134,14 @@ def test_env_vars() -> bool:
     if openrouter_key:
         print_ok("OPENROUTER: sk-or-...OK")
     else:
-        print_warn("OPENROUTER_API_KEY mancante → fallback hold")
+        print_warn("OPENROUTER_API_KEY mancante")
     if dashboard_key:
         print_ok(f"DASHBOARD_API_KEY: {len(dashboard_key)} chars ✓")
     else:
         print_warn("DASHBOARD_API_KEY mancante")
     print_info(f"MODE: {mode} | MAINNET: {mainnet}")
+    if mode != "live":
+        print_warn("⚠️ EXECUTION_MODE non è live: il runtime forzerà live-only.")
     if mode == "live" and mainnet.lower() == "true":
         print_warn("⚡ LIVE + MAINNET=TRUE → SOLDI VERI")
     return ok
@@ -230,9 +232,9 @@ def test_wallet_balance() -> bool:
 def test_openrouter() -> bool:
     print_header("6. OPENROUTER (LLM)")
     api_key = os.getenv("OPENROUTER_API_KEY", "")
-    model = os.getenv("LLM_MODEL", "anthropic/claude-opus-4.6")
+    model = os.getenv("LLM_MODEL", "deepseek/deepseek-v3.2")
     if not api_key:
-        print_warn("No API key → LLM disabled (fallback hold)")
+        print_warn("No API key → LLM disabled")
         return True
     try:
         import requests

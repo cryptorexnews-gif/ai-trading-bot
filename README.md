@@ -33,8 +33,8 @@ Crea (o aggiorna) il file `.env` nella root del progetto con almeno:
 
 - `HYPERLIQUID_WALLET_ADDRESS`
 - `HYPERLIQUID_PRIVATE_KEY`
-- `EXECUTION_MODE` (`paper` o `live`)
-- `ENABLE_MAINNET_TRADING` (`true` solo se vuoi ordini reali)
+- `EXECUTION_MODE=live`
+- `ENABLE_MAINNET_TRADING=true`
 - `OPENROUTER_API_KEY` (per usare il modello LLM)
 - `DASHBOARD_API_KEY` (protezione endpoint dashboard)
 
@@ -141,11 +141,7 @@ Le modifiche vengono applicate dal bot nel ciclo successivo.
 
 ---
 
-## 8) Modalità operative
-
-### Paper mode (consigliato per test)
-- `EXECUTION_MODE=paper`
-- Nessun ordine reale su exchange
+## 8) Modalità operativa
 
 ### Live mode (soldi reali)
 - `EXECUTION_MODE=live`
@@ -167,7 +163,7 @@ Le modifiche vengono applicate dal bot nel ciclo successivo.
 ## 10) Gestione quotidiana consigliata
 
 1. Controlla che API e dashboard siano raggiungibili
-2. Verifica modalità (`paper` vs `live`)
+2. Verifica modalità live attiva
 3. Avvia il bot da **Settings**
 4. Monitora:
    - `margin_usage`

@@ -324,7 +324,7 @@ class TradeRecord:
     confidence: float
     reasoning: str
     success: bool
-    mode: str  # 'paper' o 'live'
+    mode: str  # 'live'
     trigger: str = ""  # 'ai', 'stop_loss', 'take_profit', 'trailing_stop', 'emergency', 'break_even'
     order_status: str = "unknown"  # filled, partially_filled, etc.
 
