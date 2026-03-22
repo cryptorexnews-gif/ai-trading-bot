@@ -1,5 +1,4 @@
 import logging
-import time
 
 from flask import Blueprint, jsonify, request
 
@@ -7,6 +6,12 @@ from api.auth import require_api_key
 from api.config import COIN_PATTERN, KNOWN_TRADING_PAIRS
 from api.helpers import post_hyperliquid_info
 from api.rate_limit_utils import build_rate_limiter, rate_limited_response
+from api.services.market_service import (
+    candle_request_payload,
+    serialize_candles_response,
+    serialize_orderbook_debug,
+    serialize_orderbook_response,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -45,39 +50,9 @@ def candles():
         return jsonify({"error": "invalid_request"}), 400
 
     try:
-        interval_ms_map = {
-            "1m": 60_000, "3m": 180_000, "5m": 300_000, "15m": 900_000,
-            "1h": 3_600_000, "4h": 14_400_000, "1d": 86_400_000
-        }
-        interval_ms = interval_ms_map.get(interval, 900_000)
-        now_ms = int(time.time() * 1000)
-        start_ms = now_ms - (interval_ms * limit)
-
-        data = post_hyperliquid_info({
-            "type": "candleSnapshot",
-            "req": {"coin": coin, "interval": interval, "startTime": start_ms, "endTime": now_ms}
-        })
-
-        if data is None or not isinstance(data, list):
-            return jsonify({"candles": [], "coin": coin, "interval": interval, "timestamp": time.time()})
-
-        candles_list = []
-        for c in data:
-            candles_list.append({
-                "time": c.get("t", 0),
-                "open": float(c.get("o", 0)),
-                "high": float(c.get("h", 0)),
-                "low": float(c.get("l", 0)),
-                "close": float(c.get("c", 0)),
-                "volume": float(c.get("v", 0)),
-            })
-
-        return jsonify({
-            "candles": candles_list,
-            "coin": coin,
-            "interval": interval,
-            "timestamp": time.time()
-        })
+        payload = candle_request_payload(coin=coin, interval=interval, limit=limit)
+        data = post_hyperliquid_info(payload)
+        return jsonify(serialize_candles_response(data=data, coin=coin, interval=interval))
     except Exception:
         logger.error("Market candles endpoint failed", exc_info=True)
         return jsonify({"error": "internal_error"}), 500
@@ -109,50 +84,10 @@ def orderbook():
             return jsonify({
                 "bids": [], "asks": [], "coin": coin,
                 "spread": 0, "spread_pct": 0,
-                "timestamp": time.time()
+                "timestamp": 0
             })
 
-        levels = data.get("levels", [[], []])
-        if not levels or len(levels) < 2:
-            return jsonify({
-                "bids": [], "asks": [], "coin": coin,
-                "spread": 0, "spread_pct": 0,
-                "timestamp": time.time()
-            })
-
-        raw_bids = levels[0] if len(levels) > 0 else []
-        raw_asks = levels[1] if len(levels) > 1 else []
-
-        def parse_levels(raw):
-            result = []
-            for level in (raw or []):
-                px = float(level.get("px", 0))
-                sz = float(level.get("sz", 0))
-                n = int(level.get("n", 0))
-                if sz > 0:
-                    result.append({"px": px, "sz": sz, "n": n})
-            return result
-
-        bids = parse_levels(raw_bids)
-        asks = parse_levels(raw_asks)
-
-        spread = 0.0
-        spread_pct = 0.0
-        if bids and asks:
-            best_bid = bids[0]["px"]
-            best_ask = asks[0]["px"]
-            spread = best_ask - best_bid
-            mid = (best_ask + best_bid) / 2
-            spread_pct = (spread / mid * 100) if mid > 0 else 0
-
-        return jsonify({
-            "bids": bids,
-            "asks": asks,
-            "coin": coin,
-            "spread": round(spread, 8),
-            "spread_pct": round(spread_pct, 6),
-            "timestamp": time.time()
-        })
+        return jsonify(serialize_orderbook_response(data=data, coin=coin))
     except Exception:
         logger.error("Market orderbook endpoint failed", exc_info=True)
         return jsonify({"error": "internal_error"}), 500
@@ -179,12 +114,7 @@ def orderbook_debug():
         if data is None:
             return jsonify({"error": "upstream_unavailable", "coin": coin}), 502
 
-        return jsonify({
-            "raw_keys": list(data.keys()) if isinstance(data, dict) else str(type(data)),
-            "raw_data_preview": str(data)[:500],
-            "coin": coin,
-            "timestamp": time.time()
-        })
+        return jsonify(serialize_orderbook_debug(data=data, coin=coin))
     except Exception:
         logger.error("Market orderbook debug endpoint failed", exc_info=True)
         return jsonify({"error": "internal_error"}), 500
