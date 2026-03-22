@@ -12,6 +12,29 @@ def extract_order_ids(exchange_result: Dict[str, Any]) -> List[int]:
     return ids
 
 
+def extract_statuses(exchange_result: Dict[str, Any]) -> List[Dict[str, Any]]:
+    statuses = exchange_result.get("response", {}).get("data", {}).get("statuses", [])
+    return statuses if isinstance(statuses, list) else []
+
+
+def get_first_status_error(statuses: List[Dict[str, Any]]) -> Optional[str]:
+    for status in statuses:
+        if not isinstance(status, dict):
+            continue
+        if "error" in status and status["error"]:
+            return str(status["error"])
+    return None
+
+
+def has_acknowledged_order_status(statuses: List[Dict[str, Any]]) -> bool:
+    for status in statuses:
+        if not isinstance(status, dict):
+            continue
+        if status.get("resting") or status.get("filled"):
+            return True
+    return False
+
+
 def is_vault_not_registered_error(result: Optional[Dict[str, Any]]) -> bool:
     if not isinstance(result, dict):
         return False

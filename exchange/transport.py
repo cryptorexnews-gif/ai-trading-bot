@@ -68,6 +68,19 @@ def post_json_with_circuit_breaker(
     except ExchangeRejectedError as e:
         logger.error(str(e))
         return None
+    except requests.exceptions.HTTPError as e:
+        status_code = getattr(e.response, "status_code", 0) or 0
+        try:
+            _raise_hyperliquid_http_error(status_code, endpoint_label)
+        except AuthenticationError as mapped:
+            logger.error(str(mapped))
+        except RateLimitError as mapped:
+            logger.warning(str(mapped))
+        except UpstreamServerError as mapped:
+            logger.error(str(mapped))
+        except ExchangeRejectedError as mapped:
+            logger.error(str(mapped))
+        return None
     except requests.exceptions.Timeout:
         logger.error(f"{endpoint_label} timeout after {timeout}s")
         return None
@@ -129,6 +142,19 @@ def post_exchange_with_circuit_breaker(
         return None
     except ExchangeRejectedError as e:
         logger.error(str(e))
+        return None
+    except requests.exceptions.HTTPError as e:
+        status_code = getattr(e.response, "status_code", 0) or 0
+        try:
+            _raise_hyperliquid_http_error(status_code, endpoint_label)
+        except AuthenticationError as mapped:
+            logger.error(str(mapped))
+        except RateLimitError as mapped:
+            logger.warning(str(mapped))
+        except UpstreamServerError as mapped:
+            logger.error(str(mapped))
+        except ExchangeRejectedError as mapped:
+            logger.error(str(mapped))
         return None
     except requests.exceptions.Timeout:
         logger.error(f"{endpoint_label} timeout after {timeout}s")

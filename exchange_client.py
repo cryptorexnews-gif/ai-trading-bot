@@ -70,6 +70,9 @@ class HyperliquidExchangeClient:
         self._mids_cache_at = 0.0
         self._mids_cache_ttl = 30.0
 
+        self._open_orders_cache_by_user: Dict[str, Dict[str, Any]] = {}
+        self._open_orders_cache_ttl_sec = 2.0
+
         self._auth_error_count = 0
         self._auth_block_until = 0.0
         self._auth_cooldown_sec = 120.0
@@ -272,6 +275,88 @@ class HyperliquidExchangeClient:
                 return True
         return False
 
+    def _order_matches(
+        self,
+        order: Dict[str, Any],
+        coin: str,
+        side: str,
+        size: Decimal,
+        trigger_price: Decimal,
+        required_tpsl: Optional[str] = None,
+        enforce_reduce_only: bool = True,
+        size_rel_tol: Decimal = Decimal("0.10"),
+        trigger_rel_tol: Decimal = Decimal("0.03"),
+    ) -> bool:
+        if not isinstance(order, dict):
+            return False
+
+        order_coin = str(order.get("coin", order.get("symbol", ""))).strip().upper()
+        if not order_coin and isinstance(order.get("order"), dict):
+            order_coin = str(order["order"].get("coin", order["order"].get("symbol", ""))).strip().upper()
+        if order_coin != coin.upper():
+            return False
+
+        order_side = self._extract_order_side(order)
+        if order_side != side.lower():
+            return False
+
+        order_size = abs(self._extract_order_size(order))
+        wanted_size = abs(size)
+        if wanted_size <= 0:
+            return False
+        if not self._is_close_enough(order_size, wanted_size, rel_tol=size_rel_tol):
+            return False
+
+        order_trigger_px = self._extract_trigger_px(order)
+        if order_trigger_px <= 0:
+            return False
+        if not self._is_close_enough(order_trigger_px, trigger_price, rel_tol=trigger_rel_tol):
+            return False
+
+        if enforce_reduce_only and not self._extract_reduce_only(order):
+            return False
+
+        if required_tpsl:
+            order_tpsl = self._extract_tpsl(order)
+            if order_tpsl and order_tpsl != required_tpsl.lower():
+                return False
+            if not order_tpsl:
+                return False
+
+        return True
+
+    def _find_order_by_characteristics(
+        self,
+        user: str,
+        coin: str,
+        side: str,
+        size: Decimal,
+        trigger_price: Decimal,
+        required_tpsl: Optional[str] = None,
+        force_refresh: bool = False,
+    ) -> Optional[int]:
+        open_orders = self.get_open_orders(user, force_refresh=force_refresh)
+        candidates: List[int] = []
+
+        for order in open_orders:
+            if not self._order_matches(
+                order=order,
+                coin=coin,
+                side=side,
+                size=size,
+                trigger_price=trigger_price,
+                required_tpsl=required_tpsl,
+            ):
+                continue
+
+            oid = self._extract_order_oid(order)
+            if oid is not None:
+                candidates.append(int(oid))
+
+        if not candidates:
+            return None
+        return max(candidates)
+
     def _next_nonce(self) -> int:
         current_ms = int(time.time() * 1000)
         if current_ms <= self._last_nonce:
@@ -408,41 +493,19 @@ class HyperliquidExchangeClient:
         tpsl: str,
         strict_tpsl: bool = True,
     ) -> List[Dict[str, Any]]:
-        open_orders = self.get_open_orders(user)
-        wanted_coin = coin.upper()
-        wanted_side = side.lower()
-        wanted_tpsl = tpsl.lower()
-        wanted_size = abs(size)
-
+        open_orders = self.get_open_orders(user, force_refresh=True)
         matches: List[Dict[str, Any]] = []
+
         for order in open_orders:
-            if not isinstance(order, dict):
-                continue
-
-            order_coin = str(order.get("coin", order.get("symbol", ""))).strip().upper()
-            if not order_coin and isinstance(order.get("order"), dict):
-                order_coin = str(order["order"].get("coin", order["order"].get("symbol", ""))).strip().upper()
-            if order_coin != wanted_coin:
-                continue
-
-            order_side = self._extract_order_side(order)
-            if order_side != wanted_side:
-                continue
-
-            order_size = abs(self._extract_order_size(order))
-            if not self._is_close_enough(order_size, wanted_size, rel_tol=Decimal("0.08")):
-                continue
-
-            order_trigger_px = self._extract_trigger_px(order)
-            if order_trigger_px <= 0:
-                continue
-            if not self._is_close_enough(order_trigger_px, trigger_price, rel_tol=Decimal("0.03")):
-                continue
-
-            order_tpsl = self._extract_tpsl(order)
-            if strict_tpsl and order_tpsl and order_tpsl != wanted_tpsl:
-                continue
-            if strict_tpsl and not order_tpsl:
+            required_tpsl = tpsl if strict_tpsl else None
+            if not self._order_matches(
+                order=order,
+                coin=coin,
+                side=side,
+                size=size,
+                trigger_price=trigger_price,
+                required_tpsl=required_tpsl,
+            ):
                 continue
 
             oid = self._extract_order_oid(order)
@@ -451,9 +514,9 @@ class HyperliquidExchangeClient:
 
             matches.append(
                 {
-                    "oid": oid,
-                    "trigger_px": order_trigger_px,
-                    "size": order_size,
+                    "oid": int(oid),
+                    "trigger_px": self._extract_trigger_px(order),
+                    "size": abs(self._extract_order_size(order)),
                 }
             )
 
@@ -493,7 +556,7 @@ class HyperliquidExchangeClient:
         side: str,
         tpsl: str,
     ) -> Optional[int]:
-        open_orders = self.get_open_orders(user)
+        open_orders = self.get_open_orders(user, force_refresh=True)
         candidates: List[int] = []
 
         for order in open_orders:
@@ -539,26 +602,26 @@ class HyperliquidExchangeClient:
         delay_sec: float = 0.6,
     ) -> Optional[int]:
         for _ in range(attempts):
-            strict_match = self._find_trigger_order_id(
+            strict_match = self._find_order_by_characteristics(
                 user=user,
                 coin=coin,
                 side=side,
                 size=size,
                 trigger_price=trigger_price,
-                tpsl=tpsl,
-                strict_tpsl=True,
+                required_tpsl=tpsl,
+                force_refresh=True,
             )
             if strict_match is not None:
                 return strict_match
 
-            relaxed_match = self._find_trigger_order_id(
+            relaxed_match = self._find_order_by_characteristics(
                 user=user,
                 coin=coin,
                 side=side,
                 size=size,
                 trigger_price=trigger_price,
-                tpsl=tpsl,
-                strict_tpsl=False,
+                required_tpsl=None,
+                force_refresh=True,
             )
             if relaxed_match is not None:
                 return relaxed_match
@@ -594,7 +657,7 @@ class HyperliquidExchangeClient:
             logger.warning(f"Cancelled duplicate {tpsl.upper()} order for {coin}, oid={oid}, keep_oid={keep_oid}")
 
     def _cancel_existing_coin_protective_orders(self, coin: str, close_side: str) -> int:
-        open_orders = self.get_open_orders(self.account.address)
+        open_orders = self.get_open_orders(self.account.address, force_refresh=True)
         to_cancel: List[int] = []
 
         for order in open_orders:
@@ -669,16 +732,24 @@ class HyperliquidExchangeClient:
     def get_user_state(self, user: str) -> Optional[Dict[str, Any]]:
         return self._post_info({"type": "clearinghouseState", "user": user})
 
-    def get_open_orders(self, user: str) -> List[Dict[str, Any]]:
+    def get_open_orders(self, user: str, force_refresh: bool = False) -> List[Dict[str, Any]]:
+        now = time.time()
+        cached = self._open_orders_cache_by_user.get(user)
+        if not force_refresh and cached and (now - float(cached.get("at", 0.0))) < self._open_orders_cache_ttl_sec:
+            data = cached.get("data", [])
+            return data if isinstance(data, list) else []
+
         data = self._post_info({"type": "openOrders", "user": user})
-        return data if isinstance(data, list) else []
+        orders = data if isinstance(data, list) else []
+        self._open_orders_cache_by_user[user] = {"at": now, "data": orders}
+        return orders
 
     def are_order_ids_open(self, user: str, coin: str, order_ids: List[int]) -> bool:
         wanted = {int(oid) for oid in order_ids if oid is not None}
         if not wanted:
             return False
 
-        open_orders = self.get_open_orders(user)
+        open_orders = self.get_open_orders(user, force_refresh=True)
         found = set()
 
         for order in open_orders:
