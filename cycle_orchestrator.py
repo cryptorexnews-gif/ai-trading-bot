@@ -410,7 +410,7 @@ class CycleOrchestrator:
             "timestamp": time.time(), "coin": coin, "action": decision["action"],
             "size": str(decision["size"]), "price": str(market_data.last_price),
             "notional": str(result.get("notional", "0")), "leverage": decision["leverage"],
-            "confidence": decision["confidence"], "reasoning": decision.get("reasoning", "")[:200],
+            "confidence": decision["confidence"], "reasoning": decision.get("reasoning", "")[:1200],
             "success": result["success"], "mode": self.cfg.execution_mode,
             "trigger": "ai", "order_status": fill_status,
         }
