@@ -39,7 +39,6 @@ class StateStore:
         data = read_json_file(self.state_path, default=None)
         if data is None:
             return self._default_state()
-        # Ensure all default keys exist (migration safety)
         defaults = self._default_state()
         for key, value in defaults.items():
             if key not in data:
@@ -67,7 +66,6 @@ class StateStore:
         ts: float,
         notional: Decimal
     ) -> Dict[str, str]:
-        """Add notional to daily tracker. Ignores negative values."""
         if notional <= 0:
             return daily_notional_by_day
 
@@ -75,7 +73,6 @@ class StateStore:
         current = Decimal(str(daily_notional_by_day.get(key, "0")))
         daily_notional_by_day[key] = str(current + notional)
 
-        # Keep only last 7 days
         keys_sorted = sorted(daily_notional_by_day.keys(), reverse=True)
         keep_keys = set(keys_sorted[:7])
         return {k: v for k, v in daily_notional_by_day.items() if k in keep_keys}
@@ -85,7 +82,6 @@ class StateStore:
         state: Dict[str, Any],
         trade: Dict[str, Any]
     ) -> None:
-        """Add trade record to history, keep last 100 trades."""
         history = state.get("trade_history", [])
         history.append(trade)
         if len(history) > 100:
@@ -100,7 +96,6 @@ class StateStore:
         position_count: int,
         margin_usage: Decimal,
     ) -> None:
-        """Save portfolio value snapshot for real equity curve. Keep last 500."""
         snapshots = state.get("equity_snapshots", [])
         snapshots.append({
             "timestamp": time.time(),
@@ -133,6 +128,7 @@ class StateStore:
                 "losses": 0,
                 "holds": 0,
                 "failed_executions": 0,
+                "executed_trades": 0,
                 "classified_trades": 0,
                 "consecutive_losses": 0
             }
@@ -143,25 +139,23 @@ class StateStore:
         wins = 0
         losses = 0
         holds = 0
-        failed_executions = 0
-        total_trades = 0
+        executed_trades = 0
 
         for t in history:
             action = str(t.get("action", "")).strip().lower()
             success = bool(t.get("success", False))
             trigger = str(t.get("trigger", "")).strip().lower()
 
+            # Exclude failed transactions from ALL counts
             if not success:
-                failed_executions += 1
                 continue
 
             if action in hold_actions or action not in trade_actions:
                 holds += 1
                 continue
 
-            total_trades += 1
+            executed_trades += 1
 
-            # Preferred: explicit realized pnl if present
             if "realized_pnl" in t:
                 realized = Decimal(str(t.get("realized_pnl", "0")))
                 if realized > 0:
@@ -170,21 +164,23 @@ class StateStore:
                     losses += 1
                 continue
 
-            # Fallback classification from close triggers when pnl not available
-            if trigger in {"take_profit", "trailing_stop"}:
-                wins += 1
-            elif trigger in {"stop_loss", "break_even_stop", "emergency"}:
-                losses += 1
+            # Fallback classification only for close events with explicit trigger
+            if action == "close_position":
+                if trigger in {"take_profit", "trailing_stop"}:
+                    wins += 1
+                elif trigger in {"stop_loss", "break_even_stop", "emergency"}:
+                    losses += 1
 
         classified_trades = wins + losses
         win_rate = (wins / classified_trades * 100) if classified_trades > 0 else 0.0
 
         return {
-            "total_trades": total_trades,
+            "total_trades": classified_trades,
             "wins": wins,
             "losses": losses,
             "holds": holds,
-            "failed_executions": failed_executions,
+            "failed_executions": 0,
+            "executed_trades": executed_trades,
             "classified_trades": classified_trades,
             "win_rate": win_rate,
             "consecutive_losses": state.get("consecutive_losses", 0)

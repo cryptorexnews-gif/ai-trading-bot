@@ -38,10 +38,11 @@ def trades():
     try:
         state = _state_store.load_state()
         history = state.get("trade_history", [])
-        recent = list(reversed(history[-limit:]))
+        successful_history = [t for t in history if bool(t.get("success", False))]
+        recent = list(reversed(successful_history[-limit:]))
         return jsonify({
             "trades": recent,
-            "total": len(history),
+            "total": len(successful_history),
             "timestamp": time.time()
         })
     except Exception:
@@ -104,8 +105,10 @@ def performance():
         summary = _state_store.get_performance_summary(state)
 
         history = state.get("trade_history", [])
+        successful_history = [t for t in history if bool(t.get("success", False))]
+
         equity_points = []
-        for trade in history:
+        for trade in successful_history:
             equity_points.append({
                 "timestamp": trade.get("timestamp", 0),
                 "notional": trade.get("notional", "0"),

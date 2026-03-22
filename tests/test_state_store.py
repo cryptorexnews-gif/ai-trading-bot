@@ -155,22 +155,25 @@ def test_performance_summary_with_trades():
         store = _make_store(tmp)
         state = store.load_state()
 
-        # Executed trades
-        store.add_trade_record(state, {"action": "buy", "success": True})
+        # Success close trades with known outcome
         store.add_trade_record(state, {"action": "close_position", "success": True, "trigger": "take_profit"})
         store.add_trade_record(state, {"action": "close_position", "success": True, "trigger": "stop_loss"})
 
-        # Non-trade / failed
+        # Success open trade (executed but not classifiable for win/loss)
+        store.add_trade_record(state, {"action": "buy", "success": True})
+
+        # Hold + failed
         store.add_trade_record(state, {"action": "hold", "success": True})
-        store.add_trade_record(state, {"action": "buy", "success": False, "order_status": "not_filled"})
+        store.add_trade_record(state, {"action": "buy", "success": False})
 
         summary = store.get_performance_summary(state)
-        assert summary["total_trades"] == 3
+        assert summary["executed_trades"] == 3
+        assert summary["classified_trades"] == 2
+        assert summary["total_trades"] == 2
         assert summary["wins"] == 1
         assert summary["losses"] == 1
-        assert summary["classified_trades"] == 2
         assert summary["holds"] == 1
-        assert summary["failed_executions"] == 1
+        assert summary["failed_executions"] == 0
         assert summary["win_rate"] == 50.0
 
 
