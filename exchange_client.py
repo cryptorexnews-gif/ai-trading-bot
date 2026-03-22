@@ -34,7 +34,9 @@ logger = logging.getLogger(__name__)
 class HyperliquidExchangeClient:
     """
     Hyperliquid client (live-only).
-    Includes auth fallback between direct signer mode and master-wallet mode.
+    Coerenza operativa:
+    - Usa UNA sola identità utente trading per TUTTE le operazioni (open/reduce/close/TP/SL/cancel/leverage).
+    - Usa UNA sola modalità firma (vaultAddress fisso se valido, altrimenti None).
     """
 
     def __init__(
@@ -63,6 +65,9 @@ class HyperliquidExchangeClient:
         self.vault_address = (vault_address or "").strip() or None
         self.master_wallet_address = (os.getenv("HYPERLIQUID_WALLET_ADDRESS", "") or "").strip() or None
 
+        self._trading_user_address = self._resolve_trading_user_address()
+        self._fixed_vault_for_signing = self._resolve_fixed_vault_for_signing()
+
         self._last_nonce: int = 0
         self._meta_cache: Optional[Dict[str, Any]] = None
         self._meta_cache_at = 0.0
@@ -87,7 +92,8 @@ class HyperliquidExchangeClient:
         logger.info(
             f"Exchange client initialized: base_url={self.base_url}, mode={self.execution_mode}, "
             f"mainnet={self.enable_mainnet_trading}, signer={self.get_wallet_address_masked()} "
-            f"(master={self._mask_address(self.master_wallet_address)}, vault={self._mask_address(self.vault_address)})"
+            f"(master={self._mask_address(self.master_wallet_address)}, vault={self._mask_address(self.vault_address)}, "
+            f"trading_user={self._mask_address(self._trading_user_address)}, signing_vault={self._mask_address(self._fixed_vault_for_signing)})"
         )
 
     def _live_orders_enabled(self) -> bool:
@@ -376,10 +382,6 @@ class HyperliquidExchangeClient:
         )
 
     def get_batch_info(self, requests_payload: List[Dict[str, Any]], timeout: Optional[int] = None) -> List[Any]:
-        """
-        Batch /info helper.
-        Returns an empty list on failure to keep call sites simple and safe.
-        """
         if not requests_payload:
             return []
         result = self._post_info({"type": "batch", "requests": requests_payload}, timeout=timeout)
@@ -402,13 +404,18 @@ class HyperliquidExchangeClient:
         raw = str(value).strip()
         return raw.startswith("0x") and len(raw) == 42
 
-    def _get_effective_vault_address(self) -> Optional[str]:
-        """
-        Returns vault address only if it is configured and structurally valid.
-        """
+    def _resolve_trading_user_address(self) -> str:
+        if self._is_valid_eth_address(self.master_wallet_address):
+            return str(self.master_wallet_address).strip()
+        return str(self.account.address).strip()
+
+    def _resolve_fixed_vault_for_signing(self) -> Optional[str]:
         if self._is_valid_eth_address(self.vault_address):
-            return self.vault_address
+            return str(self.vault_address).strip()
         return None
+
+    def get_trading_user_address(self) -> str:
+        return self._trading_user_address
 
     def _post_signed_action_once(
         self,
@@ -435,6 +442,12 @@ class HyperliquidExchangeClient:
         return self._post_exchange(payload, timeout=timeout)
 
     def _post_signed_action_with_master_retry(self, action: Dict[str, Any], timeout: Optional[int] = None) -> Optional[Dict[str, Any]]:
+        """
+        Manteniamo il nome per compatibilità interna, ma il comportamento ora è coerente e fisso:
+        - stessa identità firma
+        - stesso vault mode
+        - nessun cambio contesto dinamico tra operazioni
+        """
         now = time.time()
         if now < self._auth_block_until:
             logger.error(
@@ -442,44 +455,26 @@ class HyperliquidExchangeClient:
             )
             return {"status": "err", "response": "auth_cooldown_active"}
 
-        signer = (self.account.address or "").lower()
-        master = (self.master_wallet_address or "").lower()
-        effective_vault = self._get_effective_vault_address()
+        result = self._post_signed_action_once(
+            action=action,
+            timeout=timeout,
+            vault_address_override=self._fixed_vault_for_signing,
+        )
 
-        attempts: List[Optional[str]] = []
-
-        if effective_vault:
-            attempts.append(effective_vault)
-        else:
-            attempts.append(None)
-
-        if master and master != signer and master not in [str(a).lower() for a in attempts if a is not None]:
-            attempts.append(master)
-
-        if None not in attempts:
-            attempts.append(None)
-
-        result: Optional[Dict[str, Any]] = None
-        for idx, vault_mode in enumerate(attempts, start=1):
-            if idx > 1:
-                time.sleep(0.2)
-
-            result = self._post_signed_action_once(action, timeout=timeout, vault_address_override=vault_mode)
-            if not self._is_auth_error(result):
-                self._auth_error_count = 0
-                return result
-
+        if self._is_auth_error(result):
+            self._auth_error_count += 1
             logger.warning(
-                f"Auth mode attempt {idx}/{len(attempts)} failed "
-                f"(vault={self._mask_address(vault_mode)}): {result}"
+                f"Auth failed with fixed trading identity "
+                f"(trading_user={self._mask_address(self._trading_user_address)}, signer={self.get_wallet_address_masked()}, "
+                f"vault={self._mask_address(self._fixed_vault_for_signing)}): {result}"
             )
-
-        self._auth_error_count += 1
-        if self._auth_error_count >= 2:
-            self._auth_block_until = time.time() + self._auth_cooldown_sec
-            logger.error(
-                f"Persistent auth errors. Enabling auth cooldown for {int(self._auth_cooldown_sec)}s"
-            )
+            if self._auth_error_count >= 2:
+                self._auth_block_until = time.time() + self._auth_cooldown_sec
+                logger.error(
+                    f"Persistent auth errors. Enabling auth cooldown for {int(self._auth_cooldown_sec)}s"
+                )
+        else:
+            self._auth_error_count = 0
 
         return result
 
@@ -657,7 +652,7 @@ class HyperliquidExchangeClient:
             logger.warning(f"Cancelled duplicate {tpsl.upper()} order for {coin}, oid={oid}, keep_oid={keep_oid}")
 
     def _cancel_existing_coin_protective_orders(self, coin: str, close_side: str) -> int:
-        open_orders = self.get_open_orders(self.account.address, force_refresh=True)
+        open_orders = self.get_open_orders(self._trading_user_address, force_refresh=True)
         to_cancel: List[int] = []
 
         for order in open_orders:
@@ -733,15 +728,18 @@ class HyperliquidExchangeClient:
         return self._post_info({"type": "clearinghouseState", "user": user})
 
     def get_open_orders(self, user: str, force_refresh: bool = False) -> List[Dict[str, Any]]:
+        requested_user = str(user or "").strip()
+        effective_user = requested_user if requested_user else self._trading_user_address
+
         now = time.time()
-        cached = self._open_orders_cache_by_user.get(user)
+        cached = self._open_orders_cache_by_user.get(effective_user)
         if not force_refresh and cached and (now - float(cached.get("at", 0.0))) < self._open_orders_cache_ttl_sec:
             data = cached.get("data", [])
             return data if isinstance(data, list) else []
 
-        data = self._post_info({"type": "openOrders", "user": user})
+        data = self._post_info({"type": "openOrders", "user": effective_user})
         orders = data if isinstance(data, list) else []
-        self._open_orders_cache_by_user[user] = {"at": now, "data": orders}
+        self._open_orders_cache_by_user[effective_user] = {"at": now, "data": orders}
         return orders
 
     def are_order_ids_open(self, user: str, coin: str, order_ids: List[int]) -> bool:
@@ -749,7 +747,8 @@ class HyperliquidExchangeClient:
         if not wanted:
             return False
 
-        open_orders = self.get_open_orders(user, force_refresh=True)
+        effective_user = str(user or "").strip() or self._trading_user_address
+        open_orders = self.get_open_orders(effective_user, force_refresh=True)
         found = set()
 
         for order in open_orders:
@@ -976,7 +975,7 @@ class HyperliquidExchangeClient:
             return {"success": False, "reason": "invalid_trigger_price"}
 
         existing_oid = self._wait_for_trigger_order_id(
-            user=self.account.address,
+            user=self._trading_user_address,
             coin=coin,
             side=normalized_side,
             size=normalized_size,
@@ -1018,7 +1017,7 @@ class HyperliquidExchangeClient:
             return {"success": True, "order_id": int(immediate_oids[0])}
 
         order_id = self._wait_for_trigger_order_id(
-            user=self.account.address,
+            user=self._trading_user_address,
             coin=coin,
             side=normalized_side,
             size=normalized_size,
@@ -1032,7 +1031,7 @@ class HyperliquidExchangeClient:
             return {"success": True, "order_id": order_id}
 
         fallback_oid = self._find_latest_protective_order_id(
-            user=self.account.address,
+            user=self._trading_user_address,
             coin=coin,
             side=normalized_side,
             tpsl=tpsl,
@@ -1164,6 +1163,7 @@ class HyperliquidExchangeClient:
         if not self._live_orders_enabled():
             return {"success": False, "reason": "live_disabled_fail_closed"}
 
+        trading_user = self._trading_user_address
         close_side = "sell" if is_long else "buy"
         close_size = abs(position_size)
         if close_size <= 0:
@@ -1174,7 +1174,7 @@ class HyperliquidExchangeClient:
 
         if existing_sl_id is None:
             existing_sl_id = self._wait_for_trigger_order_id(
-                user=self.account.address,
+                user=trading_user,
                 coin=coin,
                 side=close_side,
                 size=close_size,
@@ -1186,7 +1186,7 @@ class HyperliquidExchangeClient:
 
         if existing_tp_id is None:
             existing_tp_id = self._wait_for_trigger_order_id(
-                user=self.account.address,
+                user=trading_user,
                 coin=coin,
                 side=close_side,
                 size=close_size,
@@ -1198,7 +1198,7 @@ class HyperliquidExchangeClient:
 
         if existing_sl_id is not None and existing_tp_id is not None:
             self._cancel_duplicate_trigger_orders(
-                user=self.account.address,
+                user=trading_user,
                 coin=coin,
                 side=close_side,
                 size=close_size,
@@ -1207,7 +1207,7 @@ class HyperliquidExchangeClient:
                 keep_oid=existing_sl_id,
             )
             self._cancel_duplicate_trigger_orders(
-                user=self.account.address,
+                user=trading_user,
                 coin=coin,
                 side=close_side,
                 size=close_size,
@@ -1265,7 +1265,7 @@ class HyperliquidExchangeClient:
             return {"success": False, "reason": f"bulk_tpsl_failed:{bulk_res.get('reason', 'unknown')}"}
 
         sl_id = self._wait_for_trigger_order_id(
-            user=self.account.address,
+            user=trading_user,
             coin=coin,
             side=close_side,
             size=close_size,
@@ -1275,7 +1275,7 @@ class HyperliquidExchangeClient:
             delay_sec=0.5,
         )
         tp_id = self._wait_for_trigger_order_id(
-            user=self.account.address,
+            user=trading_user,
             coin=coin,
             side=close_side,
             size=close_size,
@@ -1287,14 +1287,14 @@ class HyperliquidExchangeClient:
 
         if sl_id is None:
             sl_id = self._find_latest_protective_order_id(
-                user=self.account.address,
+                user=trading_user,
                 coin=coin,
                 side=close_side,
                 tpsl="sl",
             )
         if tp_id is None:
             tp_id = self._find_latest_protective_order_id(
-                user=self.account.address,
+                user=trading_user,
                 coin=coin,
                 side=close_side,
                 tpsl="tp",
@@ -1304,7 +1304,7 @@ class HyperliquidExchangeClient:
             return {"success": False, "reason": "missing_trigger_order_id_after_bulk"}
 
         self._cancel_duplicate_trigger_orders(
-            user=self.account.address,
+            user=trading_user,
             coin=coin,
             side=close_side,
             size=close_size,
@@ -1313,7 +1313,7 @@ class HyperliquidExchangeClient:
             keep_oid=sl_id,
         )
         self._cancel_duplicate_trigger_orders(
-            user=self.account.address,
+            user=trading_user,
             coin=coin,
             side=close_side,
             size=close_size,
