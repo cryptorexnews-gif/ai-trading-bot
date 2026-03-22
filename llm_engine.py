@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 class LLMEngine:
     """
-    LLM Engine using Claude Opus 4.6 via OpenRouter for trend trading decisions.
+    LLM Engine using DeepSeek v3.2 via OpenRouter for trend trading decisions.
     All market data comes from Hyperliquid API; no external data sources.
     """
 
@@ -23,7 +23,7 @@ class LLMEngine:
         self,
         api_key: str,
         base_url: str = "https://openrouter.ai/api/v1",
-        model: str = "anthropic/claude-opus-4.6",
+        model: str = "deepseek/deepseek-v3.2",
         max_tokens: int = 8192,
         temperature: float = 0.2
     ):
