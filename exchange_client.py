@@ -6,6 +6,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from eth_account import Account
 
+from exchange.api_client import ExchangeAPIClient
 from exchange.market_rules import (
     default_tick_size_for_asset,
     infer_tick_size_and_precision_from_mid,
@@ -16,14 +17,15 @@ from exchange.order_builder import (
     build_limit_order_action,
     build_update_leverage_action,
 )
+from exchange.order_query import OrderQueryService
 from exchange.parsers import (
     extract_order_ids,
     extract_statuses,
     get_first_status_error,
     has_acknowledged_order_status,
 )
+from exchange.protective_orders import ProtectiveOrdersService
 from exchange.signing import sign_l1_action_exact
-from exchange.transport import post_exchange_with_circuit_breaker, post_json_with_circuit_breaker
 from utils.circuit_breaker import get_or_create_circuit_breaker
 from utils.decimals import safe_decimal
 from utils.http import create_robust_session
@@ -102,6 +104,24 @@ class HyperliquidExchangeClient:
             "hyperliquid_exchange", failure_threshold=3, recovery_timeout=60.0
         )
 
+        self._api_client = ExchangeAPIClient(
+            session=self.session,
+            base_url=self.base_url,
+            info_timeout=self.info_timeout,
+            exchange_timeout=self.exchange_timeout,
+            info_cb=self._info_cb,
+            exchange_cb=self._exchange_cb,
+            meta_cache_ttl_sec=self.meta_cache_ttl_sec,
+        )
+        self._order_query = OrderQueryService(
+            get_open_orders=self.get_open_orders,
+            cancel_order=self.cancel_order,
+        )
+        self._protective_orders = ProtectiveOrdersService(
+            client=self,
+            order_query_service=self._order_query,
+        )
+
         logger.info(
             f"Exchange client initialized: base_url={self.base_url}, mode={self.execution_mode}, "
             f"mainnet={self.enable_mainnet_trading}, signer={self.get_wallet_address_masked()} "
@@ -118,13 +138,9 @@ class HyperliquidExchangeClient:
         return f"{address[:6]}...{address[-4:]}"
 
     @staticmethod
-    def _normalize_side(side_value: Any) -> str:
-        raw = str(side_value).strip().lower()
-        if raw in {"b", "buy", "bid", "long", "true"}:
-            return "buy"
-        if raw in {"a", "s", "sell", "ask", "short", "false"}:
-            return "sell"
-        return ""
+    def _is_valid_wallet_address_format(value: str) -> bool:
+        raw = str(value or "").strip()
+        return raw.startswith("0x") and len(raw) == 42
 
     @staticmethod
     def _is_ok_result(result: Optional[Dict[str, Any]]) -> bool:
@@ -142,243 +158,9 @@ class HyperliquidExchangeClient:
         ) or ("api wallet" in msg and "does not exist" in msg)
 
     @staticmethod
-    def _is_close_enough(
-        a: Decimal,
-        b: Decimal,
-        rel_tol: Decimal = Decimal("0.02"),
-        abs_tol: Decimal = Decimal("0.00000001"),
-    ) -> bool:
-        if a == b:
-            return True
-        diff = abs(a - b)
-        scale = max(abs(a), abs(b), Decimal("1"))
-        return diff <= max(abs_tol, scale * rel_tol)
-
-    @staticmethod
-    def _extract_order_oid(order: Dict[str, Any]) -> Optional[int]:
-        if not isinstance(order, dict):
-            return None
-        direct_oid = order.get("oid")
-        if direct_oid is not None:
-            return int(direct_oid)
-
-        nested_order = order.get("order", {})
-        if isinstance(nested_order, dict):
-            nested_oid = nested_order.get("oid")
-            if nested_oid is not None:
-                return int(nested_oid)
-
-        resting = order.get("resting", {})
-        if isinstance(resting, dict):
-            resting_oid = resting.get("oid")
-            if resting_oid is not None:
-                return int(resting_oid)
-        return None
-
-    @staticmethod
-    def _extract_order_side(order: Dict[str, Any]) -> str:
-        if not isinstance(order, dict):
-            return ""
-        for candidate in [order.get("side"), order.get("dir"), order.get("b")]:
-            side = HyperliquidExchangeClient._normalize_side(candidate)
-            if side:
-                return side
-
-        nested_order = order.get("order", {})
-        if isinstance(nested_order, dict):
-            for candidate in [nested_order.get("side"), nested_order.get("dir"), nested_order.get("b")]:
-                side = HyperliquidExchangeClient._normalize_side(candidate)
-                if side:
-                    return side
-        return ""
-
-    @staticmethod
-    def _extract_order_size(order: Dict[str, Any]) -> Decimal:
-        if not isinstance(order, dict):
-            return Decimal("0")
-        candidates = [order.get("sz"), order.get("s"), order.get("size"), order.get("origSz")]
-        nested_order = order.get("order", {})
-        if isinstance(nested_order, dict):
-            candidates.extend(
-                [nested_order.get("sz"), nested_order.get("s"), nested_order.get("size"), nested_order.get("origSz")]
-            )
-        for c in candidates:
-            val = safe_decimal(c, Decimal("0"))
-            if val != 0:
-                return val
-        return Decimal("0")
-
-    @staticmethod
-    def _extract_trigger_px(order: Dict[str, Any]) -> Decimal:
-        if not isinstance(order, dict):
-            return Decimal("0")
-        candidates = [order.get("triggerPx"), order.get("tpTriggerPx"), order.get("slTriggerPx")]
-        trigger_obj = order.get("trigger", {})
-        if isinstance(trigger_obj, dict):
-            candidates.append(trigger_obj.get("triggerPx"))
-        order_type = order.get("orderType", {})
-        if isinstance(order_type, dict):
-            trigger_obj_2 = order_type.get("trigger", {})
-            if isinstance(trigger_obj_2, dict):
-                candidates.append(trigger_obj_2.get("triggerPx"))
-
-        nested_order = order.get("order", {})
-        if isinstance(nested_order, dict):
-            candidates.extend([nested_order.get("triggerPx"), nested_order.get("tpTriggerPx"), nested_order.get("slTriggerPx")])
-            nested_trigger = nested_order.get("trigger", {})
-            if isinstance(nested_trigger, dict):
-                candidates.append(nested_trigger.get("triggerPx"))
-            nested_order_type = nested_order.get("orderType", {})
-            if isinstance(nested_order_type, dict):
-                nested_trigger_2 = nested_order_type.get("trigger", {})
-                if isinstance(nested_trigger_2, dict):
-                    candidates.append(nested_trigger_2.get("triggerPx"))
-
-        for c in candidates:
-            px = safe_decimal(c, Decimal("0"))
-            if px > 0:
-                return px
-        return Decimal("0")
-
-    @staticmethod
-    def _extract_tpsl(order: Dict[str, Any]) -> str:
-        if not isinstance(order, dict):
-            return ""
-
-        candidates: List[Any] = [order.get("tpsl"), order.get("triggerType")]
-        trigger_obj = order.get("trigger", {})
-        if isinstance(trigger_obj, dict):
-            candidates.append(trigger_obj.get("tpsl"))
-            candidates.append(trigger_obj.get("triggerType"))
-
-        order_type = order.get("orderType", {})
-        if isinstance(order_type, dict):
-            trigger_obj_2 = order_type.get("trigger", {})
-            if isinstance(trigger_obj_2, dict):
-                candidates.append(trigger_obj_2.get("tpsl"))
-                candidates.append(trigger_obj_2.get("triggerType"))
-
-        nested_order = order.get("order", {})
-        if isinstance(nested_order, dict):
-            candidates.append(nested_order.get("tpsl"))
-            candidates.append(nested_order.get("triggerType"))
-            nested_trigger = nested_order.get("trigger", {})
-            if isinstance(nested_trigger, dict):
-                candidates.append(nested_trigger.get("tpsl"))
-                candidates.append(nested_trigger.get("triggerType"))
-
-        for c in candidates:
-            value = str(c or "").strip().lower()
-            if value in {"tp", "sl"}:
-                return value
-        if bool(order.get("isTp")):
-            return "tp"
-        if bool(order.get("isSl")):
-            return "sl"
-        return ""
-
-    @staticmethod
-    def _extract_reduce_only(order: Dict[str, Any]) -> bool:
-        if not isinstance(order, dict):
-            return False
-        candidates: List[Any] = [order.get("r"), order.get("reduceOnly"), order.get("isReduceOnly")]
-        nested_order = order.get("order", {})
-        if isinstance(nested_order, dict):
-            candidates.extend([nested_order.get("r"), nested_order.get("reduceOnly"), nested_order.get("isReduceOnly")])
-
-        for c in candidates:
-            if isinstance(c, bool) and c:
-                return True
-            if str(c).strip().lower() in {"true", "1"}:
-                return True
-        return False
-
-    @staticmethod
-    def _is_valid_wallet_address_format(value: str) -> bool:
-        raw = str(value or "").strip()
-        return raw.startswith("0x") and len(raw) == 42
-
-    def _order_matches(
-        self,
-        order: Dict[str, Any],
-        coin: str,
-        side: str,
-        size: Decimal,
-        trigger_price: Decimal,
-        required_tpsl: Optional[str] = None,
-        enforce_reduce_only: bool = True,
-        size_rel_tol: Decimal = Decimal("0.10"),
-        trigger_rel_tol: Decimal = Decimal("0.03"),
-    ) -> bool:
-        if not isinstance(order, dict):
-            return False
-
-        order_coin = str(order.get("coin", order.get("symbol", ""))).strip().upper()
-        if not order_coin and isinstance(order.get("order"), dict):
-            order_coin = str(order["order"].get("coin", order["order"].get("symbol", ""))).strip().upper()
-        if order_coin != coin.upper():
-            return False
-
-        order_side = self._extract_order_side(order)
-        if order_side != side.lower():
-            return False
-
-        order_size = abs(self._extract_order_size(order))
-        wanted_size = abs(size)
-        if wanted_size <= 0:
-            return False
-        if not self._is_close_enough(order_size, wanted_size, rel_tol=size_rel_tol):
-            return False
-
-        order_trigger_px = self._extract_trigger_px(order)
-        if order_trigger_px <= 0:
-            return False
-        if not self._is_close_enough(order_trigger_px, trigger_price, rel_tol=trigger_rel_tol):
-            return False
-
-        if enforce_reduce_only and not self._extract_reduce_only(order):
-            return False
-
-        if required_tpsl:
-            order_tpsl = self._extract_tpsl(order)
-            if order_tpsl and order_tpsl != required_tpsl.lower():
-                return False
-            if not order_tpsl:
-                return False
-
-        return True
-
-    def _find_order_by_characteristics(
-        self,
-        user: str,
-        coin: str,
-        side: str,
-        size: Decimal,
-        trigger_price: Decimal,
-        required_tpsl: Optional[str] = None,
-        force_refresh: bool = False,
-    ) -> Optional[int]:
-        open_orders = self.get_open_orders(user, force_refresh=force_refresh)
-        candidates: List[int] = []
-
-        for order in open_orders:
-            if not self._order_matches(
-                order=order,
-                coin=coin,
-                side=side,
-                size=size,
-                trigger_price=trigger_price,
-                required_tpsl=required_tpsl,
-            ):
-                continue
-
-            oid = self._extract_order_oid(order)
-            if oid is not None:
-                candidates.append(int(oid))
-
-        if not candidates:
-            return None
-        return max(candidates)
+    def validate_wallet_address(private_key: str, expected_address: str) -> bool:
+        derived = Account.from_key(private_key).address
+        return derived.lower() == expected_address.lower()
 
     def _next_nonce(self) -> int:
         current_ms = int(time.time() * 1000)
@@ -388,32 +170,13 @@ class HyperliquidExchangeClient:
         return current_ms
 
     def _post_info(self, payload: Dict[str, Any], timeout: Optional[int] = None) -> Optional[Any]:
-        timeout = timeout or self.info_timeout
-        return post_json_with_circuit_breaker(
-            session=self.session,
-            url=f"{self.base_url}/info",
-            payload=payload,
-            timeout=timeout,
-            circuit_breaker=self._info_cb,
-            endpoint_label=f"/info type={payload.get('type', 'unknown')}",
-        )
+        return self._api_client.post_info(payload, timeout=timeout)
 
     def get_batch_info(self, requests_payload: List[Dict[str, Any]], timeout: Optional[int] = None) -> List[Any]:
-        if not requests_payload:
-            return []
-        result = self._post_info({"type": "batch", "requests": requests_payload}, timeout=timeout)
-        return result if isinstance(result, list) else []
+        return self._api_client.get_batch_info(requests_payload=requests_payload, timeout=timeout)
 
     def _post_exchange(self, payload: Dict[str, Any], timeout: Optional[int] = None) -> Optional[Any]:
-        timeout = timeout or self.exchange_timeout
-        return post_exchange_with_circuit_breaker(
-            session=self.session,
-            url=f"{self.base_url}/exchange",
-            payload=payload,
-            timeout=timeout,
-            circuit_breaker=self._exchange_cb,
-            endpoint_label="/exchange",
-        )
+        return self._api_client.post_exchange(payload=payload, timeout=timeout)
 
     def _post_signed_action_once(
         self,
@@ -472,229 +235,8 @@ class HyperliquidExchangeClient:
 
         return result
 
-    def _list_matching_trigger_orders(
-        self,
-        user: str,
-        coin: str,
-        side: str,
-        size: Decimal,
-        trigger_price: Decimal,
-        tpsl: str,
-        strict_tpsl: bool = True,
-    ) -> List[Dict[str, Any]]:
-        open_orders = self.get_open_orders(user, force_refresh=True)
-        matches: List[Dict[str, Any]] = []
-
-        for order in open_orders:
-            required_tpsl = tpsl if strict_tpsl else None
-            if not self._order_matches(
-                order=order,
-                coin=coin,
-                side=side,
-                size=size,
-                trigger_price=trigger_price,
-                required_tpsl=required_tpsl,
-            ):
-                continue
-
-            oid = self._extract_order_oid(order)
-            if oid is None:
-                continue
-
-            matches.append(
-                {
-                    "oid": int(oid),
-                    "trigger_px": self._extract_trigger_px(order),
-                    "size": abs(self._extract_order_size(order)),
-                }
-            )
-
-        return matches
-
-    def _select_best_match_oid(self, matches: List[Dict[str, Any]], trigger_price: Decimal) -> Optional[int]:
-        if not matches:
-            return None
-        best = min(matches, key=lambda m: abs(m["trigger_px"] - trigger_price))
-        return int(best["oid"])
-
-    def _find_trigger_order_id(
-        self,
-        user: str,
-        coin: str,
-        side: str,
-        size: Decimal,
-        trigger_price: Decimal,
-        tpsl: str,
-        strict_tpsl: bool = True,
-    ) -> Optional[int]:
-        matches = self._list_matching_trigger_orders(
-            user=user,
-            coin=coin,
-            side=side,
-            size=size,
-            trigger_price=trigger_price,
-            tpsl=tpsl,
-            strict_tpsl=strict_tpsl,
-        )
-        return self._select_best_match_oid(matches, trigger_price)
-
-    def _find_latest_protective_order_id(
-        self,
-        user: str,
-        coin: str,
-        side: str,
-        tpsl: str,
-    ) -> Optional[int]:
-        open_orders = self.get_open_orders(user, force_refresh=True)
-        candidates: List[int] = []
-
-        for order in open_orders:
-            if not isinstance(order, dict):
-                continue
-
-            order_coin = str(order.get("coin", order.get("symbol", ""))).strip().upper()
-            if not order_coin and isinstance(order.get("order"), dict):
-                order_coin = str(order["order"].get("coin", order["order"].get("symbol", ""))).strip().upper()
-            if order_coin != coin.upper():
-                continue
-
-            order_side = self._extract_order_side(order)
-            if order_side != side.lower():
-                continue
-
-            if not self._extract_reduce_only(order):
-                continue
-
-            order_tpsl = self._extract_tpsl(order)
-            if order_tpsl and order_tpsl != tpsl.lower():
-                continue
-
-            oid = self._extract_order_oid(order)
-            if oid is None:
-                continue
-
-            candidates.append(int(oid))
-
-        if not candidates:
-            return None
-        return max(candidates)
-
-    def _wait_for_trigger_order_id(
-        self,
-        user: str,
-        coin: str,
-        side: str,
-        size: Decimal,
-        trigger_price: Decimal,
-        tpsl: str,
-        attempts: int = 10,
-        delay_sec: float = 0.6,
-    ) -> Optional[int]:
-        for _ in range(attempts):
-            strict_match = self._find_order_by_characteristics(
-                user=user,
-                coin=coin,
-                side=side,
-                size=size,
-                trigger_price=trigger_price,
-                required_tpsl=tpsl,
-                force_refresh=True,
-            )
-            if strict_match is not None:
-                return strict_match
-
-            relaxed_match = self._find_order_by_characteristics(
-                user=user,
-                coin=coin,
-                side=side,
-                size=size,
-                trigger_price=trigger_price,
-                required_tpsl=None,
-                force_refresh=True,
-            )
-            if relaxed_match is not None:
-                return relaxed_match
-
-            time.sleep(delay_sec)
-
-        return None
-
-    def _cancel_duplicate_trigger_orders(
-        self,
-        user: str,
-        coin: str,
-        side: str,
-        size: Decimal,
-        trigger_price: Decimal,
-        tpsl: str,
-        keep_oid: int,
-    ) -> None:
-        strict_matches = self._list_matching_trigger_orders(
-            user=user,
-            coin=coin,
-            side=side,
-            size=size,
-            trigger_price=trigger_price,
-            tpsl=tpsl,
-            strict_tpsl=True,
-        )
-        for match in strict_matches:
-            oid = int(match["oid"])
-            if oid == keep_oid:
-                continue
-            self.cancel_order(coin, oid)
-            logger.warning(f"Cancelled duplicate {tpsl.upper()} order for {coin}, oid={oid}, keep_oid={keep_oid}")
-
-    def _cancel_existing_coin_protective_orders(self, coin: str, close_side: str) -> int:
-        open_orders = self.get_open_orders(self._trading_user_address, force_refresh=True)
-        to_cancel: List[int] = []
-
-        for order in open_orders:
-            if not isinstance(order, dict):
-                continue
-
-            order_coin = str(order.get("coin", order.get("symbol", ""))).strip().upper()
-            if not order_coin and isinstance(order.get("order"), dict):
-                order_coin = str(order["order"].get("coin", order["order"].get("symbol", ""))).strip().upper()
-            if order_coin != coin.upper():
-                continue
-
-            order_side = self._extract_order_side(order)
-            if order_side != close_side:
-                continue
-
-            trigger_px = self._extract_trigger_px(order)
-            if trigger_px <= 0:
-                continue
-
-            if not self._extract_reduce_only(order):
-                continue
-
-            oid = self._extract_order_oid(order)
-            if oid is None:
-                continue
-
-            to_cancel.append(oid)
-
-        cancelled = 0
-        for oid in sorted(set(to_cancel)):
-            if self.cancel_order(coin, oid):
-                cancelled += 1
-
-        if cancelled > 0:
-            logger.warning(
-                f"Cancelled {cancelled} stale protective trigger orders for {coin} side={close_side.upper()}"
-            )
-
-        return cancelled
-
     def get_wallet_address_masked(self) -> str:
         return self._mask_address(self.account.address)
-
-    @staticmethod
-    def validate_wallet_address(private_key: str, expected_address: str) -> bool:
-        derived = Account.from_key(private_key).address
-        return derived.lower() == expected_address.lower()
 
     def get_meta(self, force_refresh: bool = False) -> Optional[Dict[str, Any]]:
         now = time.time()
@@ -755,7 +297,7 @@ class HyperliquidExchangeClient:
             if order_coin != coin.upper():
                 continue
 
-            oid = self._extract_order_oid(order)
+            oid = self._order_query.extract_order_oid(order)
             if oid is None:
                 continue
             found.add(oid)
@@ -854,6 +396,109 @@ class HyperliquidExchangeClient:
             target = min(desired_price, aggressive) if desired_price > 0 else aggressive
 
         return self._round_price_to_tick(asset_id, target)
+
+    # Compatibility wrappers for tests/internal legacy calls
+    def _order_matches(
+        self,
+        order: Dict[str, Any],
+        coin: str,
+        side: str,
+        size: Decimal,
+        trigger_price: Decimal,
+        required_tpsl: Optional[str] = None,
+        enforce_reduce_only: bool = True,
+        size_rel_tol: Decimal = Decimal("0.10"),
+        trigger_rel_tol: Decimal = Decimal("0.03"),
+    ) -> bool:
+        return self._order_query.order_matches(
+            order=order,
+            coin=coin,
+            side=side,
+            size=size,
+            trigger_price=trigger_price,
+            required_tpsl=required_tpsl,
+            enforce_reduce_only=enforce_reduce_only,
+            size_rel_tol=size_rel_tol,
+            trigger_rel_tol=trigger_rel_tol,
+        )
+
+    def _find_order_by_characteristics(
+        self,
+        user: str,
+        coin: str,
+        side: str,
+        size: Decimal,
+        trigger_price: Decimal,
+        required_tpsl: Optional[str] = None,
+        force_refresh: bool = False,
+    ) -> Optional[int]:
+        return self._order_query.find_order_by_characteristics(
+            user=user,
+            coin=coin,
+            side=side,
+            size=size,
+            trigger_price=trigger_price,
+            required_tpsl=required_tpsl,
+            force_refresh=force_refresh,
+        )
+
+    def _wait_for_trigger_order_id(
+        self,
+        user: str,
+        coin: str,
+        side: str,
+        size: Decimal,
+        trigger_price: Decimal,
+        tpsl: str,
+        attempts: int = 10,
+        delay_sec: float = 0.6,
+    ) -> Optional[int]:
+        return self._order_query.wait_for_trigger_order_id(
+            user=user,
+            coin=coin,
+            side=side,
+            size=size,
+            trigger_price=trigger_price,
+            tpsl=tpsl,
+            attempts=attempts,
+            delay_sec=delay_sec,
+        )
+
+    def _find_latest_protective_order_id(
+        self,
+        user: str,
+        coin: str,
+        side: str,
+        tpsl: str,
+    ) -> Optional[int]:
+        return self._order_query.find_latest_protective_order_id(user=user, coin=coin, side=side, tpsl=tpsl)
+
+    def _cancel_duplicate_trigger_orders(
+        self,
+        user: str,
+        coin: str,
+        side: str,
+        size: Decimal,
+        trigger_price: Decimal,
+        tpsl: str,
+        keep_oid: int,
+    ) -> None:
+        self._order_query.cancel_duplicate_trigger_orders(
+            user=user,
+            coin=coin,
+            side=side,
+            size=size,
+            trigger_price=trigger_price,
+            tpsl=tpsl,
+            keep_oid=keep_oid,
+        )
+
+    def _cancel_existing_coin_protective_orders(self, coin: str, close_side: str) -> int:
+        return self._order_query.cancel_existing_coin_protective_orders(
+            trading_user=self._trading_user_address,
+            coin=coin,
+            close_side=close_side,
+        )
 
     def set_leverage(self, coin: str, leverage: int) -> bool:
         if not self._live_orders_enabled():
@@ -1160,173 +805,15 @@ class HyperliquidExchangeClient:
         current_stop_order_id: Optional[int] = None,
         current_take_profit_order_id: Optional[int] = None,
     ) -> Dict[str, Any]:
-        if not self._live_orders_enabled():
-            return {"success": False, "reason": "live_disabled_fail_closed"}
-
-        trading_user = self._trading_user_address
-        close_side = "sell" if is_long else "buy"
-        close_size = abs(position_size)
-        if close_size <= 0:
-            return {"success": False, "reason": "invalid_size"}
-
-        existing_sl_id = current_stop_order_id
-        existing_tp_id = current_take_profit_order_id
-
-        if existing_sl_id is None:
-            existing_sl_id = self._wait_for_trigger_order_id(
-                user=trading_user,
-                coin=coin,
-                side=close_side,
-                size=close_size,
-                trigger_price=stop_loss_price,
-                tpsl="sl",
-                attempts=3,
-                delay_sec=0.3,
-            )
-
-        if existing_tp_id is None:
-            existing_tp_id = self._wait_for_trigger_order_id(
-                user=trading_user,
-                coin=coin,
-                side=close_side,
-                size=close_size,
-                trigger_price=take_profit_price,
-                tpsl="tp",
-                attempts=3,
-                delay_sec=0.3,
-            )
-
-        if existing_sl_id is not None and existing_tp_id is not None:
-            self._cancel_duplicate_trigger_orders(
-                user=trading_user,
-                coin=coin,
-                side=close_side,
-                size=close_size,
-                trigger_price=stop_loss_price,
-                tpsl="sl",
-                keep_oid=existing_sl_id,
-            )
-            self._cancel_duplicate_trigger_orders(
-                user=trading_user,
-                coin=coin,
-                side=close_side,
-                size=close_size,
-                trigger_price=take_profit_price,
-                tpsl="tp",
-                keep_oid=existing_tp_id,
-            )
-            return {
-                "success": True,
-                "stop_loss_order_id": existing_sl_id,
-                "take_profit_order_id": existing_tp_id,
-            }
-
-        self._cancel_existing_coin_protective_orders(coin, close_side)
-
-        if current_stop_order_id is not None:
-            self.cancel_order(coin, current_stop_order_id)
-        if current_take_profit_order_id is not None:
-            self.cancel_order(coin, current_take_profit_order_id)
-
-        is_close_buy = close_side == "buy"
-        orders = [
-            {
-                "coin": coin,
-                "is_buy": is_close_buy,
-                "sz": close_size,
-                "limit_px": stop_loss_price,
-                "order_type": {
-                    "trigger": {
-                        "isMarket": True,
-                        "triggerPx": stop_loss_price,
-                        "tpsl": "sl",
-                    }
-                },
-                "reduce_only": True,
-            },
-            {
-                "coin": coin,
-                "is_buy": is_close_buy,
-                "sz": close_size,
-                "limit_px": take_profit_price,
-                "order_type": {
-                    "trigger": {
-                        "isMarket": True,
-                        "triggerPx": take_profit_price,
-                        "tpsl": "tp",
-                    }
-                },
-                "reduce_only": True,
-            },
-        ]
-
-        bulk_res = self.bulk_orders(orders, grouping="normalTpsl")
-        if not bulk_res.get("success"):
-            return {"success": False, "reason": f"bulk_tpsl_failed:{bulk_res.get('reason', 'unknown')}"}
-
-        sl_id = self._wait_for_trigger_order_id(
-            user=trading_user,
+        return self._protective_orders.upsert_protective_orders(
             coin=coin,
-            side=close_side,
-            size=close_size,
-            trigger_price=stop_loss_price,
-            tpsl="sl",
-            attempts=8,
-            delay_sec=0.5,
+            position_size=position_size,
+            is_long=is_long,
+            stop_loss_price=stop_loss_price,
+            take_profit_price=take_profit_price,
+            current_stop_order_id=current_stop_order_id,
+            current_take_profit_order_id=current_take_profit_order_id,
         )
-        tp_id = self._wait_for_trigger_order_id(
-            user=trading_user,
-            coin=coin,
-            side=close_side,
-            size=close_size,
-            trigger_price=take_profit_price,
-            tpsl="tp",
-            attempts=8,
-            delay_sec=0.5,
-        )
-
-        if sl_id is None:
-            sl_id = self._find_latest_protective_order_id(
-                user=trading_user,
-                coin=coin,
-                side=close_side,
-                tpsl="sl",
-            )
-        if tp_id is None:
-            tp_id = self._find_latest_protective_order_id(
-                user=trading_user,
-                coin=coin,
-                side=close_side,
-                tpsl="tp",
-            )
-
-        if sl_id is None or tp_id is None:
-            return {"success": False, "reason": "missing_trigger_order_id_after_bulk"}
-
-        self._cancel_duplicate_trigger_orders(
-            user=trading_user,
-            coin=coin,
-            side=close_side,
-            size=close_size,
-            trigger_price=stop_loss_price,
-            tpsl="sl",
-            keep_oid=sl_id,
-        )
-        self._cancel_duplicate_trigger_orders(
-            user=trading_user,
-            coin=coin,
-            side=close_side,
-            size=close_size,
-            trigger_price=take_profit_price,
-            tpsl="tp",
-            keep_oid=tp_id,
-        )
-
-        return {
-            "success": True,
-            "stop_loss_order_id": sl_id,
-            "take_profit_order_id": tp_id,
-        }
 
     def get_trading_user_address(self) -> str:
         return self._trading_user_address
