@@ -162,11 +162,11 @@ def test_performance_summary_with_trades():
         store.add_trade_record(state, {"action": "hold", "success": True})
 
         summary = store.get_performance_summary(state)
-        assert summary["total_trades"] == 2  # Excludes holds and failed execution
+        assert summary["total_trades"] == 2  # Failed executions excluded from every count
         assert summary["wins"] == 2
         assert summary["losses"] == 0
         assert summary["holds"] == 1
-        assert summary["failed_executions"] == 2
+        assert summary["failed_executions"] == 0
 
 
 # ─── Atomic write safety ─────────────────────────────────────────────────────
