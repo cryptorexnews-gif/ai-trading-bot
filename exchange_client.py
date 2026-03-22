@@ -17,7 +17,6 @@ from exchange.order_builder import (
     build_update_leverage_action,
 )
 from exchange.parsers import (
-    extract_order_ids,
     extract_statuses,
     get_first_status_error,
     has_acknowledged_order_status,
@@ -34,11 +33,7 @@ logger = logging.getLogger(__name__)
 
 class HyperliquidExchangeClient:
     """
-    Hyperliquid client (live-only, master wallet mode):
-    - HTTP + circuit breaker
-    - EIP-712 signing
-    - order payload builder separato
-    - parser separati
+    Hyperliquid client (live-only, master wallet mode).
     """
 
     def __init__(
@@ -70,29 +65,20 @@ class HyperliquidExchangeClient:
         self._mids_cache_at = 0.0
         self._mids_cache_ttl = 30.0
 
-        self._info_cb = get_or_create_circuit_breaker("hyperliquid_info", failure_threshold=5, recovery_timeout=30.0)
-        self._exchange_cb = get_or_create_circuit_breaker("hyperliquid_exchange", failure_threshold=3, recovery_timeout=60.0)
+        self._info_cb = get_or_create_circuit_breaker(
+            "hyperliquid_info", failure_threshold=5, recovery_timeout=30.0
+        )
+        self._exchange_cb = get_or_create_circuit_breaker(
+            "hyperliquid_exchange", failure_threshold=3, recovery_timeout=60.0
+        )
 
         logger.info(
             f"Exchange client initialized: base_url={self.base_url}, mode={self.execution_mode}, "
             f"mainnet={self.enable_mainnet_trading}, signer={self.get_wallet_address_masked()} (master-only)"
         )
 
-    def __repr__(self) -> str:
-        return (
-            f"<HyperliquidExchangeClient base_url={self.base_url} "
-            f"mode={self.execution_mode} signer={self.get_wallet_address_masked()} master_only=True>"
-        )
-
-    def __str__(self) -> str:
-        return self.__repr__()
-
     def _live_orders_enabled(self) -> bool:
         return self.execution_mode == "live" and self.enable_mainnet_trading
-
-    @staticmethod
-    def _is_ok_result(result: Optional[Dict[str, Any]]) -> bool:
-        return isinstance(result, dict) and result.get("status") == "ok"
 
     @staticmethod
     def _mask_address(address: Optional[str]) -> str:
@@ -108,6 +94,23 @@ class HyperliquidExchangeClient:
         if raw in {"a", "s", "sell", "ask", "short", "false"}:
             return "sell"
         return ""
+
+    @staticmethod
+    def _is_ok_result(result: Optional[Dict[str, Any]]) -> bool:
+        return isinstance(result, dict) and result.get("status") == "ok"
+
+    @staticmethod
+    def _is_close_enough(
+        a: Decimal,
+        b: Decimal,
+        rel_tol: Decimal = Decimal("0.02"),
+        abs_tol: Decimal = Decimal("0.00000001"),
+    ) -> bool:
+        if a == b:
+            return True
+        diff = abs(a - b)
+        scale = max(abs(a), abs(b), Decimal("1"))
+        return diff <= max(abs_tol, scale * rel_tol)
 
     @staticmethod
     def _extract_order_oid(order: Dict[str, Any]) -> Optional[int]:
@@ -142,6 +145,25 @@ class HyperliquidExchangeClient:
         return None
 
     @staticmethod
+    def _extract_order_side(order: Dict[str, Any]) -> str:
+        if not isinstance(order, dict):
+            return ""
+
+        for candidate in [order.get("side"), order.get("dir"), order.get("b")]:
+            side = HyperliquidExchangeClient._normalize_side(candidate)
+            if side:
+                return side
+
+        nested_order = order.get("order", {})
+        if isinstance(nested_order, dict):
+            for candidate in [nested_order.get("side"), nested_order.get("dir"), nested_order.get("b")]:
+                side = HyperliquidExchangeClient._normalize_side(candidate)
+                if side:
+                    return side
+
+        return ""
+
+    @staticmethod
     def _extract_order_size(order: Dict[str, Any]) -> Decimal:
         if not isinstance(order, dict):
             return Decimal("0")
@@ -166,26 +188,7 @@ class HyperliquidExchangeClient:
             val = safe_decimal(c, Decimal("0"))
             if val != 0:
                 return val
-
         return Decimal("0")
-
-    def _extract_order_side(self, order: Dict[str, Any]) -> str:
-        if not isinstance(order, dict):
-            return ""
-
-        for candidate in [order.get("side"), order.get("dir"), order.get("b")]:
-            side = self._normalize_side(candidate)
-            if side:
-                return side
-
-        nested_order = order.get("order", {})
-        if isinstance(nested_order, dict):
-            for candidate in [nested_order.get("side"), nested_order.get("dir"), nested_order.get("b")]:
-                side = self._normalize_side(candidate)
-                if side:
-                    return side
-
-        return ""
 
     @staticmethod
     def _extract_trigger_px(order: Dict[str, Any]) -> Decimal:
@@ -228,7 +231,6 @@ class HyperliquidExchangeClient:
             px = safe_decimal(c, Decimal("0"))
             if px > 0:
                 return px
-
         return Decimal("0")
 
     @staticmethod
@@ -260,34 +262,17 @@ class HyperliquidExchangeClient:
                 candidates.append(nested_trigger.get("tpsl"))
                 candidates.append(nested_trigger.get("triggerType"))
 
-            nested_order_type = nested_order.get("orderType", {})
-            if isinstance(nested_order_type, dict):
-                nested_trigger_2 = nested_order_type.get("trigger", {})
-                if isinstance(nested_trigger_2, dict):
-                    candidates.append(nested_trigger_2.get("tpsl"))
-                    candidates.append(nested_trigger_2.get("triggerType"))
-
         for c in candidates:
             value = str(c or "").strip().lower()
             if value in {"tp", "sl"}:
                 return value
 
-        is_tp = bool(order.get("isTp"))
-        is_sl = bool(order.get("isSl"))
-        if is_tp:
+        if bool(order.get("isTp")):
             return "tp"
-        if is_sl:
+        if bool(order.get("isSl")):
             return "sl"
 
         return ""
-
-    @staticmethod
-    def _is_close_enough(a: Decimal, b: Decimal, rel_tol: Decimal = Decimal("0.02"), abs_tol: Decimal = Decimal("0.00000001")) -> bool:
-        if a == b:
-            return True
-        diff = abs(a - b)
-        scale = max(abs(a), abs(b), Decimal("1"))
-        return diff <= max(abs_tol, scale * rel_tol)
 
     def _next_nonce(self) -> int:
         current_ms = int(time.time() * 1000)
@@ -318,11 +303,7 @@ class HyperliquidExchangeClient:
             endpoint_label="/exchange",
         )
 
-    def _post_signed_action_once(
-        self,
-        action: Dict[str, Any],
-        timeout: Optional[int] = None,
-    ) -> Optional[Dict[str, Any]]:
+    def _post_signed_action_once(self, action: Dict[str, Any], timeout: Optional[int] = None) -> Optional[Dict[str, Any]]:
         nonce = self._next_nonce()
         signature = sign_l1_action_exact(
             account=self.account,
@@ -339,15 +320,11 @@ class HyperliquidExchangeClient:
         }
         return self._post_exchange(payload, timeout=timeout)
 
-    def _post_signed_action_with_master_retry(
-        self,
-        action: Dict[str, Any],
-        timeout: Optional[int] = None,
-    ) -> Optional[Dict[str, Any]]:
+    def _post_signed_action_with_master_retry(self, action: Dict[str, Any], timeout: Optional[int] = None) -> Optional[Dict[str, Any]]:
         result = self._post_signed_action_once(action, timeout=timeout)
 
-        max_wallet_error_retries = 3
         attempt = 0
+        max_wallet_error_retries = 3
         while is_master_wallet_not_found_error(result) and attempt < max_wallet_error_retries:
             attempt += 1
             backoff_sec = 0.25 * attempt
@@ -365,35 +342,6 @@ class HyperliquidExchangeClient:
             )
 
         return result
-
-    def _round_price_to_tick(self, asset_id: int, price: Decimal) -> Decimal:
-        tick_size, precision = self.get_tick_size_and_precision(asset_id)
-        rounded_ticks = (price / tick_size).quantize(Decimal("1"))
-        rounded_price = rounded_ticks * tick_size
-        quantizer = Decimal("1").scaleb(-precision)
-        return rounded_price.quantize(quantizer)
-
-    def _resolve_limit_price(self, coin: str, side: str, desired_price: Decimal, asset_id: int) -> Decimal:
-        is_buy = side.lower() == "buy"
-        reference_price = self.get_reference_price(coin, desired_price)
-        max_deviation = reference_price * Decimal("0.05")
-
-        if is_buy:
-            limit_price = min(desired_price, reference_price + (max_deviation * Decimal("0.5")))
-        else:
-            limit_price = max(desired_price, reference_price - (max_deviation * Decimal("0.5")))
-
-        lower_bound = reference_price - max_deviation
-        upper_bound = reference_price + max_deviation
-        limit_price = max(lower_bound, min(upper_bound, limit_price))
-
-        return self._round_price_to_tick(asset_id, limit_price)
-
-    def _normalize_size_for_coin(self, coin: str, size: Decimal) -> Decimal:
-        sz_decimals = self.get_sz_decimals(coin)
-        if sz_decimals is None:
-            return size if size > 0 else Decimal("0")
-        return normalize_size_for_decimals(size, sz_decimals)
 
     def _find_trigger_order_id(
         self,
@@ -494,9 +442,6 @@ class HyperliquidExchangeClient:
             time.sleep(delay_sec)
 
         return None
-
-    def get_derived_address(self) -> str:
-        return self.account.address
 
     def get_wallet_address_masked(self) -> str:
         return self._mask_address(self.account.address)
@@ -735,9 +680,11 @@ class HyperliquidExchangeClient:
             logger.error(f"Trigger order not acknowledged by Hyperliquid statuses for {coin}: {statuses}")
             return {"success": False, "reason": "not_acknowledged"}
 
+        # Try direct extraction first (fast path)
         order_ids = extract_order_ids(result)
         order_id = order_ids[0] if order_ids else None
 
+        # If missing, use openOrders reconciliation (source of truth)
         if order_id is None:
             order_id = self._wait_for_trigger_order_id(
                 user=self.account.address,
@@ -802,6 +749,7 @@ class HyperliquidExchangeClient:
         if close_size <= 0:
             return {"success": False, "reason": "invalid_size"}
 
+        # Reuse if already present on open orders
         existing_sl_id = current_stop_order_id
         existing_tp_id = current_take_profit_order_id
 
@@ -836,6 +784,7 @@ class HyperliquidExchangeClient:
                 "take_profit_order_id": existing_tp_id,
             }
 
+        # Recreate cleanly
         if current_stop_order_id is not None:
             self.cancel_order(coin, current_stop_order_id)
         if current_take_profit_order_id is not None:
@@ -870,29 +819,6 @@ class HyperliquidExchangeClient:
 
         sl_id = sl_res.get("order_id")
         tp_id = tp_res.get("order_id")
-
-        if sl_id is None:
-            sl_id = self._wait_for_trigger_order_id(
-                user=self.account.address,
-                coin=coin,
-                side=close_side,
-                size=close_size,
-                trigger_price=stop_loss_price,
-                tpsl="sl",
-                attempts=6,
-                delay_sec=0.5,
-            )
-        if tp_id is None:
-            tp_id = self._wait_for_trigger_order_id(
-                user=self.account.address,
-                coin=coin,
-                side=close_side,
-                size=close_size,
-                trigger_price=take_profit_price,
-                tpsl="tp",
-                attempts=6,
-                delay_sec=0.5,
-            )
 
         if sl_id is None or tp_id is None:
             return {"success": False, "reason": "missing_trigger_order_id"}
