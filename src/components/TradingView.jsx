@@ -34,6 +34,15 @@ function mergeCoins(...coinLists) {
   return merged.length > 0 ? merged : DEFAULT_SAFE_COINS
 }
 
+function getCandlePollingMs(interval) {
+  if (interval === '5m') return 5000
+  if (interval === '15m') return 8000
+  if (interval === '1h') return 12000
+  if (interval === '4h') return 20000
+  if (interval === '1d') return 30000
+  return 12000
+}
+
 export default function TradingView({ tradingPairs }) {
   const [coins, setCoins] = useState(DEFAULT_SAFE_COINS)
   const [selectedCoin, setSelectedCoin] = useState(DEFAULT_SAFE_COINS[0])
@@ -97,14 +106,11 @@ export default function TradingView({ tradingPairs }) {
       )
 
       setCoins(merged)
-
-      if (!merged.includes(selectedCoin)) {
-        setSelectedCoin(merged[0])
-      }
+      setSelectedCoin((prev) => (merged.includes(prev) ? prev : merged[0]))
     }
 
     fetchConfig()
-  }, [apiBase, selectedCoin, tradingPairs])
+  }, [apiBase, tradingPairs])
 
   const fetchCandles = useCallback(async () => {
     console.log(`Fetching candles for ${selectedCoin} ${interval}`)
@@ -189,13 +195,13 @@ export default function TradingView({ tradingPairs }) {
     setFetchError(null)
 
     fetchCandles()
-    const candleTimer = window.setInterval(fetchCandles, 2000)
+    const candleTimer = window.setInterval(fetchCandles, getCandlePollingMs(interval))
 
     return () => {
       mountedRef.current = false
       window.clearInterval(candleTimer)
     }
-  }, [fetchCandles])
+  }, [fetchCandles, interval])
 
   const change = stats24h ? safeNum(stats24h.change, 0) : 0
   const isPositive = change >= 0

@@ -10,14 +10,13 @@ const API_BASE = normalizeBaseUrl(import.meta.env.VITE_API_BASE_URL)
 const inFlightByEndpoint = new Map()
 const latestByEndpoint = new Map()
 const lastFetchAtByEndpoint = new Map()
-const MIN_ENDPOINT_REFETCH_MS = 700
+const MIN_ENDPOINT_REFETCH_MS = 1200
 
 export function getApiBase() {
   return API_BASE
 }
 
 export function getHeaders() {
-  // Security: never send secrets from browser code.
   return {}
 }
 

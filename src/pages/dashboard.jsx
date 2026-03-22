@@ -12,10 +12,10 @@ function safeNum(v, fallback = 0) {
 }
 
 export default function DashboardPage() {
-  const { data: statusData, error: statusError, lastUpdated } = useApi('/status', 1000)
-  const { data: portfolioData } = useApi('/portfolio', 1000)
-  const { data: perfData } = useApi('/performance', 2000)
-  const { data: configData } = useApi('/config', 5000)
+  const { data: statusData, error: statusError, lastUpdated } = useApi('/status', 3000)
+  const { data: portfolioData } = useApi('/portfolio', 3000)
+  const { data: perfData } = useApi('/performance', 5000)
+  const { data: configData } = useApi('/config', 15000)
 
   const bot = statusData?.bot || {}
   const account = statusData?.account || {}
