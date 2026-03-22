@@ -4,9 +4,25 @@ from typing import Any, Dict, Optional
 import requests
 
 from utils.circuit_breaker import CircuitBreakerOpenError
+from utils.hyperliquid_errors import (
+    AuthenticationError,
+    ExchangeRejectedError,
+    RateLimitError,
+    UpstreamServerError,
+)
 from utils.retry import RETRYABLE_STATUS_CODES, retry_request
 
 logger = logging.getLogger(__name__)
+
+
+def _raise_hyperliquid_http_error(status_code: int, endpoint_label: str) -> None:
+    if status_code in (401, 403):
+        raise AuthenticationError(f"{endpoint_label} auth error status={status_code}")
+    if status_code == 429:
+        raise RateLimitError(f"{endpoint_label} rate limited")
+    if status_code >= 500:
+        raise UpstreamServerError(f"{endpoint_label} upstream error status={status_code}")
+    raise ExchangeRejectedError(f"{endpoint_label} rejected status={status_code}")
 
 
 def post_json_with_circuit_breaker(
@@ -32,14 +48,25 @@ def post_json_with_circuit_breaker(
             logger_instance=logger,
         )
         if response.status_code != 200:
-            logger.error(f"{endpoint_label} failed status={response.status_code}")
-            response.raise_for_status()
+            _raise_hyperliquid_http_error(response.status_code, endpoint_label)
         return response.json()
 
     try:
         return circuit_breaker.call(_do_post)
     except CircuitBreakerOpenError:
         logger.error(f"Circuit breaker OPEN for {endpoint_label}")
+        return None
+    except AuthenticationError as e:
+        logger.error(str(e))
+        return None
+    except RateLimitError as e:
+        logger.warning(str(e))
+        return None
+    except UpstreamServerError as e:
+        logger.error(str(e))
+        return None
+    except ExchangeRejectedError as e:
+        logger.error(str(e))
         return None
     except requests.exceptions.Timeout:
         logger.error(f"{endpoint_label} timeout after {timeout}s")
@@ -83,14 +110,25 @@ def post_exchange_with_circuit_breaker(
             logger_instance=logger,
         )
         if response.status_code != 200:
-            logger.error(f"{endpoint_label} failed status={response.status_code}")
-            response.raise_for_status()
+            _raise_hyperliquid_http_error(response.status_code, endpoint_label)
         return response.json()
 
     try:
         return circuit_breaker.call(_do_post)
     except CircuitBreakerOpenError:
         logger.error(f"Circuit breaker OPEN for {endpoint_label}")
+        return None
+    except AuthenticationError as e:
+        logger.error(str(e))
+        return None
+    except RateLimitError as e:
+        logger.warning(str(e))
+        return None
+    except UpstreamServerError as e:
+        logger.error(str(e))
+        return None
+    except ExchangeRejectedError as e:
+        logger.error(str(e))
         return None
     except requests.exceptions.Timeout:
         logger.error(f"{endpoint_label} timeout after {timeout}s")

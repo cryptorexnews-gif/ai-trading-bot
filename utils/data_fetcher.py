@@ -87,6 +87,23 @@ class HyperliquidDataFetcher:
             self._mids_cache_at = now
         return self._mids_cache
 
+    def get_multiple_mids(self, coins: List[str], force_refresh: bool = False) -> Dict[str, Decimal]:
+        """
+        Get mid prices for a subset of coins using one allMids call + local filtering.
+        """
+        mids = self.get_all_mids(force_refresh=force_refresh)
+        if not isinstance(mids, dict):
+            return {}
+
+        result: Dict[str, Decimal] = {}
+        for coin in coins:
+            normalized = str(coin or "").strip().upper()
+            if not normalized or normalized not in mids:
+                continue
+            result[normalized] = self._d(mids[normalized])
+
+        return result
+
     def get_meta(self, force_refresh: bool = False) -> Optional[Dict[str, Any]]:
         """Get exchange metadata."""
         now = time.time()
