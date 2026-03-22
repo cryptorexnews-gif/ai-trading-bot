@@ -81,6 +81,9 @@ class CycleOrchestrator:
         self._protective_sync_max_attempts = 12
         self._protective_sync_base_sleep_sec = 1.0
 
+        self._trigger_close_max_attempts = 8
+        self._trigger_close_base_sleep_sec = 1.0
+
         self.coin_processor = CoinCycleProcessor(
             cfg=self.cfg,
             execution_engine=self.execution_engine,
@@ -232,6 +235,57 @@ class CycleOrchestrator:
                 if not synced:
                     logger.error(f"{coin} failed to enforce TP/SL on exchange in this cycle")
 
+    def _execute_trigger_close_with_retries(
+        self,
+        coin: str,
+        side: str,
+        close_size: Decimal,
+        current_price: Decimal,
+        trigger: str,
+        previous_size: Decimal,
+    ) -> Tuple[bool, Dict[str, Any]]:
+        last_result: Dict[str, Any] = {"success": False, "reason": "not_executed"}
+
+        for attempt in range(1, self._trigger_close_max_attempts + 1):
+            self.hl_rate_limiter.acquire(1)
+            result = self.exchange_client.place_order(
+                coin=coin,
+                side=side,
+                size=close_size,
+                desired_price=current_price,
+                reduce_only=True,
+            )
+            last_result = result if isinstance(result, dict) else {"success": False, "reason": "invalid_result"}
+
+            if not last_result.get("success"):
+                logger.warning(
+                    f"{trigger.upper()} close attempt {attempt}/{self._trigger_close_max_attempts} failed for {coin}: "
+                    f"{last_result.get('reason', 'unknown')}"
+                )
+                if attempt < self._trigger_close_max_attempts:
+                    backoff = self._trigger_close_base_sleep_sec + min(2.0, attempt * 0.2)
+                    time.sleep(backoff)
+                continue
+
+            refreshed = self.portfolio_service.get_portfolio_state()
+            new_size = Decimal(str(refreshed.positions.get(coin, {}).get("size", 0)))
+
+            if abs(new_size) < abs(previous_size):
+                logger.info(
+                    f"{trigger.upper()} close confirmed on exchange for {coin}: "
+                    f"size {previous_size} -> {new_size}"
+                )
+                return True, last_result
+
+            logger.warning(
+                f"{trigger.upper()} close attempt {attempt}/{self._trigger_close_max_attempts} not reflected yet on exchange for {coin} "
+                f"(expected reduction from {previous_size}, got {new_size})"
+            )
+            if attempt < self._trigger_close_max_attempts:
+                time.sleep(self._trigger_close_base_sleep_sec)
+
+        return False, last_result
+
     def _update_protection_without_trade(self, coin: str, decision: Dict[str, Any]) -> bool:
         sl_pct = decision.get("stop_loss_pct")
         tp_pct = decision.get("take_profit_pct")
@@ -317,10 +371,16 @@ class CycleOrchestrator:
             side = "sell" if pos_size > 0 else "buy"
             close_size = abs(pos_size)
 
-            self.hl_rate_limiter.acquire(1)
-            result = self.exchange_client.place_order(coin, side, close_size, current_price, reduce_only=True)
+            close_ok, result = self._execute_trigger_close_with_retries(
+                coin=coin,
+                side=side,
+                close_size=close_size,
+                current_price=current_price,
+                trigger=trigger,
+                previous_size=pos_size,
+            )
 
-            if result.get("success"):
+            if close_ok:
                 triggered += 1
                 self._cancel_exchange_protective_orders(coin)
                 self.position_manager.remove_position(coin)
@@ -329,7 +389,7 @@ class CycleOrchestrator:
                 self.metrics.increment("trades_executed_total")
                 logger.info(f"{trigger.upper()} close executed for {coin}")
             else:
-                logger.error(f"Failed to execute {trigger} close for {coin}: {result}")
+                logger.error(f"Failed to execute {trigger} close for {coin} after retries: {result}")
 
         return triggered
 
