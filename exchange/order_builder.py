@@ -8,14 +8,18 @@ def build_limit_order_action(
     price: Decimal,
     size: Decimal,
     reduce_only: bool = False,
+    tif: str = "Ioc",
 ) -> Dict[str, Any]:
+    if tif not in {"Ioc", "Gtc", "Alo"}:
+        tif = "Ioc"
+
     order_wire = {
         "a": asset_id,
         "b": is_buy,
         "p": str(price),
         "s": str(size.normalize()),
         "r": bool(reduce_only),
-        "t": {"limit": {"tif": "Gtc"}},
+        "t": {"limit": {"tif": tif}},
     }
     return {"type": "order", "orders": [order_wire], "grouping": "na"}
 

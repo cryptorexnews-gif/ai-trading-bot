@@ -12,6 +12,7 @@ logger = logging.getLogger(__name__)
 
 class ExecutionEngine:
     MIN_ORDER_NOTIONAL_USD = Decimal("10")
+    MARKET_BUFFER_PCT = Decimal("0.02")  # 2% aggressivo per aumentare fill immediato
 
     def __init__(self, exchange_client: HyperliquidExchangeClient):
         self.exchange_client = exchange_client
@@ -95,6 +96,14 @@ class ExecutionEngine:
         self._invalidate_leverage_cache(coin)
         return False
 
+    def _market_desired_price(self, side: str, base_price: Decimal) -> Decimal:
+        if base_price <= 0:
+            return base_price
+        normalized_side = str(side).strip().lower()
+        if normalized_side == "buy":
+            return base_price * (Decimal("1") + self.MARKET_BUFFER_PCT)
+        return base_price * (Decimal("1") - self.MARKET_BUFFER_PCT)
+
     def execute(
         self,
         coin: str,
@@ -124,7 +133,8 @@ class ExecutionEngine:
             pos_size = safe_decimal(positions[coin]["size"])
             side = "sell" if pos_size > 0 else "buy"
             close_size = abs(pos_size)
-            result = self.exchange_client.place_order(coin, side, close_size, market_data.last_price, reduce_only=True)
+            desired_price = self._market_desired_price(side, market_data.last_price)
+            result = self.exchange_client.place_order(coin, side, close_size, desired_price, reduce_only=True)
             return {
                 "success": bool(result.get("success", False)),
                 "notional": safe_decimal(result.get("notional", "0")),
@@ -138,7 +148,8 @@ class ExecutionEngine:
             current_size = abs(pos_size)
             reduce_size = size if size <= current_size else current_size
             side = "sell" if pos_size > 0 else "buy"
-            result = self.exchange_client.place_order(coin, side, reduce_size, market_data.last_price, reduce_only=True)
+            desired_price = self._market_desired_price(side, market_data.last_price)
+            result = self.exchange_client.place_order(coin, side, reduce_size, desired_price, reduce_only=True)
             return {
                 "success": bool(result.get("success", False)),
                 "notional": safe_decimal(result.get("notional", "0")),
@@ -154,7 +165,8 @@ class ExecutionEngine:
                 return {"success": False, "notional": Decimal("0"), "reason": "set_leverage_failed"}
 
             adjusted_size = self._adjust_open_size_for_exchange_minimum(coin, size, market_data.last_price)
-            result = self.exchange_client.place_order(coin, side, adjusted_size, market_data.last_price)
+            desired_price = self._market_desired_price(side, market_data.last_price)
+            result = self.exchange_client.place_order(coin, side, adjusted_size, desired_price)
             return {
                 "success": bool(result.get("success", False)),
                 "notional": safe_decimal(result.get("notional", "0")),
@@ -167,7 +179,8 @@ class ExecutionEngine:
                 return {"success": False, "notional": Decimal("0"), "reason": "set_leverage_failed"}
 
             adjusted_size = self._adjust_open_size_for_exchange_minimum(coin, size, market_data.last_price)
-            result = self.exchange_client.place_order(coin, side, adjusted_size, market_data.last_price)
+            desired_price = self._market_desired_price(side, market_data.last_price)
+            result = self.exchange_client.place_order(coin, side, adjusted_size, desired_price)
             return {
                 "success": bool(result.get("success", False)),
                 "notional": safe_decimal(result.get("notional", "0")),
