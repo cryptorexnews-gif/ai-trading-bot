@@ -25,7 +25,6 @@ function fmtPct(value) {
 function toUnixTime(rawTime) {
   const t = Number(rawTime)
   if (!Number.isFinite(t) || t <= 0) return null
-  // if milliseconds convert to seconds
   return t > 1e12 ? Math.floor(t / 1000) : Math.floor(t)
 }
 
@@ -87,7 +86,7 @@ function computeMACD(closes, fast = 12, slow = 26, signal = 9) {
   return { macd, signal: signalLine, histogram }
 }
 
-export default function CandlestickChart({ candles, height = 500 }) {
+export default function CandlestickChart({ candles, height = 500, selectedCoin, interval }) {
   const chartContainerRef = useRef(null)
   const chartRef = useRef(null)
 
@@ -97,11 +96,17 @@ export default function CandlestickChart({ candles, height = 500 }) {
   const ema21SeriesRef = useRef(null)
   const vwapSeriesRef = useRef(null)
   const rsiSeriesRef = useRef(null)
+  const rsiOverboughtSeriesRef = useRef(null)
+  const rsiOversoldSeriesRef = useRef(null)
   const macdSeriesRef = useRef(null)
   const macdSignalSeriesRef = useRef(null)
   const macdHistogramSeriesRef = useRef(null)
 
   const [hoverData, setHoverData] = useState(null)
+
+  const lastFittedSeriesKeyRef = useRef('')
+
+  const seriesKey = `${selectedCoin || 'default'}-${interval || 'default'}`
 
   const candleData = useMemo(() => {
     if (!candles?.length) return []
@@ -187,7 +192,7 @@ export default function CandlestickChart({ candles, height = 500 }) {
   )
 
   useEffect(() => {
-    if (!chartContainerRef.current || !candleData.length) return
+    if (!chartContainerRef.current || chartRef.current) return
 
     const chart = createChart(chartContainerRef.current, {
       width: chartContainerRef.current.clientWidth,
@@ -311,21 +316,16 @@ export default function CandlestickChart({ candles, height = 500 }) {
     ema21SeriesRef.current = ema21Series
     vwapSeriesRef.current = vwapSeries
     rsiSeriesRef.current = rsiSeries
+    rsiOverboughtSeriesRef.current = rsiOverbought
+    rsiOversoldSeriesRef.current = rsiOversold
     macdSeriesRef.current = macdSeries
     macdSignalSeriesRef.current = macdSignalSeries
     macdHistogramSeriesRef.current = macdHistogramSeries
     chartRef.current = chart
 
-    const firstTime = candleData[0]?.time
-    const lastTime = candleData[candleData.length - 1]?.time
-    if (firstTime != null && lastTime != null) {
-      rsiOverbought.setData([{ time: firstTime, value: 70 }, { time: lastTime, value: 70 }])
-      rsiOversold.setData([{ time: firstTime, value: 30 }, { time: lastTime, value: 30 }])
-    }
-
     const handleResize = () => {
-      if (chartContainerRef.current) {
-        chart.applyOptions({ width: chartContainerRef.current.clientWidth })
+      if (chartContainerRef.current && chartRef.current) {
+        chartRef.current.applyOptions({ width: chartContainerRef.current.clientWidth, height })
       }
     }
     window.addEventListener('resize', handleResize)
@@ -333,11 +333,28 @@ export default function CandlestickChart({ candles, height = 500 }) {
     return () => {
       window.removeEventListener('resize', handleResize)
       chart.remove()
+      chartRef.current = null
+      candleSeriesRef.current = null
+      volumeSeriesRef.current = null
+      ema9SeriesRef.current = null
+      ema21SeriesRef.current = null
+      vwapSeriesRef.current = null
+      rsiSeriesRef.current = null
+      rsiOverboughtSeriesRef.current = null
+      rsiOversoldSeriesRef.current = null
+      macdSeriesRef.current = null
+      macdSignalSeriesRef.current = null
+      macdHistogramSeriesRef.current = null
     }
-  }, [height, candleData])
+  }, [height])
 
   useEffect(() => {
-    if (!candleSeriesRef.current || !candleData.length) return
+    if (!chartRef.current) return
+    chartRef.current.applyOptions({ height })
+  }, [height])
+
+  useEffect(() => {
+    if (!candleSeriesRef.current || !chartRef.current || !candleData.length) return
 
     candleSeriesRef.current.setData(
       candleData
@@ -355,8 +372,18 @@ export default function CandlestickChart({ candles, height = 500 }) {
     macdSignalSeriesRef.current?.setData(indicatorData.macdSignal)
     macdHistogramSeriesRef.current?.setData(indicatorData.macdHistogram)
 
-    chartRef.current?.timeScale().fitContent()
-  }, [candleData, volumeData, indicatorData])
+    const firstTime = candleData[0]?.time
+    const lastTime = candleData[candleData.length - 1]?.time
+    if (firstTime != null && lastTime != null) {
+      rsiOverboughtSeriesRef.current?.setData([{ time: firstTime, value: 70 }, { time: lastTime, value: 70 }])
+      rsiOversoldSeriesRef.current?.setData([{ time: firstTime, value: 30 }, { time: lastTime, value: 30 }])
+    }
+
+    if (lastFittedSeriesKeyRef.current !== seriesKey) {
+      chartRef.current.timeScale().fitContent()
+      lastFittedSeriesKeyRef.current = seriesKey
+    }
+  }, [candleData, volumeData, indicatorData, seriesKey])
 
   const handleCrosshairMove = useCallback(
     param => {
