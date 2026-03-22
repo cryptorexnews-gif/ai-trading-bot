@@ -2,7 +2,7 @@
 
 ## Description
 
-Automated trading bot for Hyperliquid exchange powered by **Claude Opus 4.6** via OpenRouter. All market data sourced exclusively from Hyperliquid API. Features multi-timeframe analysis, SL/TP/trailing stop/break-even management, correlation-based risk control, real equity curve tracking, Prometheus metrics, and a real-time React dashboard.
+Automated trading bot for Hyperliquid exchange powered by **DeepSeek v3.2** via OpenRouter. All market data sourced exclusively from Hyperliquid API. Features multi-timeframe analysis, SL/TP/trailing stop/break-even management, correlation-based risk control, real equity curve tracking, Prometheus metrics, and a real-time React dashboard.
 
 ## Project Structure
 
@@ -15,7 +15,7 @@ hyperliquid/
 ├── cycle_orchestrator.py                 # Trading cycle phases (health → portfolio → SL/TP → trade)
 ├── portfolio_service.py                  # Portfolio state fetching from Hyperliquid
 ├── exchange_client.py                    # Hyperliquid API client (EIP-712 signing)
-├── llm_engine.py                         # Claude Opus 4.6 via OpenRouter (with retry)
+├── llm_engine.py                         # DeepSeek v3.2 via OpenRouter (with retry)
 ├── execution_engine.py                   # Order execution logic
 ├── risk_manager.py                       # Risk validation (drawdown, margin, sizing)
 ├── position_manager.py                   # SL/TP/trailing stop/break-even management

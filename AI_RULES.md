@@ -11,9 +11,9 @@
 - **logging**: Modulo built-in per logging strutturato JSON su file e console.
 
 ## Configurazione LLM
-- **Modello**: `anthropic/claude-opus-4.6` via OpenRouter (`https://openrouter.ai/api/v1`)
+- **Modello**: `deepseek/deepseek-v3.2` via OpenRouter (`https://openrouter.ai/api/v1`)
 - **Chiave API**: Variabile d'ambiente `OPENROUTER_API_KEY`
-- **Timeout**: 90 secondi (Claude Opus 4.6 può richiedere più tempo rispetto a modelli più piccoli)
+- **Timeout**: 90 secondi
 - **Retry**: 2 retry su 429/500/502/503/504 con backoff esponenziale
 - **Temperatura**: 0.2 (bassa per decisioni di trading deterministiche)
 
