@@ -43,6 +43,7 @@ def build_trigger_order_action(
     tpsl: str,
     reduce_only: bool = True,
     is_market: bool = True,
+    grouping: str = "na",
 ) -> Dict[str, Any]:
     trigger_str = _decimal_to_wire_str(trigger_price)
     order_wire = {
@@ -59,7 +60,7 @@ def build_trigger_order_action(
             }
         },
     }
-    return {"type": "order", "orders": [order_wire], "grouping": "positionTpsl"}
+    return {"type": "order", "orders": [order_wire], "grouping": grouping}
 
 
 def build_cancel_action(asset_id: int, order_id: int) -> Dict[str, Any]:

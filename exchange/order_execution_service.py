@@ -165,6 +165,7 @@ class OrderExecutionService:
             tpsl=tpsl,
             reduce_only=reduce_only,
             is_market=is_market,
+            grouping="na",
         )
 
         result = self.client._post_signed_action_with_master_retry(action)
