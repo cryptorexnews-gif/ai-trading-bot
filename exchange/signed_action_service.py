@@ -1,7 +1,10 @@
+import logging
 import time
 from typing import Any, Dict, Optional
 
-from exchange.signing import sign_l1_action_exact
+from exchange.signing import sign_l1_action_exact, sign_l1_action_exact_legacy
+
+logger = logging.getLogger(__name__)
 
 
 class SignedActionService:
@@ -24,20 +27,44 @@ class SignedActionService:
         self._last_nonce = current_ms
         return current_ms
 
-    def post_signed_action_once(
+    def _build_signature(
         self,
         action: Dict[str, Any],
-        timeout: Optional[int] = None,
-        vault_address_override: Optional[str] = None,
-    ) -> Optional[Dict[str, Any]]:
-        nonce = self.next_nonce()
-        signature = sign_l1_action_exact(
+        vault_address_override: Optional[str],
+        nonce: int,
+        signature_mode: str = "padded",
+    ) -> Dict[str, Any]:
+        if signature_mode == "legacy":
+            return sign_l1_action_exact_legacy(
+                account=self.account,
+                action=action,
+                vault_address=vault_address_override,
+                nonce=nonce,
+                expires_after=None,
+                is_mainnet=True,
+            )
+        return sign_l1_action_exact(
             account=self.account,
             action=action,
             vault_address=vault_address_override,
             nonce=nonce,
             expires_after=None,
             is_mainnet=True,
+        )
+
+    def post_signed_action_once(
+        self,
+        action: Dict[str, Any],
+        timeout: Optional[int] = None,
+        vault_address_override: Optional[str] = None,
+        signature_mode: str = "padded",
+    ) -> Optional[Dict[str, Any]]:
+        nonce = self.next_nonce()
+        signature = self._build_signature(
+            action=action,
+            vault_address_override=vault_address_override,
+            nonce=nonce,
+            signature_mode=signature_mode,
         )
         payload = {
             "action": action,
@@ -61,7 +88,21 @@ class SignedActionService:
             action=action,
             timeout=timeout,
             vault_address_override=vault_address_override,
+            signature_mode="padded",
         )
+
+        if self._is_auth_error(result):
+            logger.warning("Signed action auth-style rejection: retrying once with legacy signature format")
+            legacy_result = self.post_signed_action_once(
+                action=action,
+                timeout=timeout,
+                vault_address_override=vault_address_override,
+                signature_mode="legacy",
+            )
+            if legacy_result is not None and not self._is_auth_error(legacy_result):
+                self._auth_error_count = 0
+                return legacy_result
+            result = legacy_result if legacy_result is not None else result
 
         if self._is_auth_error(result):
             self._auth_error_count += 1
