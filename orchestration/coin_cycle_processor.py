@@ -9,12 +9,13 @@ from execution_engine import ExecutionEngine
 from llm_engine import LLMEngine
 from models import MarketData, PortfolioState
 from notifier import Notifier
-from orchestration.coin_processing_utils import late_confirm_fill, log_coin_indicators
+from orchestration.coin_processing_utils import log_coin_indicators
 from orchestration.decision_service import get_decision_for_coin
 from orchestration.execution_result_service import (
     build_trade_record,
     normalize_executed_price_and_size,
 )
+from orchestration.fill_verification_service import verify_fill_after_execution
 from orchestration.risk_gate_service import evaluate_trade_gates
 from order_verifier import OrderVerifier
 from portfolio_service import PortfolioService
@@ -158,29 +159,19 @@ class CoinCycleProcessor:
 
         fill_status = "unknown"
         if snapshot and result["success"] and decision["action"] in ["buy", "sell", "increase_position"]:
-            expected_side = "buy" if decision["action"] in ["buy", "increase_position"] else "sell"
-            expected_size = Decimal(str(executed_size))
-
-            verification = self.order_verifier.verify_fill(
-                self.cfg.wallet_address, coin, expected_side, expected_size, snapshot
+            fill_status, fill_ok, failure_reason = verify_fill_after_execution(
+                wallet_address=self.cfg.wallet_address,
+                order_verifier=self.order_verifier,
+                portfolio_service=self.portfolio_service,
+                coin=coin,
+                decision=decision,
+                snapshot=snapshot,
+                executed_size=executed_size,
+                logger=logger,
             )
-            fill_status = verification.get("fill_status", "unknown")
-
-            if fill_status == "not_filled":
-                late_confirmed, late_status = late_confirm_fill(
-                    coin=coin,
-                    snapshot=snapshot,
-                    expected_side=expected_side,
-                    expected_size=expected_size,
-                    portfolio_service=self.portfolio_service,
-                )
-                if late_confirmed:
-                    fill_status = late_status
-                    logger.info(f"{coin} late fill confirmation succeeded: {late_status}")
-                else:
-                    logger.warning(f"{coin} order NOT FILLED — marking as failed")
-                    result["success"] = False
-                    result["reason"] = "order_not_filled"
+            if not fill_ok:
+                result["success"] = False
+                result["reason"] = failure_reason
 
         trade_record = build_trade_record(
             coin=coin,
