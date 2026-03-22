@@ -26,6 +26,7 @@ from api.services.account_snapshot_service import (
     fetch_hyperliquid_universe,
     get_hyperliquid_account_snapshot,
 )
+from api.services.available_pairs_service import AvailablePairsService
 from api.services.managed_positions_service import build_managed_positions_payload
 from api.services.runtime_config_service import (
     default_strategy_params,
@@ -50,28 +51,12 @@ _runtime_store = RuntimeConfigStore(
 _bot_rl = build_rate_limiter("api_bot_endpoints", max_tokens=100, tokens_per_second=3.0)
 _config_rl = build_rate_limiter("api_bot_config_endpoint", max_tokens=300, tokens_per_second=20.0)
 
-_universe_cache = []
-_universe_cache_at = 0.0
-_UNIVERSE_CACHE_TTL_SEC = 300.0
-
-
-def _get_hyperliquid_available_pairs():
-    global _universe_cache, _universe_cache_at
-
-    now = time.time()
-    if _universe_cache and (now - _universe_cache_at) < _UNIVERSE_CACHE_TTL_SEC:
-        return list(_universe_cache)
-
-    fresh = [coin for coin in fetch_hyperliquid_universe() if COIN_PATTERN.match(coin)]
-    if fresh:
-        _universe_cache = fresh
-        _universe_cache_at = now
-        return fresh
-
-    if _universe_cache:
-        return list(_universe_cache)
-
-    return sorted(KNOWN_TRADING_PAIRS)
+_available_pairs_service = AvailablePairsService(
+    fetch_universe_fn=fetch_hyperliquid_universe,
+    coin_pattern=COIN_PATTERN,
+    fallback_pairs=KNOWN_TRADING_PAIRS,
+    cache_ttl_sec=300.0,
+)
 
 
 @bot_bp.route("/api/status", methods=["GET"])
@@ -244,7 +229,7 @@ def runtime_config():
         "runtime_config": runtime,
         "default_strategy_params": default_strategy_params(mode),
         "strategy_presets": presets,
-        "available_pairs": _get_hyperliquid_available_pairs(),
+        "available_pairs": _available_pairs_service.get_available_pairs(),
         "timestamp": time.time()
     })
 
@@ -265,7 +250,7 @@ def update_runtime_config():
     if not isinstance(raw_pairs, list):
         return jsonify({"error": "invalid_trading_pairs"}), 400
 
-    live_allowed = set(fetch_hyperliquid_universe())
+    live_allowed = _available_pairs_service.get_live_allowed_pairs_set()
 
     normalized_pairs = []
     for coin in raw_pairs:
