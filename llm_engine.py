@@ -37,7 +37,6 @@ class LLMEngine:
         self.request_timeout = 90
         self.max_retries = 2
 
-        # Plain session without retry adapter — retry_request handles retries
         self.session = requests.Session()
         self.session.headers.update({
             "Authorization": f"Bearer {api_key}",
@@ -45,11 +44,9 @@ class LLMEngine:
             "HTTP-Referer": "https://github.com/hyperliquid-trading-bot",
             "X-Title": "Hyperliquid Trading Bot"
         })
-        # Do NOT store api_key as self.api_key — it lives only in session headers
         logger.info(f"LLM Engine initialized with model={self.model}, timeout={self.request_timeout}s")
 
     def __repr__(self) -> str:
-        """Prevent accidental API key leakage in logs/tracebacks."""
         return f"<LLMEngine model={self.model} base_url={self.base_url}>"
 
     def __str__(self) -> str:
@@ -80,19 +77,15 @@ class LLMEngine:
             return "  No technical data available."
 
         lines = []
-
-        # Price and basic info
         lines.append(f"  Current Price: ${float(technical_data.get('current_price', 0)):.2f}")
         lines.append(f"  24h Change: {float(technical_data.get('change_24h', 0)) * 100:+.2f}%")
         lines.append(f"  Volume 24h: ${float(technical_data.get('volume_24h', 0)):,.0f}")
         lines.append(f"  Funding Rate: {float(technical_data.get('funding_rate', 0)) * 100:+.4f}%")
 
-        # Trend information
         lines.append(f"  Trend Direction: {technical_data.get('trend_direction', 'neutral').upper()}")
         lines.append(f"  Trend Strength: {technical_data.get('trend_strength', 0)}/3 timeframes aligned")
         lines.append(f"  Trends Aligned: {'YES ✅' if technical_data.get('trends_aligned', False) else 'NO ⚠️'}")
 
-        # 1h timeframe (entry timing)
         lines.append("\n  ⏰ 1H TIMEFRAME (Entry Timing):")
         lines.append(f"    EMA9: ${float(technical_data.get('current_ema9', 0)):.2f}")
         lines.append(f"    EMA21: ${float(technical_data.get('current_ema21', 0)):.2f}")
@@ -103,7 +96,6 @@ class LLMEngine:
         lines.append(f"    VWAP: ${float(technical_data.get('vwap', 0)):.2f}")
         lines.append(f"    Volume Ratio: {float(technical_data.get('volume_ratio', 1)):.2f}x")
 
-        # 4h timeframe (primary trend)
         hourly = technical_data.get("hourly_context", {})
         if hourly:
             lines.append("\n  📊 4H TIMEFRAME (Primary Trend):")
@@ -115,7 +107,6 @@ class LLMEngine:
             lines.append(f"    MACD: {float(hourly.get('macd_line', 0)):.4f}")
             lines.append(f"    ATR14: ${float(hourly.get('atr_14', 0)):.2f}")
 
-        # 1d timeframe (main trend)
         lt = technical_data.get("long_term_context", {})
         if lt:
             lines.append("\n  📈 1D TIMEFRAME (Main Trend):")
@@ -125,7 +116,6 @@ class LLMEngine:
             lines.append(f"    EMA200: ${float(lt.get('ema_200', 0)):.2f}")
             lines.append(f"    ATR14: ${float(lt.get('atr_14', 0)):.2f}")
 
-            # Robust handling: rsi_14 can be Decimal (current value) while trend series is in rsi_trend.
             rsi_current = lt.get("rsi_14", Decimal("50"))
             lines.append(f"    RSI14: {float(rsi_current):.1f}")
 
@@ -165,7 +155,6 @@ class LLMEngine:
 
         all_mids_section = ""
         if all_mids:
-            # Dynamic market overview: include all mids (up to a safe cap) so selected runtime coins are always represented.
             ordered_coins = sorted([c for c in all_mids.keys() if c])
             if market_data.coin in ordered_coins:
                 ordered_coins.remove(market_data.coin)
@@ -207,9 +196,7 @@ RISK CONTEXT:
 RECENT TRADE HISTORY (last 5):
 {self._format_recent_trades(recent_trades)}"""
 
-        # Trend analysis
         trend_strength = technical_data.get("trend_strength", 0) if technical_data else 0
-        trend_direction = technical_data.get("trend_direction", "neutral") if technical_data else "neutral"
 
         trend_analysis = ""
         if trend_strength == 3:
@@ -364,6 +351,23 @@ Respond with ONLY this JSON (no markdown, no extra text):
         logger.error(f"All JSON parse strategies failed. Response preview: {cleaned[:500]}...")
         return None
 
+    def _coerce_int(self, value: Any, default: int, min_value: int, max_value: int) -> int:
+        dec = to_decimal(value, Decimal(str(default)))
+        coerced = int(dec)
+        if coerced < min_value:
+            return min_value
+        if coerced > max_value:
+            return max_value
+        return coerced
+
+    def _coerce_decimal(self, value: Any, default: Decimal, min_value: Decimal, max_value: Optional[Decimal] = None) -> Decimal:
+        dec = to_decimal(value, default)
+        if dec < min_value:
+            dec = min_value
+        if max_value is not None and dec > max_value:
+            dec = max_value
+        return dec
+
     def _validate_decision(self, parsed: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         required_keys = ["action", "size", "leverage", "confidence", "reasoning"]
         if not all(key in parsed for key in required_keys):
@@ -376,31 +380,30 @@ Respond with ONLY this JSON (no markdown, no extra text):
         if action not in valid_actions:
             logger.warning(f"Invalid action from LLM: '{action}'. Defaulting to hold.")
             return {
-                "action": "hold", "size": Decimal("0"), "leverage": 1,
-                "confidence": 0.0, "stop_loss_pct": None, "take_profit_pct": None,
+                "action": "hold",
+                "size": Decimal("0"),
+                "leverage": 1,
+                "confidence": 0.0,
+                "stop_loss_pct": None,
+                "take_profit_pct": None,
                 "reasoning": f"Original action '{action}' invalid, defaulting to hold."
             }
 
-        confidence = float(to_decimal(parsed.get("confidence"), Decimal("0")))
-        if not (0.0 <= confidence <= 1.0):
-            confidence = max(0.0, min(1.0, confidence))
+        confidence_dec = self._coerce_decimal(parsed.get("confidence"), Decimal("0"), Decimal("0"), Decimal("1"))
+        confidence = float(confidence_dec)
 
-        leverage = int(to_decimal(parsed.get("leverage"), Decimal("1")))
-        leverage = max(1, min(50, leverage))
+        leverage = self._coerce_int(parsed.get("leverage"), default=1, min_value=1, max_value=50)
 
-        size = to_decimal(parsed.get("size"), Decimal("0"))
-        if size < 0:
-            size = Decimal("0")
+        size = self._coerce_decimal(parsed.get("size"), Decimal("0"), Decimal("0"))
 
         stop_loss_pct = None
-        take_profit_pct = None
-
         raw_sl = parsed.get("stop_loss_pct")
         if raw_sl is not None:
             sl = to_decimal(raw_sl, Decimal("-1"))
             if Decimal("0") < sl <= Decimal("1"):
                 stop_loss_pct = sl
 
+        take_profit_pct = None
         raw_tp = parsed.get("take_profit_pct")
         if raw_tp is not None:
             tp = to_decimal(raw_tp, Decimal("-1"))
@@ -414,11 +417,10 @@ Respond with ONLY this JSON (no markdown, no extra text):
             "confidence": confidence,
             "stop_loss_pct": stop_loss_pct,
             "take_profit_pct": take_profit_pct,
-            "reasoning": str(parsed.get("reasoning", ""))
+            "reasoning": str(parsed.get("reasoning", "")),
         }
 
     def _call_openrouter(self, prompt: str) -> Optional[str]:
-        """Call OpenRouter API with retry. Error messages never include request headers."""
         payload = {
             "model": self.model,
             "messages": [{"role": "user", "content": prompt}],
