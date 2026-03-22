@@ -17,13 +17,23 @@ Parametri test (opzionali):
 - TEST_SL_PCT=0.03
 - TEST_TP_PCT=0.06
 - TEST_IOC_BUFFER_PCT=0.01
+- TEST_TICK_SIZE=          # opzionale, es: 0.1 (override manuale)
 """
 
 import logging
 import os
-from decimal import Decimal
+import sys
+from decimal import Decimal, ROUND_DOWN
+from pathlib import Path
 
 from dotenv import load_dotenv
+
+# Supporta sia:
+# - python -m scripts.test_live_atomic_market_tpsl
+# - python scripts/test_live_atomic_market_tpsl.py
+ROOT_DIR = Path(__file__).resolve().parent.parent
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
 
 from exchange.market_rules import normalize_size_for_decimals
 from exchange_client import HyperliquidExchangeClient
@@ -38,6 +48,13 @@ logger = logging.getLogger("live_atomic_market_tpsl")
 def d(value: str, default: str) -> Decimal:
     raw = os.getenv(value, default)
     return Decimal(str(raw))
+
+
+def round_to_tick(price: Decimal, tick_size: Decimal) -> Decimal:
+    if price <= 0:
+        return price
+    units = (price / tick_size).to_integral_value(rounding=ROUND_DOWN)
+    return units * tick_size
 
 
 def main() -> None:
@@ -66,6 +83,7 @@ def main() -> None:
     sl_pct = d("TEST_SL_PCT", "0.03")
     tp_pct = d("TEST_TP_PCT", "0.06")
     ioc_buffer_pct = d("TEST_IOC_BUFFER_PCT", "0.01")
+    tick_override_raw = os.getenv("TEST_TICK_SIZE", "").strip()
 
     if margin_usd <= 0:
         raise RuntimeError("TEST_MARGIN_USD deve essere > 0")
@@ -101,6 +119,21 @@ def main() -> None:
 
     logger.info(f"{coin} mid price: {mid_price}")
 
+    asset_id = client.get_asset_id(coin)
+    if asset_id is None:
+        raise RuntimeError(f"Asset ID non trovato per {coin}")
+
+    tick_size, precision = client.get_tick_size_and_precision(asset_id)
+
+    if tick_override_raw:
+        tick_size = Decimal(tick_override_raw)
+        logger.warning(f"Tick size override attivo da env: TEST_TICK_SIZE={tick_size}")
+
+    if tick_size <= 0:
+        raise RuntimeError(f"Tick size non valida per {coin}: {tick_size}")
+
+    logger.info(f"{coin} tick_size={tick_size} precision={precision}")
+
     max_leverage = client.get_max_leverage(coin)
     if leverage > max_leverage:
         leverage = max_leverage
@@ -130,11 +163,19 @@ def main() -> None:
         tp_trigger = mid_price * (Decimal("1") - tp_pct)
         close_is_buy = True
 
+    # Rounding robusto a tick per evitare "Price must be divisible by tick size"
+    entry_limit = round_to_tick(entry_limit, tick_size)
+    sl_trigger = round_to_tick(sl_trigger, tick_size)
+    tp_trigger = round_to_tick(tp_trigger, tick_size)
+
+    if entry_limit <= 0 or sl_trigger <= 0 or tp_trigger <= 0:
+        raise RuntimeError("Prezzi arrotondati non validi (<= 0)")
+
     logger.info(
         f"Ordine entry: side={side.upper()} size={normalized_size} limit={entry_limit} "
         f"(notional~{(normalized_size * mid_price):.4f})"
     )
-    logger.info(f"Protezioni: SL trigger={sl_trigger}, TP trigger={tp_trigger}")
+    logger.info(f"Protezioni arrotondate: SL trigger={sl_trigger}, TP trigger={tp_trigger}")
 
     orders = [
         {
