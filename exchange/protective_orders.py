@@ -1,3 +1,4 @@
+TP protective order creation with confirmation and rollback, using same trading user as entry orders.">
 import logging
 from decimal import Decimal
 from typing import Any, Dict, Optional, Tuple
@@ -11,24 +12,6 @@ class ProtectiveOrdersService:
     def __init__(self, client, order_query_service):
         self.client = client
         self.order_query = order_query_service
-
-    def _submit_single_trigger_order_via_bulk(
-        self,
-        coin: str,
-        is_close_buy: bool,
-        close_size: Decimal,
-        trigger_price: Decimal,
-        tpsl: str,
-    ) -> Dict[str, Any]:
-        order = {
-            "coin": coin,
-            "is_buy": is_close_buy,
-            "sz": close_size,
-            "limit_px": trigger_price,
-            "order_type": {"trigger": {"isMarket": True, "triggerPx": trigger_price, "tpsl": tpsl}},
-            "reduce_only": True,
-        }
-        return self.client.bulk_orders([order], grouping="positionTpsl")
 
     def _wait_or_find_trigger_oid(
         self,
@@ -46,8 +29,8 @@ class ProtectiveOrdersService:
             size=size,
             trigger_price=trigger_price,
             tpsl=tpsl,
-            attempts=8,
-            delay_sec=0.5,
+            attempts=10,
+            delay_sec=0.6,
         )
         if oid is not None:
             return oid
@@ -59,62 +42,50 @@ class ProtectiveOrdersService:
             tpsl=tpsl,
         )
 
-    def _fallback_upsert_sequential(
+    def _place_single_protective_with_confirmation(
         self,
         trading_user: str,
         coin: str,
         close_side: str,
         close_size: Decimal,
-        stop_loss_price: Decimal,
-        take_profit_price: Decimal,
-    ) -> Tuple[bool, Optional[int], Optional[int], str]:
-        is_close_buy = close_side == "buy"
-
-        sl_bulk = self._submit_single_trigger_order_via_bulk(
+        trigger_price: Decimal,
+        tpsl: str,
+    ) -> Tuple[bool, Optional[int], str]:
+        result = self.client.place_trigger_order(
             coin=coin,
-            is_close_buy=is_close_buy,
-            close_size=close_size,
-            trigger_price=stop_loss_price,
-            tpsl="sl",
+            side=close_side,
+            size=close_size,
+            trigger_price=trigger_price,
+            tpsl=tpsl,
+            reduce_only=True,
+            is_market=True,
         )
-        if not sl_bulk.get("success"):
-            return False, None, None, f"sl_failed:{sl_bulk.get('reason', 'unknown')}"
+        if not result.get("success"):
+            return False, None, f"{tpsl}_failed:{result.get('reason', 'unknown')}"
 
-        sl_id = self._wait_or_find_trigger_oid(
+        oid = result.get("order_id")
+        if oid is not None:
+            oid_int = int(oid)
+            is_open = self.client.are_order_ids_open(
+                user=trading_user,
+                coin=coin,
+                order_ids=[oid_int],
+            )
+            if is_open:
+                return True, oid_int, "ok"
+
+        resolved_oid = self._wait_or_find_trigger_oid(
             user=trading_user,
             coin=coin,
             side=close_side,
             size=close_size,
-            trigger_price=stop_loss_price,
-            tpsl="sl",
+            trigger_price=trigger_price,
+            tpsl=tpsl,
         )
-        if sl_id is None:
-            return False, None, None, "sl_missing_oid"
+        if resolved_oid is None:
+            return False, None, f"{tpsl}_missing_oid"
 
-        tp_bulk = self._submit_single_trigger_order_via_bulk(
-            coin=coin,
-            is_close_buy=is_close_buy,
-            close_size=close_size,
-            trigger_price=take_profit_price,
-            tpsl="tp",
-        )
-        if not tp_bulk.get("success"):
-            self.client.cancel_order(coin, sl_id)
-            return False, None, None, f"tp_failed:{tp_bulk.get('reason', 'unknown')}"
-
-        tp_id = self._wait_or_find_trigger_oid(
-            user=trading_user,
-            coin=coin,
-            side=close_side,
-            size=close_size,
-            trigger_price=take_profit_price,
-            tpsl="tp",
-        )
-        if tp_id is None:
-            self.client.cancel_order(coin, sl_id)
-            return False, None, None, "tp_missing_oid"
-
-        return True, sl_id, tp_id, "ok"
+        return True, resolved_oid, "ok"
 
     def upsert_protective_orders(
         self,
@@ -189,113 +160,42 @@ class ProtectiveOrdersService:
 
         cancelled = self.order_query.cancel_existing_coin_protective_orders(trading_user, coin, close_side)
         if cancelled > 0:
-            logger.warning(f"Cancelled {cancelled} stale protective trigger orders for {coin} side={close_side.upper()}")
+            logger.warning(
+                f"Cancelled {cancelled} stale protective trigger orders for {coin} side={close_side.upper()}"
+            )
 
         if current_stop_order_id is not None:
             self.client.cancel_order(coin, current_stop_order_id)
         if current_take_profit_order_id is not None:
             self.client.cancel_order(coin, current_take_profit_order_id)
 
-        is_close_buy = close_side == "buy"
-        orders = [
-            {
-                "coin": coin,
-                "is_buy": is_close_buy,
-                "sz": close_size,
-                "limit_px": stop_loss_price,
-                "order_type": {"trigger": {"isMarket": True, "triggerPx": stop_loss_price, "tpsl": "sl"}},
-                "reduce_only": True,
-            },
-            {
-                "coin": coin,
-                "is_buy": is_close_buy,
-                "sz": close_size,
-                "limit_px": take_profit_price,
-                "order_type": {"trigger": {"isMarket": True, "triggerPx": take_profit_price, "tpsl": "tp"}},
-                "reduce_only": True,
-            },
-        ]
+        logger.info(
+            f"{coin} protective upsert sequential mode: using trading_user={trading_user} "
+            f"(same wallet path as entry orders)"
+        )
 
-        bulk_res = self.client.bulk_orders(orders, grouping="positionTpsl")
-        if not bulk_res.get("success"):
-            logger.warning(
-                f"Bulk TP/SL failed for {coin} ({bulk_res.get('reason', 'unknown')}), "
-                "trying sequential SL->TP fallback"
-            )
-            ok, sl_id, tp_id, reason = self._fallback_upsert_sequential(
-                trading_user=trading_user,
-                coin=coin,
-                close_side=close_side,
-                close_size=close_size,
-                stop_loss_price=stop_loss_price,
-                take_profit_price=take_profit_price,
-            )
-            if not ok:
-                return {"success": False, "reason": f"bulk_tpsl_failed:{reason}"}
-
-            self.order_query.cancel_duplicate_trigger_orders(
-                user=trading_user,
-                coin=coin,
-                side=close_side,
-                size=close_size,
-                trigger_price=stop_loss_price,
-                tpsl="sl",
-                keep_oid=sl_id,
-            )
-            self.order_query.cancel_duplicate_trigger_orders(
-                user=trading_user,
-                coin=coin,
-                side=close_side,
-                size=close_size,
-                trigger_price=take_profit_price,
-                tpsl="tp",
-                keep_oid=tp_id,
-            )
-
-            return {
-                "success": True,
-                "stop_loss_order_id": sl_id,
-                "take_profit_order_id": tp_id,
-            }
-
-        sl_id = self.order_query.wait_for_trigger_order_id(
-            user=trading_user,
+        sl_ok, sl_id, sl_reason = self._place_single_protective_with_confirmation(
+            trading_user=trading_user,
             coin=coin,
-            side=close_side,
-            size=close_size,
+            close_side=close_side,
+            close_size=close_size,
             trigger_price=stop_loss_price,
             tpsl="sl",
-            attempts=8,
-            delay_sec=0.5,
         )
-        tp_id = self.order_query.wait_for_trigger_order_id(
-            user=trading_user,
+        if not sl_ok or sl_id is None:
+            return {"success": False, "reason": f"sequential_{sl_reason}"}
+
+        tp_ok, tp_id, tp_reason = self._place_single_protective_with_confirmation(
+            trading_user=trading_user,
             coin=coin,
-            side=close_side,
-            size=close_size,
+            close_side=close_side,
+            close_size=close_size,
             trigger_price=take_profit_price,
             tpsl="tp",
-            attempts=8,
-            delay_sec=0.5,
         )
-
-        if sl_id is None:
-            sl_id = self.order_query.find_latest_protective_order_id(
-                user=trading_user,
-                coin=coin,
-                side=close_side,
-                tpsl="sl",
-            )
-        if tp_id is None:
-            tp_id = self.order_query.find_latest_protective_order_id(
-                user=trading_user,
-                coin=coin,
-                side=close_side,
-                tpsl="tp",
-            )
-
-        if sl_id is None or tp_id is None:
-            return {"success": False, "reason": "missing_trigger_order_id_after_bulk"}
+        if not tp_ok or tp_id is None:
+            self.client.cancel_order(coin, sl_id)
+            return {"success": False, "reason": f"sequential_{tp_reason}"}
 
         self.order_query.cancel_duplicate_trigger_orders(
             user=trading_user,
