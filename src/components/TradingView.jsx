@@ -49,7 +49,28 @@ export default function TradingView({ tradingPairs }) {
   useEffect(() => {
     const fetchConfig = async () => {
       const baseCoinsFromProps = Array.isArray(tradingPairs) ? tradingPairs : []
-      let fetchedPairs = []
+      let runtimeAvailablePairs = []
+      let runtimeSelectedPairs = []
+      let configPairs = []
+
+      try {
+        const runtimeRes = await fetch(`${apiBase}/runtime-config`, {
+          headers: getHeaders(),
+          credentials: 'same-origin',
+          signal: AbortSignal.timeout(10000)
+        })
+        if (runtimeRes.ok) {
+          const runtimeJson = await runtimeRes.json()
+          if (Array.isArray(runtimeJson.available_pairs)) {
+            runtimeAvailablePairs = runtimeJson.available_pairs
+          }
+          if (Array.isArray(runtimeJson.runtime_config?.trading_pairs)) {
+            runtimeSelectedPairs = runtimeJson.runtime_config.trading_pairs
+          }
+        }
+      } catch (err) {
+        console.warn('Runtime config fetch failed, fallback to /config:', err.message)
+      }
 
       try {
         const res = await fetch(`${apiBase}/config`, {
@@ -60,14 +81,21 @@ export default function TradingView({ tradingPairs }) {
         if (res.ok) {
           const json = await res.json()
           if (Array.isArray(json.trading_pairs)) {
-            fetchedPairs = json.trading_pairs
+            configPairs = json.trading_pairs
           }
         }
       } catch (err) {
         console.warn('Config fetch failed, using defaults:', err.message)
       }
 
-      const merged = mergeCoins(baseCoinsFromProps, fetchedPairs, DEFAULT_MARKET_COINS)
+      const merged = mergeCoins(
+        baseCoinsFromProps,
+        runtimeSelectedPairs,
+        configPairs,
+        runtimeAvailablePairs,
+        DEFAULT_MARKET_COINS
+      )
+
       setCoins(merged)
 
       if (!merged.includes(selectedCoin)) {

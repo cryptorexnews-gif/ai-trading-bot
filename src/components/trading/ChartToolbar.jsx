@@ -25,9 +25,9 @@ export default function ChartToolbar({
         <select
           value={selectedCoin}
           onChange={(e) => setSelectedCoin(e.target.value)}
-          className="bg-gray-800/50 border border-gray-600/50 hover:border-gray-500 focus:border-blue-500 rounded-lg px-3 py-1.5 text-sm font-bold text-white backdrop-blur-sm transition-all min-w-[80px]"
+          className="bg-gray-800/50 border border-gray-600/50 hover:border-gray-500 focus:border-blue-500 rounded-lg px-3 py-1.5 text-sm font-bold text-white backdrop-blur-sm transition-all min-w-[80px] max-w-[180px]"
         >
-          {coins.slice(0, 20).map(c => (  // Limit to 20 for mobile
+          {coins.map(c => (
             <option key={c} value={c}>{c}/USDC</option>
           ))}
         </select>
