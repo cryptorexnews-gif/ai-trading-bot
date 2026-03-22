@@ -10,8 +10,7 @@ const API_BASE = normalizeBaseUrl(import.meta.env.VITE_API_BASE_URL)
 const inFlightByEndpoint = new Map()
 const latestByEndpoint = new Map()
 const lastFetchAtByEndpoint = new Map()
-const MIN_ENDPOINT_REFETCH_MS = 250
-const MIN_POLL_INTERVAL_MS = 500
+const MIN_ENDPOINT_REFETCH_MS = 700
 
 export function getApiBase() {
   return API_BASE
@@ -105,29 +104,11 @@ export function useApi(endpoint, intervalMs = 1000) {
     setLoading(true)
     setError(null)
 
-    const effectiveInterval = Math.max(MIN_POLL_INTERVAL_MS, intervalMs)
-
     fetchData()
-    const interval = setInterval(fetchData, effectiveInterval)
-
-    const onFocus = () => {
-      fetchData().catch(() => {})
-    }
-
-    const onVisibility = () => {
-      if (document.visibilityState === 'visible') {
-        fetchData().catch(() => {})
-      }
-    }
-
-    window.addEventListener('focus', onFocus)
-    document.addEventListener('visibilitychange', onVisibility)
-
+    const interval = setInterval(fetchData, intervalMs)
     return () => {
       mountedRef.current = false
       clearInterval(interval)
-      window.removeEventListener('focus', onFocus)
-      document.removeEventListener('visibilitychange', onVisibility)
     }
   }, [fetchData, intervalMs])
 

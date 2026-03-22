@@ -44,7 +44,6 @@ export default function TradingView({ tradingPairs }) {
   const [lastPrice, setLastPrice] = useState(null)
   const [stats24h, setStats24h] = useState(null)
   const mountedRef = useRef(true)
-  const inFlightRef = useRef(false)
   const apiBase = getApiBase()
 
   useEffect(() => {
@@ -108,9 +107,7 @@ export default function TradingView({ tradingPairs }) {
   }, [apiBase, selectedCoin, tradingPairs])
 
   const fetchCandles = useCallback(async () => {
-    if (inFlightRef.current) return
-    inFlightRef.current = true
-
+    console.log(`Fetching candles for ${selectedCoin} ${interval}`)
     let candleData = null
     setFetchError(null)
 
@@ -130,8 +127,8 @@ export default function TradingView({ tradingPairs }) {
           setFetchError(`Coin ${selectedCoin} non supportata. Prova BTC/ETH.`)
           if (selectedCoin !== 'BTC') {
             setSelectedCoin('BTC')
+            return
           }
-          return
         }
         throw new Error(`HTTP ${res.status}: ${res.statusText}`)
       }
@@ -146,12 +143,11 @@ export default function TradingView({ tradingPairs }) {
           close: parseFloat(c.close || 0),
           volume: parseFloat(c.volume || 0),
         }))
+        console.log(`${selectedCoin}: Loaded ${candleData.length} candles`)
       }
     } catch (err) {
       console.warn(`Fetch error ${selectedCoin} ${interval}:`, err.message)
       setFetchError(err.message)
-    } finally {
-      inFlightRef.current = false
     }
 
     if (!mountedRef.current) return
@@ -193,7 +189,7 @@ export default function TradingView({ tradingPairs }) {
     setFetchError(null)
 
     fetchCandles()
-    const candleTimer = window.setInterval(fetchCandles, 1000)
+    const candleTimer = window.setInterval(fetchCandles, 2000)
 
     return () => {
       mountedRef.current = false

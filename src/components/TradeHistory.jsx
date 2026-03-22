@@ -1,4 +1,3 @@
-' nel testo JSX per eliminare i warning Vite/esbuild e stabilizzare il rendering dashboard.">
 import React, { useState, useMemo } from 'react'
 
 const actionColors = {
