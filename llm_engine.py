@@ -164,15 +164,18 @@ class LLMEngine:
 
         all_mids_section = ""
         if all_mids:
-            top_coins = [
-                "BTC", "ETH", "SOL", "BNB", "XRP", "ADA", "DOGE", "AVAX",
-                "LINK", "SUI", "ARB", "OP", "NEAR", "WIF", "PEPE", "INJ",
-                "TIA", "SEI", "RENDER", "FET"
-            ]
+            # Dynamic market overview: include all mids (up to a safe cap) so selected runtime coins are always represented.
+            ordered_coins = sorted([c for c in all_mids.keys() if c])
+            if market_data.coin in ordered_coins:
+                ordered_coins.remove(market_data.coin)
+            ordered_coins = [market_data.coin] + ordered_coins
+            ordered_coins = ordered_coins[:120]
+
             mid_lines = []
-            for coin in top_coins:
+            for coin in ordered_coins:
                 if coin in all_mids:
                     mid_lines.append(f"  {coin}: ${all_mids[coin]}")
+
             if mid_lines:
                 all_mids_section = "MARKET OVERVIEW (Hyperliquid Mid Prices):\n" + "\n".join(mid_lines)
 

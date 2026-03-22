@@ -217,11 +217,18 @@ def config():
         return rate_limit_resp
 
     try:
-        trading_pairs_raw = os.getenv(
+        env_pairs_raw = os.getenv(
             "TRADING_PAIRS",
             "BTC,ETH,SOL,BNB,ADA,DOGE,XRP,AVAX,LINK,SUI,ARB,OP,NEAR,WIF,PEPE,INJ,TIA,SEI,RENDER,FET"
         )
-        trading_pairs = [p.strip().upper() for p in trading_pairs_raw.split(",") if p.strip()]
+        env_pairs = [p.strip().upper() for p in env_pairs_raw.split(",") if p.strip()]
+
+        runtime_cfg = _runtime_store.load()
+        runtime_pairs = [str(p).strip().upper() for p in runtime_cfg.get("trading_pairs", []) if str(p).strip()]
+        strategy_mode = str(runtime_cfg.get("strategy_mode", "trend")).strip().lower()
+
+        trading_pairs = runtime_pairs if runtime_pairs else env_pairs
+        source = "runtime_config" if runtime_pairs else "env_default"
 
         return jsonify({
             "execution_mode": os.getenv("EXECUTION_MODE", "paper"),
@@ -236,8 +243,10 @@ def config():
             "max_order_notional_usd": os.getenv("MAX_ORDER_NOTIONAL_USD", "0"),
             "min_confidence_open": os.getenv("MIN_CONFIDENCE_OPEN", "0.72"),
             "min_confidence_manage": os.getenv("MIN_CONFIDENCE_MANAGE", "0.50"),
+            "strategy_mode": strategy_mode,
             "trading_pairs": trading_pairs,
             "trading_pairs_count": len(trading_pairs),
+            "trading_pairs_source": source,
             "timestamp": time.time()
         })
     except Exception:
