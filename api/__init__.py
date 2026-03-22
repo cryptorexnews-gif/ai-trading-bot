@@ -9,7 +9,7 @@ from flask_cors import CORS
 from api.config import CORS_ORIGINS, SECURITY_HEADERS
 from api.json_provider import CustomJSONProvider
 from api.routes.health import health_bp
-from api.routes.bot import bot_bp
+from api.routes.account import account_bp
 from api.routes.bot_control import bot_control_bp
 from api.routes.runtime_config import runtime_config_bp
 from api.routes.trading import trading_bp
@@ -55,7 +55,7 @@ def create_app() -> Flask:
 
     # Register blueprints
     app.register_blueprint(health_bp)
-    app.register_blueprint(bot_bp)
+    app.register_blueprint(account_bp)
     app.register_blueprint(bot_control_bp)
     app.register_blueprint(runtime_config_bp)
     app.register_blueprint(trading_bp)
