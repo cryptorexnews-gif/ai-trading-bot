@@ -67,4 +67,8 @@ def sign_l1_action_exact(
     data = _l1_payload(phantom_agent)
     structured_data = encode_typed_data(full_message=data)
     signed = account.sign_message(structured_data)
-    return {"r": hex(signed.r), "s": hex(signed.s), "v": signed.v}
+    return {
+        "r": f"0x{signed.r:064x}",
+        "s": f"0x{signed.s:064x}",
+        "v": signed.v,
+    }
