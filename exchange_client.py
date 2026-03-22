@@ -26,13 +26,11 @@ logger = logging.getLogger(__name__)
 
 class HyperliquidExchangeClient:
     """
-    Hyperliquid client (modularized):
+    Hyperliquid client (live-only):
     - HTTP + circuit breaker
     - EIP-712 signing via exchange.signing
     - response parsing via exchange.parsers
     - size/tick normalization via exchange.market_rules
-
-    Note: paper trading è disabilitato. Se non live/mainnet -> fail-closed.
     """
 
     def __init__(
@@ -98,19 +96,8 @@ class HyperliquidExchangeClient:
     def _live_orders_enabled(self) -> bool:
         return self.execution_mode == "live" and self.enable_mainnet_trading
 
-    def get_derived_address(self) -> str:
-        return self.account.address
-
-    def get_wallet_address_masked(self) -> str:
-        return self._mask_address(self.account.address)
-
-    def get_vault_address_masked(self) -> str:
-        return self._mask_address(self.vault_address)
-
-    @staticmethod
-    def validate_wallet_address(private_key: str, expected_address: str) -> bool:
-        derived = Account.from_key(private_key).address
-        return derived.lower() == expected_address.lower()
+    def _is_ok_result(self, result: Optional[Dict[str, Any]]) -> bool:
+        return isinstance(result, dict) and result.get("status") == "ok"
 
     def _next_nonce(self) -> int:
         current_ms = int(time.time() * 1000)
@@ -211,7 +198,7 @@ class HyperliquidExchangeClient:
                 "Retrying once without vault."
             )
             retry_result = self._post_signed_action_once(action, None, timeout=timeout)
-            if isinstance(retry_result, dict) and retry_result.get("status") == "ok":
+            if self._is_ok_result(retry_result):
                 logger.warning("Retry without vault succeeded. Disabling vault mode for subsequent requests.")
                 self.vault_address = None
                 return retry_result
@@ -222,6 +209,52 @@ class HyperliquidExchangeClient:
             return self._post_signed_action_once(action, self.vault_address, timeout=timeout)
 
         return result
+
+    @staticmethod
+    def _extract_status_error(statuses: Any) -> Optional[str]:
+        if not isinstance(statuses, list):
+            return None
+        for status in statuses:
+            if isinstance(status, dict) and "error" in status:
+                return str(status.get("error", "status_error"))
+        return None
+
+    def _round_price_to_tick(self, asset_id: int, price: Decimal) -> Decimal:
+        tick_size, precision = self.get_tick_size_and_precision(asset_id)
+        rounded_ticks = (price / tick_size).quantize(Decimal("1"))
+        rounded_price = rounded_ticks * tick_size
+        quantizer = Decimal("1").scaleb(-precision)
+        return rounded_price.quantize(quantizer)
+
+    def _resolve_limit_price(self, coin: str, side: str, desired_price: Decimal, asset_id: int) -> Decimal:
+        is_buy = side.lower() == "buy"
+        reference_price = self.get_reference_price(coin, desired_price)
+        max_deviation = reference_price * Decimal("0.05")
+
+        if is_buy:
+            limit_price = min(desired_price, reference_price + (max_deviation * Decimal("0.5")))
+        else:
+            limit_price = max(desired_price, reference_price - (max_deviation * Decimal("0.5")))
+
+        lower_bound = reference_price - max_deviation
+        upper_bound = reference_price + max_deviation
+        limit_price = max(lower_bound, min(upper_bound, limit_price))
+
+        return self._round_price_to_tick(asset_id, limit_price)
+
+    def get_derived_address(self) -> str:
+        return self.account.address
+
+    def get_wallet_address_masked(self) -> str:
+        return self._mask_address(self.account.address)
+
+    def get_vault_address_masked(self) -> str:
+        return self._mask_address(self.vault_address)
+
+    @staticmethod
+    def validate_wallet_address(private_key: str, expected_address: str) -> bool:
+        derived = Account.from_key(private_key).address
+        return derived.lower() == expected_address.lower()
 
     def get_meta(self, force_refresh: bool = False) -> Optional[Dict[str, Any]]:
         now = time.time()
@@ -323,7 +356,7 @@ class HyperliquidExchangeClient:
         result = self._post_signed_action_with_vault_fallback(action)
         if result is None:
             return False
-        if result.get("status") == "ok":
+        if self._is_ok_result(result):
             logger.info(f"LIVE leverage set {coin} -> {leverage}x")
             return True
         logger.error(f"Set leverage failed for {coin}: {result}")
@@ -343,23 +376,7 @@ class HyperliquidExchangeClient:
             return {"success": False, "mode": "live", "reason": "asset_not_found", "notional": "0"}
 
         is_buy = side.lower() == "buy"
-        reference_price = self.get_reference_price(coin, desired_price)
-        max_deviation = reference_price * Decimal("0.05")
-
-        if is_buy:
-            limit_price = min(desired_price, reference_price + (max_deviation * Decimal("0.5")))
-        else:
-            limit_price = max(desired_price, reference_price - (max_deviation * Decimal("0.5")))
-
-        lower_bound = reference_price - max_deviation
-        upper_bound = reference_price + max_deviation
-        limit_price = max(lower_bound, min(upper_bound, limit_price))
-
-        tick_size, precision = self.get_tick_size_and_precision(asset_id)
-        rounded_ticks = (limit_price / tick_size).quantize(Decimal("1"))
-        limit_price = rounded_ticks * tick_size
-        quantizer = Decimal("1").scaleb(-precision)
-        limit_price = limit_price.quantize(quantizer)
+        limit_price = self._resolve_limit_price(coin=coin, side=side, desired_price=desired_price, asset_id=asset_id)
 
         order_wire = {
             "a": asset_id,
@@ -374,15 +391,15 @@ class HyperliquidExchangeClient:
         result = self._post_signed_action_with_vault_fallback(action)
         if result is None:
             return {"success": False, "mode": "live", "reason": "http_error", "notional": "0"}
-        if result.get("status") != "ok":
+        if not self._is_ok_result(result):
             logger.error(f"Exchange rejected order for {coin}: {result}")
             return {"success": False, "mode": "live", "reason": "exchange_rejected", "notional": "0"}
 
         statuses = result.get("response", {}).get("data", {}).get("statuses", [])
-        for status in statuses:
-            if "error" in status:
-                logger.error(f"Order status error for {coin}: {status}")
-                return {"success": False, "mode": "live", "reason": "status_error", "notional": "0"}
+        status_error = self._extract_status_error(statuses)
+        if status_error is not None:
+            logger.error(f"Order status error for {coin}: {status_error}")
+            return {"success": False, "mode": "live", "reason": "status_error", "notional": "0"}
 
         notional = abs(normalized_size * limit_price)
         logger.info(f"LIVE order success {coin} {side.upper()} size={normalized_size} limit={limit_price} reduce_only={reduce_only}")
@@ -414,38 +431,37 @@ class HyperliquidExchangeClient:
             return {"success": False, "reason": "asset_not_found"}
 
         is_buy = side.lower() == "buy"
-        tick_size, precision = self.get_tick_size_and_precision(asset_id)
-        rounded_ticks = (trigger_price / tick_size).quantize(Decimal("1"))
-        trigger_price = rounded_ticks * tick_size
-        quantizer = Decimal("1").scaleb(-precision)
-        trigger_price = trigger_price.quantize(quantizer)
+        rounded_trigger = self._round_price_to_tick(asset_id, trigger_price)
 
         order_wire = {
             "a": asset_id,
             "b": is_buy,
-            "p": str(trigger_price),
+            "p": str(rounded_trigger),
             "s": str(normalized_size.normalize()),
             "r": bool(reduce_only),
-            "t": {"trigger": {"isMarket": bool(is_market), "triggerPx": str(trigger_price), "tpsl": tpsl}},
+            "t": {"trigger": {"isMarket": bool(is_market), "triggerPx": str(rounded_trigger), "tpsl": tpsl}},
         }
         action = {"type": "order", "orders": [order_wire], "grouping": "positionTpsl"}
 
         result = self._post_signed_action_with_vault_fallback(action)
         if result is None:
             return {"success": False, "reason": "http_error"}
-        if result.get("status") != "ok":
+        if not self._is_ok_result(result):
             logger.error(f"Exchange rejected trigger order for {coin}: {result}")
             return {"success": False, "reason": "exchange_rejected"}
 
         statuses = result.get("response", {}).get("data", {}).get("statuses", [])
-        for status in statuses:
-            if "error" in status:
-                logger.error(f"Trigger order status error for {coin}: {status}")
-                return {"success": False, "reason": "status_error"}
+        status_error = self._extract_status_error(statuses)
+        if status_error is not None:
+            logger.error(f"Trigger order status error for {coin}: {status_error}")
+            return {"success": False, "reason": "status_error"}
 
         order_ids = extract_order_ids(result)
         order_id = order_ids[0] if order_ids else None
-        logger.info(f"LIVE trigger order placed {coin} {tpsl.upper()} {side.upper()} size={normalized_size} trigger={trigger_price} oid={order_id}")
+        logger.info(
+            f"LIVE trigger order placed {coin} {tpsl.upper()} {side.upper()} "
+            f"size={normalized_size} trigger={rounded_trigger} oid={order_id}"
+        )
         return {"success": True, "order_id": order_id}
 
     def cancel_order(self, coin: str, order_id: int) -> bool:
@@ -462,7 +478,7 @@ class HyperliquidExchangeClient:
         result = self._post_signed_action_with_vault_fallback(action)
         if result is None:
             return False
-        if result.get("status") != "ok":
+        if not self._is_ok_result(result):
             logger.warning(f"Cancel rejected for {coin} oid={order_id}: {result}")
             return False
 
