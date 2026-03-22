@@ -195,6 +195,13 @@ class HyperliquidBot:
             return default
 
     @staticmethod
+    def _dec_percent(value: str, default: Decimal) -> Decimal:
+        dec = HyperliquidBot._dec(value, default)
+        if dec > Decimal("1"):
+            return dec / Decimal("100")
+        return dec
+
+    @staticmethod
     def _int(value: str, default: int) -> int:
         try:
             return int(str(value))
@@ -295,25 +302,40 @@ class HyperliquidBot:
         )
 
         self.cfg.hard_max_leverage = self._dec(params.get("hard_max_leverage", self.cfg.hard_max_leverage), self.cfg.hard_max_leverage)
-        self.cfg.min_confidence_open = self._dec(params.get("min_confidence_open", self.cfg.min_confidence_open), self.cfg.min_confidence_open)
-        self.cfg.min_confidence_manage = self._dec(params.get("min_confidence_manage", self.cfg.min_confidence_manage), self.cfg.min_confidence_manage)
-        self.cfg.max_order_margin_pct = self._dec(params.get("max_order_margin_pct", self.cfg.max_order_margin_pct), self.cfg.max_order_margin_pct)
+
+        self.cfg.min_confidence_open = self._dec_percent(
+            params.get("min_confidence_open", self.cfg.min_confidence_open),
+            self.cfg.min_confidence_open
+        )
+        self.cfg.min_confidence_manage = self._dec_percent(
+            params.get("min_confidence_manage", self.cfg.min_confidence_manage),
+            self.cfg.min_confidence_manage
+        )
+        self.cfg.max_order_margin_pct = self._dec_percent(
+            params.get("max_order_margin_pct", self.cfg.max_order_margin_pct),
+            self.cfg.max_order_margin_pct
+        )
+
         self.cfg.trade_cooldown_sec = self._int(params.get("trade_cooldown_sec", self.cfg.trade_cooldown_sec), self.cfg.trade_cooldown_sec)
         self.cfg.daily_notional_limit_usd = self._dec(
             params.get("daily_notional_limit_usd", self.cfg.daily_notional_limit_usd),
             self.cfg.daily_notional_limit_usd
         )
-        self.cfg.max_drawdown_pct = self._dec(params.get("max_drawdown_pct", self.cfg.max_drawdown_pct), self.cfg.max_drawdown_pct)
-        self.cfg.max_single_asset_pct = self._dec(
+
+        self.cfg.max_drawdown_pct = self._dec_percent(
+            params.get("max_drawdown_pct", self.cfg.max_drawdown_pct),
+            self.cfg.max_drawdown_pct
+        )
+        self.cfg.max_single_asset_pct = self._dec_percent(
             params.get("max_single_asset_pct", self.cfg.max_single_asset_pct),
             self.cfg.max_single_asset_pct
         )
-        self.cfg.emergency_margin_threshold = self._dec(
+        self.cfg.emergency_margin_threshold = self._dec_percent(
             params.get("emergency_margin_threshold", self.cfg.emergency_margin_threshold),
             self.cfg.emergency_margin_threshold
         )
 
-        self.cfg.trend_position_size_pct = self._dec(
+        self.cfg.trend_position_size_pct = self._dec_percent(
             params.get("position_size_pct", self.cfg.trend_position_size_pct),
             self.cfg.trend_position_size_pct
         )
@@ -321,17 +343,17 @@ class HyperliquidBot:
             params.get("volume_confirmation_threshold", self.cfg.volume_confirmation_threshold),
             self.cfg.volume_confirmation_threshold
         )
-        self.cfg.trend_sl_pct = self._dec(params.get("sl_pct", self.cfg.trend_sl_pct), self.cfg.trend_sl_pct)
-        self.cfg.trend_tp_pct = self._dec(params.get("tp_pct", self.cfg.trend_tp_pct), self.cfg.trend_tp_pct)
-        self.cfg.trend_break_even_activation_pct = self._dec(
+        self.cfg.trend_sl_pct = self._dec_percent(params.get("sl_pct", self.cfg.trend_sl_pct), self.cfg.trend_sl_pct)
+        self.cfg.trend_tp_pct = self._dec_percent(params.get("tp_pct", self.cfg.trend_tp_pct), self.cfg.trend_tp_pct)
+        self.cfg.trend_break_even_activation_pct = self._dec_percent(
             params.get("break_even_activation_pct", self.cfg.trend_break_even_activation_pct),
             self.cfg.trend_break_even_activation_pct
         )
-        self.cfg.trend_trailing_activation_pct = self._dec(
+        self.cfg.trend_trailing_activation_pct = self._dec_percent(
             params.get("trailing_activation_pct", self.cfg.trend_trailing_activation_pct),
             self.cfg.trend_trailing_activation_pct
         )
-        self.cfg.trend_trailing_callback = self._dec(
+        self.cfg.trend_trailing_callback = self._dec_percent(
             params.get("trailing_callback", self.cfg.trend_trailing_callback),
             self.cfg.trend_trailing_callback
         )

@@ -117,10 +117,11 @@ def _normalize_strategy_params(raw_params: dict) -> tuple[dict, str]:
     if not isinstance(raw_params, dict):
         return {}, "invalid_strategy_params"
 
+    # Ora secondi e interi accettano input diretto semplice: 1 = 1 secondo, 1 = 1 trade
     int_keys = {
-        "cycle_sec": (60, 86400),
-        "min_cycle_sec": (60, 86400),
-        "max_cycle_sec": (60, 86400),
+        "cycle_sec": (1, 86400),
+        "min_cycle_sec": (1, 86400),
+        "max_cycle_sec": (1, 86400),
         "max_trades_per_cycle": (1, 50),
         "trade_cooldown_sec": (0, 86400),
     }
@@ -143,6 +144,22 @@ def _normalize_strategy_params(raw_params: dict) -> tuple[dict, str]:
         "trailing_callback": (Decimal("0"), Decimal("1")),
     }
 
+    # Campi percentuali: accetta sia 2 (=2%) sia 0.02 (=2%)
+    percent_keys = {
+        "min_confidence_open",
+        "min_confidence_manage",
+        "max_order_margin_pct",
+        "max_drawdown_pct",
+        "max_single_asset_pct",
+        "emergency_margin_threshold",
+        "position_size_pct",
+        "sl_pct",
+        "tp_pct",
+        "break_even_activation_pct",
+        "trailing_activation_pct",
+        "trailing_callback",
+    }
+
     normalized = {}
 
     for key, value in raw_params.items():
@@ -162,11 +179,16 @@ def _normalize_strategy_params(raw_params: dict) -> tuple[dict, str]:
                 parsed = Decimal(str(value))
             except Exception:
                 return {}, f"invalid_param_{key}"
+
+            if key in percent_keys and parsed > Decimal("1"):
+                parsed = parsed / Decimal("100")
+
             min_val, max_val = decimal_keys[key]
             if parsed < min_val:
                 return {}, f"out_of_range_{key}"
             if max_val is not None and parsed > max_val:
                 return {}, f"out_of_range_{key}"
+
             normalized[key] = str(parsed)
             continue
 
