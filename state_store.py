@@ -127,11 +127,27 @@ class StateStore:
         if not history:
             return {"total_trades": 0, "win_rate": 0.0, "total_pnl": "0", "wins": 0, "losses": 0, "holds": 0, "consecutive_losses": 0}
 
-        total = len(history)
-        wins = sum(1 for t in history if t.get("success", False) and t.get("action") != "hold")
-        losses = sum(1 for t in history if not t.get("success", True) and t.get("action") != "hold")
-        holds = sum(1 for t in history if t.get("action") == "hold")
-        actual_trades = total - holds
+        trade_actions = {"buy", "sell", "close_position", "increase_position", "reduce_position"}
+        hold_actions = {"hold", "no_trade", "skip"}
+
+        wins = 0
+        losses = 0
+        holds = 0
+
+        for t in history:
+            action = str(t.get("action", "")).strip().lower()
+            success = bool(t.get("success", False))
+
+            if action in hold_actions or action not in trade_actions:
+                holds += 1
+                continue
+
+            if success:
+                wins += 1
+            else:
+                losses += 1
+
+        actual_trades = wins + losses
 
         return {
             "total_trades": actual_trades,
