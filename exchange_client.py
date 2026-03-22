@@ -1,7 +1,7 @@
 import logging
 import os
 import time
-from decimal import Decimal
+from decimal import Decimal, ROUND_DOWN
 from typing import Any, Dict, List, Optional, Tuple
 
 import msgpack
@@ -267,6 +267,20 @@ class HyperliquidExchangeClient:
                 return asset.get("szDecimals")
         return None
 
+    def _normalize_size_for_coin(self, coin: str, size: Decimal) -> Decimal:
+        if size <= 0:
+            return Decimal("0")
+
+        sz_decimals = self.get_sz_decimals(coin)
+        if sz_decimals is None or sz_decimals < 0:
+            return size
+
+        step = Decimal("1").scaleb(-sz_decimals)
+        normalized = (size / step).to_integral_value(rounding=ROUND_DOWN) * step
+        if normalized <= 0:
+            normalized = step
+        return normalized
+
     def get_reference_price(self, coin: str, fallback_price: Decimal) -> Decimal:
         mids = self.get_all_mids()
         if mids and coin in mids:
@@ -388,11 +402,15 @@ class HyperliquidExchangeClient:
         return False
 
     def place_order(self, coin: str, side: str, size: Decimal, desired_price: Decimal, reduce_only: bool = False) -> Dict[str, Any]:
+        normalized_size = self._normalize_size_for_coin(coin, abs(size))
+        if normalized_size <= 0:
+            return {"success": False, "mode": "live", "reason": "invalid_size_after_normalization", "notional": "0"}
+
         if self.execution_mode != "live" or not self.enable_mainnet_trading:
             slip = (self.paper_slippage_bps / Decimal("10000"))
             fill_price = desired_price * (Decimal("1") + slip) if side.lower() == "buy" else desired_price * (Decimal("1") - slip)
-            notional = abs(size * fill_price)
-            logger.info(f"PAPER order {coin} {side.upper()} size={size} fill={fill_price} reduce_only={reduce_only}")
+            notional = abs(normalized_size * fill_price)
+            logger.info(f"PAPER order {coin} {side.upper()} size={normalized_size} fill={fill_price} reduce_only={reduce_only}")
             return {"success": True, "mode": "paper", "filled_price": str(fill_price), "notional": str(notional)}
 
         asset_id = self.get_asset_id(coin)
@@ -418,7 +436,7 @@ class HyperliquidExchangeClient:
         quantizer = Decimal("1").scaleb(-precision)
         limit_price = limit_price.quantize(quantizer)
 
-        size_str = str(size.normalize())
+        size_str = str(normalized_size.normalize())
         order_wire = {
             "a": asset_id,
             "b": is_buy,
@@ -442,7 +460,7 @@ class HyperliquidExchangeClient:
                 logger.error(f"Order status error for {coin}: {status}")
                 return {"success": False, "mode": "live", "reason": "status_error", "notional": "0"}
 
-        notional = abs(size * limit_price)
+        notional = abs(normalized_size * limit_price)
         logger.info(f"LIVE order success {coin} {side.upper()} size={size_str} limit={limit_price} reduce_only={reduce_only}")
         return {"success": True, "mode": "live", "filled_price": str(limit_price), "notional": str(notional)}
 
@@ -463,8 +481,12 @@ class HyperliquidExchangeClient:
         if tpsl not in {"tp", "sl"}:
             return {"success": False, "reason": "invalid_tpsl"}
 
+        normalized_size = self._normalize_size_for_coin(coin, abs(size))
+        if normalized_size <= 0:
+            return {"success": False, "reason": "invalid_size_after_normalization"}
+
         if self.execution_mode != "live" or not self.enable_mainnet_trading:
-            logger.info(f"PAPER trigger order {coin} {tpsl.upper()} {side.upper()} size={size} trigger={trigger_price}")
+            logger.info(f"PAPER trigger order {coin} {tpsl.upper()} {side.upper()} size={normalized_size} trigger={trigger_price}")
             return {"success": True, "mode": "paper", "order_id": None}
 
         asset_id = self.get_asset_id(coin)
@@ -484,7 +506,7 @@ class HyperliquidExchangeClient:
             "a": asset_id,
             "b": is_buy,
             "p": str(trigger_price),
-            "s": str(size.normalize()),
+            "s": str(normalized_size.normalize()),
             "r": bool(reduce_only),
             "t": {
                 "trigger": {
@@ -515,7 +537,7 @@ class HyperliquidExchangeClient:
 
         logger.info(
             f"LIVE trigger order placed {coin} {tpsl.upper()} {side.upper()} "
-            f"size={size} trigger={trigger_price} oid={order_id}"
+            f"size={normalized_size} trigger={trigger_price} oid={order_id}"
         )
         return {"success": True, "order_id": order_id}
 
