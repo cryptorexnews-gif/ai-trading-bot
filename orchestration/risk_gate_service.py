@@ -4,6 +4,7 @@ from decimal import Decimal
 from typing import Dict, Tuple
 
 from orchestration.coin_processing_utils import resolve_min_size
+from orchestration.contracts import TradeDecision
 
 logger = logging.getLogger(__name__)
 
@@ -17,7 +18,7 @@ def compute_volatility(tech_data: Dict, market_price: Decimal) -> Decimal:
 
 def evaluate_trade_gates(
     coin: str,
-    decision: Dict,
+    decision_order: Dict,
     portfolio,
     correlations: Dict[str, Dict[str, Decimal]],
     correlation_engine,
@@ -33,12 +34,12 @@ def evaluate_trade_gates(
 ) -> Tuple[bool, str]:
     corr_ok, corr_reason = correlation_engine.check_correlation_risk(
         coin,
-        decision["action"],
+        decision_order["action"],
         portfolio.positions,
         correlations,
     )
 
-    if not corr_ok and decision["action"] in ["buy", "sell", "increase_position"]:
+    if not corr_ok and decision_order["action"] in ["buy", "sell", "increase_position"]:
         metrics.increment("risk_rejections_total")
         return False, f"correlation_rejected:{corr_reason}"
 
@@ -49,7 +50,7 @@ def evaluate_trade_gates(
 
     risk_ok, risk_reason = risk_manager.check_order(
         coin,
-        decision,
+        decision_order,
         market_price,
         portfolio,
         state.get("last_trade_timestamps_by_coin", state.get("last_trade_timestamp_by_coin", {})),

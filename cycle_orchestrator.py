@@ -108,9 +108,9 @@ class CycleOrchestrator:
             llm_engine=self.llm_engine,
             hl_rate_limiter=self.hl_rate_limiter,
             llm_rate_limiter=self.llm_rate_limiter,
-            update_protection_without_trade=self._update_protection_without_trade,
-            sync_exchange_protective_orders=self._sync_exchange_protective_orders,
-            cancel_exchange_protective_orders=self._cancel_exchange_protective_orders,
+            update_protection_without_trade=self.update_protection_without_trade,
+            sync_exchange_protective_orders=self.sync_exchange_protective_orders,
+            cancel_exchange_protective_orders=self.cancel_exchange_protective_orders,
         )
 
         self.coin_processor = CoinCycleProcessor(context=coin_context)
@@ -123,7 +123,7 @@ class CycleOrchestrator:
     def set_cycle_count(self, count: int) -> None:
         self._cycle_count = count
 
-    def _run_health_check(self, cycle_count: int) -> None:
+    def run_health_check(self, cycle_count: int) -> None:
         if cycle_count % 10 != 1:
             return
         health_result = self.health_monitor.run_all_checks()
@@ -133,7 +133,7 @@ class CycleOrchestrator:
         elif health_result["status"] == HealthStatus.DEGRADED:
             logger.warning(f"Health check DEGRADED: {health_result['summary']}")
 
-    def _fetch_portfolio(self):
+    def fetch_portfolio(self):
         self.hl_rate_limiter.acquire(1)
         portfolio = self.portfolio_service.get_portfolio_state()
         self.metrics.set_gauge("current_balance", portfolio.total_balance)
@@ -141,21 +141,21 @@ class CycleOrchestrator:
         self.metrics.set_gauge("margin_usage", portfolio.margin_usage)
         self.metrics.set_gauge("open_positions_count", len(portfolio.positions))
         logger.info(
-            f"Portfolio: balance=${portfolio.total_balance}, "
-            f"available=${portfolio.available_balance}, "
-            f"margin_usage={float(portfolio.margin_usage) * 100:.1f}%, "
+            f"Portfolio: balance={portfolio.total_balance}, "
+            f"available={portfolio.available_balance}, "
+            f"margin_usage={portfolio.margin_usage}, "
             f"positions={len(portfolio.positions)}, "
-            f"unrealized_pnl=${portfolio.get_total_unrealized_pnl()}"
+            f"unrealized_pnl={portfolio.get_total_unrealized_pnl()}"
         )
         return portfolio
 
-    def _process_risk_triggers(self, portfolio) -> int:
+    def process_risk_triggers(self, portfolio) -> int:
         return self.risk_trigger_service.process_risk_triggers(portfolio)
 
-    def _handle_emergency_derisk(self, portfolio):
+    def handle_emergency_derisk(self, portfolio):
         return self.emergency_derisk_service.handle_emergency_derisk(portfolio)
 
-    def _analyze_and_trade(
+    def analyze_and_trade(
         self,
         portfolio,
         state: Dict,
@@ -176,11 +176,51 @@ class CycleOrchestrator:
             shutdown_requested=shutdown_requested,
         )
 
-    def _sync_exchange_protective_orders(self, coin: str) -> bool:
+    def sync_exchange_protective_orders(self, coin: str) -> bool:
         return self.protective_orders_service.sync_exchange_protective_orders(coin)
 
-    def _cancel_exchange_protective_orders(self, coin: str) -> None:
+    def cancel_exchange_protective_orders(self, coin: str) -> None:
         self.protective_orders_service.cancel_exchange_protective_orders(coin)
 
-    def _update_protection_without_trade(self, coin: str, decision: Dict) -> bool:
+    def update_protection_without_trade(self, coin: str, decision: Dict) -> bool:
         return self.protective_orders_service.update_protection_without_trade(coin, decision)
+
+    # Compatibility wrappers (legacy callers)
+    def _run_health_check(self, cycle_count: int) -> None:
+        self.run_health_check(cycle_count)
+
+    def _fetch_portfolio(self):
+        return self.fetch_portfolio()
+
+    def _process_risk_triggers(self, portfolio) -> int:
+        return self.process_risk_triggers(portfolio)
+
+    def _handle_emergency_derisk(self, portfolio):
+        return self.handle_emergency_derisk(portfolio)
+
+    def _analyze_and_trade(
+        self,
+        portfolio,
+        state: Dict,
+        daily_notional_used: Decimal,
+        peak: Decimal,
+        consecutive_losses: int,
+        shutdown_requested: bool,
+    ) -> Tuple[int, Decimal]:
+        return self.analyze_and_trade(
+            portfolio=portfolio,
+            state=state,
+            daily_notional_used=daily_notional_used,
+            peak=peak,
+            consecutive_losses=consecutive_losses,
+            shutdown_requested=shutdown_requested,
+        )
+
+    def _sync_exchange_protective_orders(self, coin: str) -> bool:
+        return self.sync_exchange_protective_orders(coin)
+
+    def _cancel_exchange_protective_orders(self, coin: str) -> None:
+        self.cancel_exchange_protective_orders(coin)
+
+    def _update_protection_without_trade(self, coin: str, decision: Dict) -> bool:
+        return self.update_protection_without_trade(coin, decision)

@@ -1,13 +1,13 @@
 from decimal import Decimal
 from typing import Any, Dict
 
+from orchestration.contracts import TradeDecision, TradeExecutionOutcome
+
 
 def handle_successful_execution(
     coin: str,
-    decision: Dict[str, Any],
-    executed_size: Decimal,
-    executed_price: Decimal,
-    result: Dict[str, Any],
+    decision: TradeDecision,
+    execution: TradeExecutionOutcome,
     state: Dict[str, Any],
     metrics,
     position_manager,
@@ -17,37 +17,35 @@ def handle_successful_execution(
     trade_record: Dict[str, Any],
     logger,
 ) -> Dict[str, Any]:
-    notional = Decimal(str(result["notional"]))
+    notional = execution.notional
 
     if notional > 0:
         state.setdefault("last_trade_timestamp_by_coin", {})[coin] = trade_record.get("timestamp")
         metrics.increment("trades_executed_total")
 
-        if decision["action"] in ["buy", "sell", "increase_position"]:
-            is_long = decision["action"] in ["buy", "increase_position"]
-            sl_pct = decision.get("stop_loss_pct")
-            tp_pct = decision.get("take_profit_pct")
+        if decision.action in ["buy", "sell", "increase_position"]:
+            is_long = decision.action in ["buy", "increase_position"]
 
             position_manager.register_position(
                 coin=coin,
-                size=executed_size,
-                entry_price=executed_price,
+                size=execution.executed_size,
+                entry_price=execution.executed_price,
                 is_long=is_long,
-                leverage=decision["leverage"],
-                sl_pct=sl_pct if isinstance(sl_pct, Decimal) else None,
-                tp_pct=tp_pct if isinstance(tp_pct, Decimal) else None,
+                leverage=decision.leverage,
+                sl_pct=decision.stop_loss_pct if isinstance(decision.stop_loss_pct, Decimal) else None,
+                tp_pct=decision.take_profit_pct if isinstance(decision.take_profit_pct, Decimal) else None,
             )
             sync_exchange_protective_orders(coin)
 
-        elif decision["action"] == "close_position":
+        elif decision.action == "close_position":
             cancel_exchange_protective_orders(coin)
             position_manager.remove_position(coin)
 
-        elif decision["action"] == "reduce_position":
+        elif decision.action == "reduce_position":
             sync_exchange_protective_orders(coin)
 
         notifier.notify_trade(trade_record)
-        logger.info(f"{coin} executed: reason={result['reason']}, notional=${notional}")
+        logger.info(f"{coin} executed: reason={execution.reason}, notional=${notional}")
         return {"trades": 1, "notional": notional, "failed": False}
 
     metrics.increment("holds_total")

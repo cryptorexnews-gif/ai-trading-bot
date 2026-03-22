@@ -1,7 +1,7 @@
 import logging
 import os
 from dataclasses import dataclass
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from config.bot_config import BotConfig
 from correlation_engine import CorrelationEngine
@@ -20,6 +20,19 @@ from utils.health import HealthCheckResult, HealthMonitor, HealthStatus, check_d
 from utils.logging_config import setup_logging
 from utils.metrics import MetricsCollector
 from utils.rate_limiter import get_rate_limiter
+
+
+@dataclass
+class ServiceContainer:
+    cfg: Optional[BotConfig] = None
+    exchange_client: Optional[HyperliquidExchangeClient] = None
+    state_store: Optional[StateStore] = None
+    runtime_config_store: Optional[RuntimeConfigStore] = None
+    metrics: Optional[MetricsCollector] = None
+    notifier: Optional[Notifier] = None
+    health_monitor: Optional[HealthMonitor] = None
+    portfolio_service: Optional[PortfolioService] = None
+    orchestrator: Optional[CycleOrchestrator] = None
 
 
 @dataclass
@@ -188,14 +201,32 @@ class BotBootstrap:
         }
 
     @staticmethod
-    def build() -> BotRuntimeContext:
-        cfg = BotBootstrap._build_cfg()
-        exchange_client = BotBootstrap._build_exchange_client(cfg)
-        state_store, runtime_config_store, metrics, notifier, health_monitor = (
-            BotBootstrap._build_state_runtime_metrics_notifier_health(cfg, exchange_client)
-        )
-        portfolio_service = BotBootstrap._build_portfolio_service(exchange_client, cfg)
-        orchestrator = BotBootstrap._build_orchestrator(
+    def build(container: Optional[ServiceContainer] = None) -> BotRuntimeContext:
+        container = container or ServiceContainer()
+
+        cfg = container.cfg or BotBootstrap._build_cfg()
+        exchange_client = container.exchange_client or BotBootstrap._build_exchange_client(cfg)
+
+        if all([
+            container.state_store,
+            container.runtime_config_store,
+            container.metrics,
+            container.notifier,
+            container.health_monitor,
+        ]):
+            state_store = container.state_store
+            runtime_config_store = container.runtime_config_store
+            metrics = container.metrics
+            notifier = container.notifier
+            health_monitor = container.health_monitor
+        else:
+            state_store, runtime_config_store, metrics, notifier, health_monitor = (
+                BotBootstrap._build_state_runtime_metrics_notifier_health(cfg, exchange_client)
+            )
+
+        portfolio_service = container.portfolio_service or BotBootstrap._build_portfolio_service(exchange_client, cfg)
+
+        orchestrator = container.orchestrator or BotBootstrap._build_orchestrator(
             cfg=cfg,
             exchange_client=exchange_client,
             state_store=state_store,
@@ -204,6 +235,7 @@ class BotBootstrap:
             health_monitor=health_monitor,
             portfolio_service=portfolio_service,
         )
+
         base_profile = BotBootstrap._build_base_profile(cfg)
 
         return BotRuntimeContext(
@@ -218,3 +250,15 @@ class BotBootstrap:
             orchestrator=orchestrator,
             base_profile=base_profile,
         )
+
+    @staticmethod
+    def build_for_test(overrides: Optional[Dict[str, Any]] = None) -> BotRuntimeContext:
+        ctx = BotBootstrap.build()
+        if not overrides:
+            return ctx
+
+        for key, value in overrides.items():
+            if hasattr(ctx, key):
+                setattr(ctx, key, value)
+
+        return ctx

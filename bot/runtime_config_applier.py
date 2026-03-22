@@ -15,8 +15,11 @@ class RuntimeConfigApplier:
         self.active_runtime_params: Dict[str, str] = {}
         self.next_cycle_sec = context.cfg.default_cycle_sec
 
-    def _validate_trading_pairs(self, pairs: List[str]) -> List[str]:
-        meta = self.context.exchange_client.get_meta(force_refresh=True)
+    def _validate_trading_pairs(self, pairs: List[str], force_refresh: bool = False) -> List[str]:
+        meta = self.context.exchange_client.get_meta(force_refresh=force_refresh)
+        if not meta and not force_refresh:
+            meta = self.context.exchange_client.get_meta(force_refresh=True)
+
         if not meta:
             logging.warning("Cannot validate trading pairs — meta unavailable")
             return pairs
@@ -63,9 +66,9 @@ class RuntimeConfigApplier:
         ):
             return
 
-        validated_pairs = self._validate_trading_pairs(runtime_pairs)
+        validated_pairs = self._validate_trading_pairs(runtime_pairs, force_refresh=False)
         if not validated_pairs:
-            validated_pairs = self._validate_trading_pairs(list(self.context.cfg.trading_pairs))
+            validated_pairs = self._validate_trading_pairs(list(self.context.cfg.trading_pairs), force_refresh=True)
 
         self._apply_strategy_profile(runtime_mode)
         self._apply_runtime_param_overrides(runtime_params)

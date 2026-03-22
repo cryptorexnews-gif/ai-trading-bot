@@ -4,6 +4,7 @@ import signal
 import time
 from typing import Optional
 
+from bot.contracts import CycleExecutionInput
 from bot.cycle_executor import CycleExecutor
 from bot_live_writer import write_live_status
 from models import PortfolioState
@@ -40,7 +41,35 @@ class BotRunner:
     def _calculate_adaptive_cycle(self) -> int:
         if not self.context.cfg.enable_adaptive_cycle:
             return self.context.cfg.default_cycle_sec
-        return self.context.cfg.default_cycle_sec
+
+        base = int(self.context.cfg.default_cycle_sec)
+        min_cycle = int(self.context.cfg.min_cycle_sec)
+        max_cycle = int(self.context.cfg.max_cycle_sec)
+        next_cycle = base
+
+        if self.last_portfolio is not None:
+            pos_count = len(self.last_portfolio.positions)
+            margin_usage = self.last_portfolio.margin_usage
+
+            if pos_count >= 3 or margin_usage >= 0.60:
+                next_cycle = int(base * 0.7)
+            elif pos_count >= 1 or margin_usage >= 0.35:
+                next_cycle = int(base * 0.85)
+            else:
+                next_cycle = int(base * 1.15)
+
+        if self.last_cycle_duration > base * 0.8:
+            next_cycle = int(next_cycle * 1.2)
+
+        if self.last_cycle_duration < base * 0.25 and self.last_portfolio and len(self.last_portfolio.positions) == 0:
+            next_cycle = int(next_cycle * 1.1)
+
+        if next_cycle < min_cycle:
+            next_cycle = min_cycle
+        if next_cycle > max_cycle:
+            next_cycle = max_cycle
+
+        return next_cycle
 
     def run(self, single_cycle: bool = False) -> None:
         logging.info("=" * 60)
@@ -103,17 +132,19 @@ class BotRunner:
 
             self.cycle_count += 1
             cycle_result = self.cycle_executor.execute_cycle(
-                cycle_count=self.cycle_count,
-                current_next_cycle_sec=self.runtime_applier.next_cycle_sec,
-                shutdown_requested=self.shutdown_requested,
-                last_cycle_duration=self.last_cycle_duration,
-                last_portfolio=self.last_portfolio,
+                CycleExecutionInput(
+                    cycle_count=self.cycle_count,
+                    current_next_cycle_sec=self.runtime_applier.next_cycle_sec,
+                    shutdown_requested=self.shutdown_requested,
+                    last_cycle_duration=self.last_cycle_duration,
+                    last_portfolio=self.last_portfolio,
+                )
             )
 
-            self.last_cycle_duration = cycle_result["last_cycle_duration"]
-            self.last_portfolio = cycle_result["last_portfolio"]
+            self.last_cycle_duration = cycle_result.last_cycle_duration
+            self.last_portfolio = cycle_result.last_portfolio
 
-            if cycle_result["success"]:
+            if cycle_result.success:
                 consecutive_failures = 0
             else:
                 consecutive_failures += 1

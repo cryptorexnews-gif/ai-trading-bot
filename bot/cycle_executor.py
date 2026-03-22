@@ -1,112 +1,105 @@
 import logging
 import time
-from decimal import Decimal
-from typing import Any, Dict, Optional
 
-from bot_live_writer import write_live_status
+from bot.contracts import CycleExecutionInput, CycleExecutionResult
+from bot.cycle_error_policy import CycleErrorPolicy
+from bot.cycle_state_service import CycleStateService
+from bot.cycle_telemetry_service import CycleTelemetryService
 
 
 class CycleExecutor:
-    """Executes one bot trading cycle with state/metrics persistence."""
+    """Executes one bot trading cycle with state, telemetry, and error policy services."""
 
     def __init__(self, context):
         self.context = context
+        self.state_service = CycleStateService()
+        self.telemetry_service = CycleTelemetryService()
+        self.error_policy = CycleErrorPolicy()
 
-    def _persist_metrics(self) -> None:
-        metrics_data = self.context.metrics.get_all_metrics()
-        serializable = {}
-        for key, value in metrics_data.items():
-            if isinstance(value, Decimal):
-                serializable[key] = str(value)
-            elif isinstance(value, list):
-                serializable[key] = [float(v) if isinstance(v, (Decimal, float)) else v for v in value]
-            else:
-                serializable[key] = value
-        self.context.state_store.save_metrics(serializable)
-
-    def execute_cycle(
-        self,
-        cycle_count: int,
-        current_next_cycle_sec: int,
-        shutdown_requested: bool,
-        last_cycle_duration: float,
-        last_portfolio: Optional[Any],
-    ) -> Dict[str, Any]:
+    def execute_cycle(self, execution_input: CycleExecutionInput) -> CycleExecutionResult:
         cycle_start = time.time()
-        self.context.orchestrator.set_cycle_count(cycle_count)
+        self.context.orchestrator.set_cycle_count(execution_input.cycle_count)
 
         try:
             logging.info("=" * 60)
-            logging.info(f"Starting trading cycle #{cycle_count} ({current_next_cycle_sec}s)")
+            logging.info(
+                f"Starting trading cycle #{execution_input.cycle_count} "
+                f"({execution_input.current_next_cycle_sec}s)"
+            )
 
-            self.context.orchestrator._run_health_check(cycle_count)
+            phase_start = time.time()
+            self.context.orchestrator.run_health_check(execution_input.cycle_count)
+            self.telemetry_service.record_phase_duration(self.context.metrics, "health_check", time.time() - phase_start)
 
-            portfolio = self.context.orchestrator._fetch_portfolio()
+            phase_start = time.time()
+            portfolio = self.context.orchestrator.fetch_portfolio()
+            self.telemetry_service.record_phase_duration(self.context.metrics, "fetch_portfolio", time.time() - phase_start)
 
-            write_live_status(
+            self.telemetry_service.write_live(
                 is_running=True,
                 execution_mode=self.context.cfg.execution_mode,
-                cycle_count=cycle_count,
-                last_cycle_duration=last_cycle_duration,
+                cycle_count=execution_input.cycle_count,
+                last_cycle_duration=execution_input.last_cycle_duration,
                 portfolio=portfolio,
-                current_coin="scanning..."
+                current_coin="scanning...",
             )
 
             if portfolio.total_balance <= 0:
                 logging.warning("Portfolio balance zero or negative, skipping cycle")
-                return {
-                    "success": True,
-                    "last_cycle_duration": time.time() - cycle_start,
-                    "last_portfolio": portfolio,
-                }
+                return CycleExecutionResult(
+                    success=True,
+                    last_cycle_duration=time.time() - cycle_start,
+                    last_portfolio=portfolio,
+                )
 
-            state = self.context.state_store.load_state()
-            self.context.state_store.add_equity_snapshot(
-                state,
-                balance=portfolio.total_balance,
-                unrealized_pnl=portfolio.get_total_unrealized_pnl(),
-                position_count=len(portfolio.positions),
-                margin_usage=portfolio.margin_usage,
-            )
+            phase_start = time.time()
+            loaded = self.state_service.load_cycle_state(self.context.state_store)
+            state = loaded["state"]
+            daily_notional_used = loaded["daily_notional_used"]
+            peak = loaded["peak"]
+            consecutive_losses = loaded["consecutive_losses"]
+            self.state_service.add_equity_snapshot(self.context.state_store, state, portfolio)
+            self.telemetry_service.record_phase_duration(self.context.metrics, "state_load_snapshot", time.time() - phase_start)
 
-            daily_key = self.context.state_store.day_key(time.time())
-            daily_notional_used = Decimal(str(state.get("daily_notional_by_day", {}).get(daily_key, "0")))
-            peak = Decimal(str(state.get("peak_portfolio_value", "0")))
-            consecutive_losses = state.get("consecutive_losses", 0)
-
-            triggered = self.context.orchestrator._process_risk_triggers(portfolio)
+            phase_start = time.time()
+            triggered = self.context.orchestrator.process_risk_triggers(portfolio)
+            self.telemetry_service.record_phase_duration(self.context.metrics, "risk_triggers", time.time() - phase_start)
             if triggered > 0:
                 logging.info(f"SL/TP/Trailing/BE triggered {triggered} closes, refreshing portfolio")
-                portfolio = self.context.orchestrator._fetch_portfolio()
+                phase_start = time.time()
+                portfolio = self.context.orchestrator.fetch_portfolio()
+                self.telemetry_service.record_phase_duration(self.context.metrics, "fetch_portfolio_after_triggers", time.time() - phase_start)
 
-            portfolio = self.context.orchestrator._handle_emergency_derisk(portfolio)
+            phase_start = time.time()
+            portfolio = self.context.orchestrator.handle_emergency_derisk(portfolio)
+            self.telemetry_service.record_phase_duration(self.context.metrics, "emergency_derisk", time.time() - phase_start)
 
-            trades_executed, notional_added = self.context.orchestrator._analyze_and_trade(
+            phase_start = time.time()
+            trades_executed, notional_added = self.context.orchestrator.analyze_and_trade(
                 portfolio=portfolio,
                 state=state,
                 daily_notional_used=daily_notional_used,
                 peak=peak,
                 consecutive_losses=consecutive_losses,
-                shutdown_requested=shutdown_requested,
+                shutdown_requested=execution_input.shutdown_requested,
             )
+            self.telemetry_service.record_phase_duration(self.context.metrics, "coin_analysis_execution", time.time() - phase_start)
 
-            if notional_added > 0:
-                state["daily_notional_by_day"] = self.context.state_store.add_daily_notional(
-                    state.get("daily_notional_by_day", {}),
-                    time.time(),
-                    notional_added
-                )
-            if portfolio.total_balance > peak:
-                state["peak_portfolio_value"] = str(portfolio.total_balance)
-                self.context.metrics.set_gauge("peak_portfolio_value", portfolio.total_balance)
-
-            state["consecutive_failed_cycles"] = 0
-            self.context.state_store.save_state(state)
+            phase_start = time.time()
+            self.state_service.persist_cycle_success(
+                state_store=self.context.state_store,
+                metrics=self.context.metrics,
+                state=state,
+                portfolio=portfolio,
+                peak=peak,
+                notional_added=notional_added,
+            )
+            self.telemetry_service.record_phase_duration(self.context.metrics, "state_persist", time.time() - phase_start)
 
             cycle_duration = time.time() - cycle_start
-            self.context.metrics.record_histogram("cycle_duration_seconds", cycle_duration)
+            self.telemetry_service.record_cycle_duration(self.context.metrics, cycle_duration)
             self.context.metrics.increment("cycles_total")
-            self._persist_metrics()
+            self.telemetry_service.persist_metrics(self.context.metrics, self.context.state_store)
 
             summary = self.context.state_store.get_performance_summary(state)
             if summary["total_trades"] > 0:
@@ -116,42 +109,39 @@ class CycleExecutor:
                     f"losses={summary['losses']}, holds={summary['holds']}"
                 )
 
-            write_live_status(
+            self.telemetry_service.write_live(
                 is_running=True,
                 execution_mode=self.context.cfg.execution_mode,
-                cycle_count=cycle_count,
+                cycle_count=execution_input.cycle_count,
                 last_cycle_duration=cycle_duration,
                 portfolio=portfolio,
-                current_coin="idle"
+                current_coin="idle",
             )
             logging.info(
-                f"Cycle #{cycle_count} complete: {trades_executed} trades, "
+                f"Cycle #{execution_input.cycle_count} complete: {trades_executed} trades, "
                 f"duration={cycle_duration:.1f}s"
             )
 
-            return {
-                "success": True,
-                "last_cycle_duration": cycle_duration,
-                "last_portfolio": portfolio,
-            }
+            return CycleExecutionResult(
+                success=True,
+                last_cycle_duration=cycle_duration,
+                last_portfolio=portfolio,
+            )
 
         except Exception as e:
             logging.error(f"Cycle failed: {type(e).__name__}: {e}", exc_info=True)
-            self.context.metrics.increment("cycles_failed")
-            self.context.notifier.notify_error(f"Cycle failed: {type(e).__name__}: {str(e)[:200]}")
-            write_live_status(
-                is_running=True,
-                execution_mode=self.context.cfg.execution_mode,
-                cycle_count=cycle_count,
-                last_cycle_duration=last_cycle_duration,
-                portfolio=last_portfolio,
-                error=f"{type(e).__name__}: {str(e)[:200]}"
+            self.error_policy.handle_cycle_error(
+                context=self.context,
+                telemetry_service=self.telemetry_service,
+                state_service=self.state_service,
+                cycle_count=execution_input.cycle_count,
+                last_cycle_duration=execution_input.last_cycle_duration,
+                last_portfolio=execution_input.last_portfolio,
+                error=e,
             )
-            state = self.context.state_store.load_state()
-            state["consecutive_failed_cycles"] = state.get("consecutive_failed_cycles", 0) + 1
-            self.context.state_store.save_state(state)
-            return {
-                "success": False,
-                "last_cycle_duration": last_cycle_duration,
-                "last_portfolio": last_portfolio,
-            }
+            return CycleExecutionResult(
+                success=False,
+                last_cycle_duration=execution_input.last_cycle_duration,
+                last_portfolio=execution_input.last_portfolio,
+                error=f"{type(e).__name__}: {str(e)[:200]}",
+            )

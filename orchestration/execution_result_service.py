@@ -2,6 +2,8 @@ import time
 from decimal import Decimal
 from typing import Any, Dict, Tuple
 
+from orchestration.contracts import TradeDecision, TradeExecutionOutcome
+
 
 def normalize_executed_price_and_size(
     result: Dict[str, Any],
@@ -21,25 +23,22 @@ def normalize_executed_price_and_size(
 
 def build_trade_record(
     coin: str,
-    decision: Dict[str, Any],
-    executed_size: Decimal,
-    executed_price: Decimal,
-    result: Dict[str, Any],
-    fill_status: str,
+    decision: TradeDecision,
+    execution: TradeExecutionOutcome,
     execution_mode: str,
 ) -> Dict[str, Any]:
     return {
         "timestamp": time.time(),
         "coin": coin,
-        "action": decision["action"],
-        "size": str(executed_size),
-        "price": str(executed_price),
-        "notional": str(result.get("notional", "0")),
-        "leverage": decision["leverage"],
-        "confidence": decision["confidence"],
-        "reasoning": decision.get("reasoning", ""),
-        "success": result["success"],
+        "action": decision.action,
+        "size": str(execution.executed_size),
+        "price": str(execution.executed_price),
+        "notional": str(execution.notional),
+        "leverage": decision.leverage,
+        "confidence": decision.confidence,
+        "reasoning": decision.reasoning,
+        "success": execution.success,
         "mode": execution_mode,
         "trigger": "ai",
-        "order_status": fill_status,
+        "order_status": execution.fill_status,
     }

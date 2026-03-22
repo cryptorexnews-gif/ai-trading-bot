@@ -9,6 +9,7 @@ from execution_engine import ExecutionEngine
 from llm_engine import LLMEngine
 from notifier import Notifier
 from orchestration.coin_processing_utils import log_coin_indicators
+from orchestration.contracts import TradeDecision
 from orchestration.decision_service import get_decision_for_coin
 from orchestration.execution_flow_service import execute_and_verify_trade
 from orchestration.execution_result_service import build_trade_record
@@ -116,14 +117,16 @@ class CoinCycleProcessor:
         )
 
         logger.info(
-            f"{coin} decision: action={decision['action']}, size={decision['size']}, "
-            f"leverage={decision['leverage']}, confidence={decision['confidence']}, "
-            f"sl_pct={decision.get('stop_loss_pct')}, tp_pct={decision.get('take_profit_pct')}"
+            f"{coin} decision: action={decision.action}, size={decision.size}, "
+            f"leverage={decision.leverage}, confidence={decision.confidence}, "
+            f"sl_pct={decision.stop_loss_pct}, tp_pct={decision.take_profit_pct}"
         )
+
+        decision_order = decision.to_order_dict()
 
         gates_ok, gates_reason = evaluate_trade_gates(
             coin=coin,
-            decision=decision,
+            decision_order=decision_order,
             portfolio=portfolio,
             correlations=correlations,
             correlation_engine=self.context.correlation_engine,
@@ -141,20 +144,22 @@ class CoinCycleProcessor:
             logger.info(f"{coin} blocked by gates: {gates_reason}")
             return None
 
-        if decision["action"] == "hold" and coin in portfolio.positions:
-            updated = self.context.update_protection_without_trade(coin, decision)
+        decision = TradeDecision.from_order_dict(decision_order)
+
+        if decision.action == "hold" and coin in portfolio.positions:
+            updated = self.context.update_protection_without_trade(coin, decision_order)
             if updated:
                 logger.info(f"{coin} hold with SL/TP update applied")
             self.context.metrics.increment("holds_total")
             return {"trades": 0, "notional": Decimal("0"), "failed": False}
 
-        result, executed_price, executed_size, fill_status = execute_and_verify_trade(
+        execution = execute_and_verify_trade(
             cfg=self.context.cfg,
             execution_engine=self.context.execution_engine,
             order_verifier=self.context.order_verifier,
             portfolio_service=self.context.portfolio_service,
             coin=coin,
-            decision=decision,
+            decision_order=decision_order,
             market_data=market_data,
             positions=portfolio.positions,
             logger=logger,
@@ -163,21 +168,16 @@ class CoinCycleProcessor:
         trade_record = build_trade_record(
             coin=coin,
             decision=decision,
-            executed_size=executed_size,
-            executed_price=executed_price,
-            result=result,
-            fill_status=fill_status,
+            execution=execution,
             execution_mode=self.context.cfg.execution_mode,
         )
         self.context.state_store.add_trade_record(state, trade_record)
 
-        if result["success"]:
+        if execution.success:
             return handle_successful_execution(
                 coin=coin,
                 decision=decision,
-                executed_size=executed_size,
-                executed_price=executed_price,
-                result=result,
+                execution=execution,
                 state=state,
                 metrics=self.context.metrics,
                 position_manager=self.context.position_manager,
@@ -189,5 +189,5 @@ class CoinCycleProcessor:
             )
 
         self.context.metrics.increment("execution_failures_total")
-        logger.warning(f"{coin} execution failed: {result.get('reason', 'unknown')}")
+        logger.warning(f"{coin} execution failed: {execution.reason or 'unknown'}")
         return {"trades": 0, "notional": Decimal("0"), "failed": True}

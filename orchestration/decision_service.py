@@ -1,6 +1,7 @@
 from decimal import Decimal
 from typing import Any, Dict, List, Optional
 
+from orchestration.contracts import TradeDecision
 from orchestration.order_context_builder import (
     build_managed_position_context,
     extract_protective_orders_for_coin,
@@ -8,16 +9,16 @@ from orchestration.order_context_builder import (
 )
 
 
-def build_fallback_decision() -> Dict[str, Any]:
-    return {
-        "action": "hold",
-        "size": Decimal("0"),
-        "leverage": 1,
-        "confidence": 0.0,
-        "stop_loss_pct": None,
-        "take_profit_pct": None,
-        "reasoning": "LLM unavailable — safe fallback to hold",
-    }
+def build_fallback_decision() -> TradeDecision:
+    return TradeDecision(
+        action="hold",
+        size=Decimal("0"),
+        leverage=1,
+        confidence=0.0,
+        stop_loss_pct=None,
+        take_profit_pct=None,
+        reasoning="LLM unavailable — safe fallback to hold",
+    )
 
 
 def get_decision_for_coin(
@@ -37,7 +38,7 @@ def get_decision_for_coin(
     exchange_client,
     sync_exchange_protective_orders,
     logger,
-) -> Dict[str, Any]:
+) -> TradeDecision:
     if llm_engine:
         llm_rate_limiter.acquire(1)
         metrics.increment("llm_calls_total")
@@ -51,7 +52,7 @@ def get_decision_for_coin(
             sync_exchange_protective_orders(coin)
             protective_orders = extract_protective_orders_for_coin(exchange_client, coin)
 
-        decision = llm_engine.get_trading_decision(
+        decision_dict = llm_engine.get_trading_decision(
             market_data=market_data,
             portfolio_state=portfolio,
             technical_data=tech_data,
@@ -63,11 +64,11 @@ def get_decision_for_coin(
             managed_position=managed_position,
             protective_orders=protective_orders,
         )
-        if not decision:
+        if not decision_dict:
             metrics.increment("llm_errors_total")
             logger.warning(f"LLM failed for {coin}, using fallback")
             return build_fallback_decision()
 
-        return decision
+        return TradeDecision.from_order_dict(decision_dict)
 
     return build_fallback_decision()
