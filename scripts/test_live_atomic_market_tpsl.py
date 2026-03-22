@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 """
-Test live: apertura posizione con ordine entry, poi upsert SL/TP in seconda transazione.
+Test live sequenziale:
+1) apertura posizione (entry)
+2) impostazione stop loss (transazione separata)
+3) impostazione take profit (transazione separata)
+
 ATTENZIONE: usa soldi reali se ENABLE_MAINNET_TRADING=true.
 
 Configurazione via .env:
@@ -21,6 +25,9 @@ Parametri test (opzionali):
 - TEST_TICK_SIZE=          # opzionale, es: 0.1 (override manuale)
 - TEST_POSITION_WAIT_ATTEMPTS=10
 - TEST_POSITION_WAIT_SEC=1
+- TEST_CONFIRM_WAIT_SEC=2
+- TEST_TRIGGER_CONFIRM_ATTEMPTS=15
+- TEST_TRIGGER_CONFIRM_SLEEP_SEC=1
 """
 
 import logging
@@ -29,7 +36,7 @@ import sys
 import time
 from decimal import Decimal, ROUND_DOWN
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, Optional, Tuple
 
 from dotenv import load_dotenv
 from eth_account import Account
@@ -45,7 +52,7 @@ from utils.hyperliquid_state import get_open_positions
 load_dotenv()
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
-logger = logging.getLogger("live_entry_then_upsert_tpsl")
+logger = logging.getLogger("live_entry_then_sequential_tpsl")
 
 
 def d(value: str, default: str) -> Decimal:
@@ -86,7 +93,6 @@ def normalize_size_for_min_notional(
     required_size = min_notional_usd / mid_price
     size = normalize_size_for_decimals(required_size, sz_decimals if sz_decimals is not None else -1)
 
-    # Se dopo normalizzazione siamo ancora sotto minimo, aggiunge 1 step
     if size * mid_price < min_notional_usd and sz_decimals is not None and sz_decimals >= 0:
         step = Decimal("1").scaleb(-sz_decimals)
         size = size + step
@@ -116,6 +122,63 @@ def fetch_open_position_with_retry(
                     return pos
         time.sleep(sleep_sec)
     return None
+
+
+def wait_order_open_confirmation(
+    client: HyperliquidExchangeClient,
+    wallet: str,
+    coin: str,
+    order_id: int,
+    attempts: int,
+    sleep_sec: float,
+) -> bool:
+    for attempt in range(1, attempts + 1):
+        if client.are_order_ids_open(wallet, coin, [order_id]):
+            logger.info(f"Ordine {order_id} confermato aperto su exchange ({attempt}/{attempts})")
+            return True
+        time.sleep(sleep_sec)
+
+    logger.warning(f"Ordine {order_id} non confermato aperto dopo {attempts} tentativi")
+    return False
+
+
+def place_single_protective_order_with_confirmation(
+    client: HyperliquidExchangeClient,
+    wallet: str,
+    coin: str,
+    close_side: str,
+    close_size: Decimal,
+    trigger_price: Decimal,
+    tpsl: str,
+    confirm_attempts: int,
+    confirm_sleep_sec: float,
+) -> Tuple[int, bool]:
+    result = client.place_trigger_order(
+        coin=coin,
+        side=close_side,
+        size=close_size,
+        trigger_price=trigger_price,
+        tpsl=tpsl,
+        reduce_only=True,
+        is_market=True,
+    )
+
+    if not result.get("success"):
+        raise RuntimeError(f"Order {tpsl.upper()} fallito: {result}")
+
+    order_id = result.get("order_id")
+    if order_id is None:
+        raise RuntimeError(f"Order {tpsl.upper()} senza order_id: {result}")
+
+    confirmed = wait_order_open_confirmation(
+        client=client,
+        wallet=wallet,
+        coin=coin,
+        order_id=int(order_id),
+        attempts=confirm_attempts,
+        sleep_sec=confirm_sleep_sec,
+    )
+    return int(order_id), confirmed
 
 
 def main() -> None:
@@ -155,6 +218,9 @@ def main() -> None:
     tick_override_raw = os.getenv("TEST_TICK_SIZE", "").strip()
     position_wait_attempts = int(os.getenv("TEST_POSITION_WAIT_ATTEMPTS", "10"))
     position_wait_sec = float(os.getenv("TEST_POSITION_WAIT_SEC", "1"))
+    confirm_wait_sec = float(os.getenv("TEST_CONFIRM_WAIT_SEC", "2"))
+    trigger_confirm_attempts = int(os.getenv("TEST_TRIGGER_CONFIRM_ATTEMPTS", "15"))
+    trigger_confirm_sleep_sec = float(os.getenv("TEST_TRIGGER_CONFIRM_SLEEP_SEC", "1"))
 
     if margin_usd <= 0:
         raise RuntimeError("TEST_MARGIN_USD deve essere > 0")
@@ -172,11 +238,15 @@ def main() -> None:
         raise RuntimeError("TEST_POSITION_WAIT_ATTEMPTS deve essere >= 1")
     if position_wait_sec <= 0:
         raise RuntimeError("TEST_POSITION_WAIT_SEC deve essere > 0")
+    if confirm_wait_sec < 0:
+        raise RuntimeError("TEST_CONFIRM_WAIT_SEC deve essere >= 0")
+    if trigger_confirm_attempts < 1:
+        raise RuntimeError("TEST_TRIGGER_CONFIRM_ATTEMPTS deve essere >= 1")
+    if trigger_confirm_sleep_sec <= 0:
+        raise RuntimeError("TEST_TRIGGER_CONFIRM_SLEEP_SEC deve essere > 0")
 
     logger.warning("TEST LIVE REALE ATTIVO: questo script può aprire una posizione con soldi reali")
-    logger.info(
-        f"Wallet diagnostics: derived={mask_wallet(derived)} env={mask_wallet(wallet)}"
-    )
+    logger.info(f"Wallet diagnostics: derived={mask_wallet(derived)} env={mask_wallet(wallet)}")
     logger.info(
         f"Parametri test: coin={coin}, side={side}, margin={margin_usd}, "
         f"leverage={leverage}, sl_pct={sl_pct}, tp_pct={tp_pct}, min_notional={min_notional_usd}"
@@ -257,7 +327,7 @@ def main() -> None:
         raise RuntimeError("Prezzo entry arrotondato non valido")
 
     logger.info(
-        f"ENTRY: side={side.upper()} size={normalized_size} desired_limit={entry_limit} "
+        f"STEP 1/3 ENTRY: side={side.upper()} size={normalized_size} desired_limit={entry_limit} "
         f"(notional@mid~{expected_notional:.4f})"
     )
 
@@ -282,14 +352,15 @@ def main() -> None:
     )
 
     if not pos:
-        logger.warning(
-            f"Nessuna posizione aperta visibile su {coin} dopo entry; "
-            f"possibile IOC non fillato completamente. Stop test senza TP/SL."
+        raise RuntimeError(
+            f"Nessuna posizione aperta visibile su {coin} dopo entry; impossibile continuare con SL/TP."
         )
-        return
 
     pos_size = Decimal(str(pos.get("size", "0")))
     is_long = pos_size > 0
+    close_side = "sell" if is_long else "buy"
+    close_size = abs(pos_size)
+
     entry_price = Decimal(str(pos.get("entry_price", "0")))
     if entry_price <= 0:
         fallback_price = Decimal(str(entry_result.get("filled_price", mid_price)))
@@ -309,34 +380,53 @@ def main() -> None:
         raise RuntimeError("Trigger SL/TP arrotondati non validi")
 
     logger.info(
-        f"UPSERT TP/SL: position_size={abs(pos_size)} is_long={is_long} "
-        f"entry={entry_price} sl={sl_trigger} tp={tp_trigger}"
+        f"Posizione attuale: size={pos_size} entry={entry_price} "
+        f"close_side={close_side} close_size={close_size}"
     )
 
-    upsert_result = client.upsert_protective_orders(
+    if confirm_wait_sec > 0:
+        logger.info(f"Attesa conferma post-entry: {confirm_wait_sec}s")
+        time.sleep(confirm_wait_sec)
+
+    logger.info(f"STEP 2/3 STOP LOSS: trigger={sl_trigger}")
+    sl_id, sl_confirmed = place_single_protective_order_with_confirmation(
+        client=client,
+        wallet=wallet,
         coin=coin,
-        position_size=abs(pos_size),
-        is_long=is_long,
-        stop_loss_price=sl_trigger,
-        take_profit_price=tp_trigger,
+        close_side=close_side,
+        close_size=close_size,
+        trigger_price=sl_trigger,
+        tpsl="sl",
+        confirm_attempts=trigger_confirm_attempts,
+        confirm_sleep_sec=trigger_confirm_sleep_sec,
     )
+    logger.info(f"Stop loss creato: oid={sl_id}, confirmed={sl_confirmed}")
 
-    if not upsert_result.get("success"):
-        raise RuntimeError(f"Upsert TP/SL fallito: {upsert_result}")
+    if confirm_wait_sec > 0:
+        logger.info(f"Attesa conferma post-SL: {confirm_wait_sec}s")
+        time.sleep(confirm_wait_sec)
 
-    sl_id = upsert_result.get("stop_loss_order_id")
-    tp_id = upsert_result.get("take_profit_order_id")
-    logger.info(f"Upsert TP/SL successo: SL oid={sl_id} TP oid={tp_id}")
+    logger.info(f"STEP 3/3 TAKE PROFIT: trigger={tp_trigger}")
+    tp_id, tp_confirmed = place_single_protective_order_with_confirmation(
+        client=client,
+        wallet=wallet,
+        coin=coin,
+        close_side=close_side,
+        close_size=close_size,
+        trigger_price=tp_trigger,
+        tpsl="tp",
+        confirm_attempts=trigger_confirm_attempts,
+        confirm_sleep_sec=trigger_confirm_sleep_sec,
+    )
+    logger.info(f"Take profit creato: oid={tp_id}, confirmed={tp_confirmed}")
 
-    if sl_id is not None and tp_id is not None:
-        open_confirmed = client.are_order_ids_open(
-            user=wallet,
-            coin=coin,
-            order_ids=[int(sl_id), int(tp_id)],
-        )
-        logger.info(f"Conferma ordini protettivi aperti su exchange: {open_confirmed}")
+    both_open = client.are_order_ids_open(wallet, coin, [sl_id, tp_id])
+    logger.info(f"Verifica finale ordini protettivi aperti (SL+TP): {both_open}")
 
-    logger.info("Test completato con flusso a 2 transazioni (entry -> upsert TP/SL).")
+    if not both_open:
+        raise RuntimeError("SL/TP non risultano entrambi aperti su exchange dopo conferma")
+
+    logger.info("Test completato: flusso 3-step sequenziale riuscito (entry -> SL -> TP).")
 
 
 if __name__ == "__main__":
