@@ -16,7 +16,13 @@ from exchange.order_builder import (
     build_trigger_order_action,
     build_update_leverage_action,
 )
-from exchange.parsers import extract_order_ids, is_master_wallet_not_found_error
+from exchange.parsers import (
+    extract_order_ids,
+    extract_statuses,
+    get_first_status_error,
+    has_acknowledged_order_status,
+    is_master_wallet_not_found_error,
+)
 from exchange.signing import sign_l1_action_exact
 from exchange.transport import post_exchange_with_circuit_breaker, post_json_with_circuit_breaker
 from utils.circuit_breaker import get_or_create_circuit_breaker
@@ -87,15 +93,6 @@ class HyperliquidExchangeClient:
     @staticmethod
     def _is_ok_result(result: Optional[Dict[str, Any]]) -> bool:
         return isinstance(result, dict) and result.get("status") == "ok"
-
-    @staticmethod
-    def _extract_status_error(statuses: Any) -> Optional[str]:
-        if not isinstance(statuses, list):
-            return None
-        for status in statuses:
-            if isinstance(status, dict) and "error" in status:
-                return str(status.get("error", "status_error"))
-        return None
 
     @staticmethod
     def _mask_address(address: Optional[str]) -> str:
@@ -499,11 +496,15 @@ class HyperliquidExchangeClient:
             logger.error(f"Exchange rejected order for {coin}: {result}")
             return {"success": False, "mode": "live", "reason": "exchange_rejected", "notional": "0"}
 
-        statuses = result.get("response", {}).get("data", {}).get("statuses", [])
-        status_error = self._extract_status_error(statuses)
+        statuses = extract_statuses(result)
+        status_error = get_first_status_error(statuses)
         if status_error is not None:
             logger.error(f"Order status error for {coin}: {status_error}")
             return {"success": False, "mode": "live", "reason": "status_error", "notional": "0"}
+
+        if statuses and not has_acknowledged_order_status(statuses):
+            logger.error(f"Order not acknowledged by Hyperliquid statuses for {coin}: {statuses}")
+            return {"success": False, "mode": "live", "reason": "not_acknowledged", "notional": "0"}
 
         notional = abs(normalized_size * limit_price)
         logger.info(f"LIVE order success {coin} {side.upper()} size={normalized_size} limit={limit_price} reduce_only={reduce_only}")
@@ -554,11 +555,15 @@ class HyperliquidExchangeClient:
             logger.error(f"Exchange rejected trigger order for {coin}: {result}")
             return {"success": False, "reason": "exchange_rejected"}
 
-        statuses = result.get("response", {}).get("data", {}).get("statuses", [])
-        status_error = self._extract_status_error(statuses)
+        statuses = extract_statuses(result)
+        status_error = get_first_status_error(statuses)
         if status_error is not None:
             logger.error(f"Trigger order status error for {coin}: {status_error}")
             return {"success": False, "reason": "status_error"}
+
+        if statuses and not has_acknowledged_order_status(statuses):
+            logger.error(f"Trigger order not acknowledged by Hyperliquid statuses for {coin}: {statuses}")
+            return {"success": False, "reason": "not_acknowledged"}
 
         order_ids = extract_order_ids(result)
         order_id = order_ids[0] if order_ids else None
