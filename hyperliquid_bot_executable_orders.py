@@ -22,6 +22,8 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+from bot.runtime_loader import load_runtime_config_payload, runtime_has_changes
+from bot.runtime_profile import apply_runtime_param_overrides, apply_strategy_profile
 from bot_live_writer import write_live_status
 from config.bot_config import BotConfig
 from correlation_engine import CorrelationEngine
@@ -187,27 +189,6 @@ class HyperliquidBot:
         logging.info(f"Received {signal.Signals(signum).name}, requesting graceful shutdown...")
         self._shutdown_requested = True
 
-    @staticmethod
-    def _dec(value: str, default: Decimal) -> Decimal:
-        try:
-            return Decimal(str(value))
-        except Exception:
-            return default
-
-    @staticmethod
-    def _dec_percent(value: str, default: Decimal) -> Decimal:
-        dec = HyperliquidBot._dec(value, default)
-        if dec > Decimal("1"):
-            return dec / Decimal("100")
-        return dec
-
-    @staticmethod
-    def _int(value: str, default: int) -> int:
-        try:
-            return int(str(value))
-        except Exception:
-            return default
-
     def _validate_trading_pairs(self, pairs: Optional[List[str]] = None) -> List[str]:
         meta = self.exchange_client.get_meta(force_refresh=True)
         source_pairs = pairs if pairs is not None else list(self.cfg.trading_pairs)
@@ -223,188 +204,36 @@ class HyperliquidBot:
         return valid
 
     def _apply_strategy_profile(self, strategy_mode: str) -> None:
-        rm = self.orchestrator.risk_manager
-        pm = self.orchestrator.position_manager
-
-        if strategy_mode == "scalping":
-            self.cfg.default_cycle_sec = self.cfg.scalping_default_cycle_sec
-            self.cfg.min_cycle_sec = self.cfg.scalping_min_cycle_sec
-            self.cfg.max_cycle_sec = self.cfg.scalping_max_cycle_sec
-            self.cfg.max_trades_per_cycle = self.cfg.scalping_max_trades_per_cycle
-
-            self.cfg.hard_max_leverage = self.cfg.scalping_hard_max_leverage
-            self.cfg.min_confidence_open = self.cfg.scalping_min_confidence_open
-            self.cfg.min_confidence_manage = self.cfg.scalping_min_confidence_manage
-            self.cfg.max_order_margin_pct = self.cfg.scalping_max_order_margin_pct
-            self.cfg.trade_cooldown_sec = self.cfg.scalping_trade_cooldown_sec
-            self.cfg.daily_notional_limit_usd = self.cfg.scalping_daily_notional_limit_usd
-            self.cfg.max_drawdown_pct = self.cfg.scalping_max_drawdown_pct
-            self.cfg.max_single_asset_pct = self.cfg.scalping_max_single_asset_pct
-            self.cfg.emergency_margin_threshold = self.cfg.scalping_emergency_margin_threshold
-            self.cfg.trend_position_size_pct = self.cfg.scalping_position_size_pct
-            self.cfg.volume_confirmation_threshold = self.cfg.scalping_volume_confirmation_threshold
-            self.cfg.trend_sl_pct = self.cfg.scalping_sl_pct
-            self.cfg.trend_tp_pct = self.cfg.scalping_tp_pct
-            self.cfg.trend_break_even_activation_pct = self.cfg.scalping_break_even_activation_pct
-            self.cfg.trend_trailing_activation_pct = self.cfg.scalping_trailing_activation_pct
-            self.cfg.trend_trailing_callback = self.cfg.scalping_trailing_callback
-        else:
-            self.cfg.default_cycle_sec = self._base_profile["default_cycle_sec"]
-            self.cfg.min_cycle_sec = self._base_profile["min_cycle_sec"]
-            self.cfg.max_cycle_sec = self._base_profile["max_cycle_sec"]
-            self.cfg.max_trades_per_cycle = self._base_profile["max_trades_per_cycle"]
-
-            self.cfg.hard_max_leverage = self._base_profile["hard_max_leverage"]
-            self.cfg.min_confidence_open = self._base_profile["min_confidence_open"]
-            self.cfg.min_confidence_manage = self._base_profile["min_confidence_manage"]
-            self.cfg.max_order_margin_pct = self._base_profile["max_order_margin_pct"]
-            self.cfg.trade_cooldown_sec = self._base_profile["trade_cooldown_sec"]
-            self.cfg.daily_notional_limit_usd = self._base_profile["daily_notional_limit_usd"]
-            self.cfg.max_drawdown_pct = self._base_profile["max_drawdown_pct"]
-            self.cfg.max_single_asset_pct = self._base_profile["max_single_asset_pct"]
-            self.cfg.emergency_margin_threshold = self._base_profile["emergency_margin_threshold"]
-            self.cfg.trend_position_size_pct = self._base_profile["trend_position_size_pct"]
-            self.cfg.volume_confirmation_threshold = self._base_profile["volume_confirmation_threshold"]
-            self.cfg.trend_sl_pct = self._base_profile["trend_sl_pct"]
-            self.cfg.trend_tp_pct = self._base_profile["trend_tp_pct"]
-            self.cfg.trend_break_even_activation_pct = self._base_profile["trend_break_even_activation_pct"]
-            self.cfg.trend_trailing_activation_pct = self._base_profile["trend_trailing_activation_pct"]
-            self.cfg.trend_trailing_callback = self._base_profile["trend_trailing_callback"]
-
-        rm.hard_max_leverage = self.cfg.hard_max_leverage
-        rm.min_confidence_open = self.cfg.min_confidence_open
-        rm.min_confidence_manage = self.cfg.min_confidence_manage
-        rm.max_order_margin_pct = self.cfg.max_order_margin_pct
-        rm.trade_cooldown_sec = self.cfg.trade_cooldown_sec
-        rm.daily_notional_limit_usd = self.cfg.daily_notional_limit_usd
-        rm.max_drawdown_pct = self.cfg.max_drawdown_pct
-        rm.max_single_asset_pct = self.cfg.max_single_asset_pct
-        rm.emergency_margin_threshold = self.cfg.emergency_margin_threshold
-
-        pm.default_sl_pct = self.cfg.trend_sl_pct
-        pm.default_tp_pct = self.cfg.trend_tp_pct
-        pm.default_trailing_callback = self.cfg.trend_trailing_callback
-        pm.trailing_activation_pct = self.cfg.trend_trailing_activation_pct
-        pm.break_even_activation_pct = self.cfg.trend_break_even_activation_pct
-
+        apply_strategy_profile(
+            cfg=self.cfg,
+            risk_manager=self.orchestrator.risk_manager,
+            position_manager=self.orchestrator.position_manager,
+            base_profile=self._base_profile,
+            strategy_mode=strategy_mode,
+        )
         self._next_cycle_sec = self.cfg.default_cycle_sec
 
     def _apply_runtime_param_overrides(self, params: Dict[str, str]) -> None:
-        if not isinstance(params, dict):
-            return
-
-        self.cfg.default_cycle_sec = self._int(params.get("cycle_sec", self.cfg.default_cycle_sec), self.cfg.default_cycle_sec)
-        self.cfg.min_cycle_sec = self._int(params.get("min_cycle_sec", self.cfg.min_cycle_sec), self.cfg.min_cycle_sec)
-        self.cfg.max_cycle_sec = self._int(params.get("max_cycle_sec", self.cfg.max_cycle_sec), self.cfg.max_cycle_sec)
-        self.cfg.max_trades_per_cycle = self._int(
-            params.get("max_trades_per_cycle", self.cfg.max_trades_per_cycle),
-            self.cfg.max_trades_per_cycle
+        apply_runtime_param_overrides(
+            cfg=self.cfg,
+            risk_manager=self.orchestrator.risk_manager,
+            position_manager=self.orchestrator.position_manager,
+            params=params,
         )
-
-        self.cfg.hard_max_leverage = self._dec(params.get("hard_max_leverage", self.cfg.hard_max_leverage), self.cfg.hard_max_leverage)
-
-        self.cfg.min_confidence_open = self._dec_percent(
-            params.get("min_confidence_open", self.cfg.min_confidence_open),
-            self.cfg.min_confidence_open
-        )
-        self.cfg.min_confidence_manage = self._dec_percent(
-            params.get("min_confidence_manage", self.cfg.min_confidence_manage),
-            self.cfg.min_confidence_manage
-        )
-        self.cfg.max_order_margin_pct = self._dec_percent(
-            params.get("max_order_margin_pct", self.cfg.max_order_margin_pct),
-            self.cfg.max_order_margin_pct
-        )
-
-        self.cfg.trade_cooldown_sec = self._int(params.get("trade_cooldown_sec", self.cfg.trade_cooldown_sec), self.cfg.trade_cooldown_sec)
-        self.cfg.daily_notional_limit_usd = self._dec(
-            params.get("daily_notional_limit_usd", self.cfg.daily_notional_limit_usd),
-            self.cfg.daily_notional_limit_usd
-        )
-
-        self.cfg.max_drawdown_pct = self._dec_percent(
-            params.get("max_drawdown_pct", self.cfg.max_drawdown_pct),
-            self.cfg.max_drawdown_pct
-        )
-        self.cfg.max_single_asset_pct = self._dec_percent(
-            params.get("max_single_asset_pct", self.cfg.max_single_asset_pct),
-            self.cfg.max_single_asset_pct
-        )
-        self.cfg.emergency_margin_threshold = self._dec_percent(
-            params.get("emergency_margin_threshold", self.cfg.emergency_margin_threshold),
-            self.cfg.emergency_margin_threshold
-        )
-
-        self.cfg.trend_position_size_pct = self._dec_percent(
-            params.get("position_size_pct", self.cfg.trend_position_size_pct),
-            self.cfg.trend_position_size_pct
-        )
-        self.cfg.volume_confirmation_threshold = self._dec(
-            params.get("volume_confirmation_threshold", self.cfg.volume_confirmation_threshold),
-            self.cfg.volume_confirmation_threshold
-        )
-        self.cfg.trend_sl_pct = self._dec_percent(params.get("sl_pct", self.cfg.trend_sl_pct), self.cfg.trend_sl_pct)
-        self.cfg.trend_tp_pct = self._dec_percent(params.get("tp_pct", self.cfg.trend_tp_pct), self.cfg.trend_tp_pct)
-        self.cfg.trend_break_even_activation_pct = self._dec_percent(
-            params.get("break_even_activation_pct", self.cfg.trend_break_even_activation_pct),
-            self.cfg.trend_break_even_activation_pct
-        )
-        self.cfg.trend_trailing_activation_pct = self._dec_percent(
-            params.get("trailing_activation_pct", self.cfg.trend_trailing_activation_pct),
-            self.cfg.trend_trailing_activation_pct
-        )
-        self.cfg.trend_trailing_callback = self._dec_percent(
-            params.get("trailing_callback", self.cfg.trend_trailing_callback),
-            self.cfg.trend_trailing_callback
-        )
-
-        if self.cfg.min_cycle_sec > self.cfg.max_cycle_sec:
-            self.cfg.max_cycle_sec = self.cfg.min_cycle_sec
-        if self.cfg.default_cycle_sec < self.cfg.min_cycle_sec:
-            self.cfg.default_cycle_sec = self.cfg.min_cycle_sec
-        if self.cfg.default_cycle_sec > self.cfg.max_cycle_sec:
-            self.cfg.default_cycle_sec = self.cfg.max_cycle_sec
-
-        rm = self.orchestrator.risk_manager
-        pm = self.orchestrator.position_manager
-
-        rm.hard_max_leverage = self.cfg.hard_max_leverage
-        rm.min_confidence_open = self.cfg.min_confidence_open
-        rm.min_confidence_manage = self.cfg.min_confidence_manage
-        rm.max_order_margin_pct = self.cfg.max_order_margin_pct
-        rm.trade_cooldown_sec = self.cfg.trade_cooldown_sec
-        rm.daily_notional_limit_usd = self.cfg.daily_notional_limit_usd
-        rm.max_drawdown_pct = self.cfg.max_drawdown_pct
-        rm.max_single_asset_pct = self.cfg.max_single_asset_pct
-        rm.emergency_margin_threshold = self.cfg.emergency_margin_threshold
-
-        pm.default_sl_pct = self.cfg.trend_sl_pct
-        pm.default_tp_pct = self.cfg.trend_tp_pct
-        pm.default_trailing_callback = self.cfg.trend_trailing_callback
-        pm.trailing_activation_pct = self.cfg.trend_trailing_activation_pct
-        pm.break_even_activation_pct = self.cfg.trend_break_even_activation_pct
-
         self._next_cycle_sec = self.cfg.default_cycle_sec
 
     def _apply_runtime_config(self, force: bool = False) -> None:
-        runtime = self.runtime_config_store.load()
-        runtime_mode = str(runtime.get("strategy_mode", self.cfg.default_strategy_mode)).strip().lower()
-        if runtime_mode not in {"trend", "scalping"}:
-            runtime_mode = self.cfg.default_strategy_mode
+        payload = load_runtime_config_payload(self.runtime_config_store, self.cfg)
+        runtime_mode = payload["strategy_mode"]
+        runtime_pairs = payload["trading_pairs"]
+        runtime_params = payload["strategy_params"]
 
-        runtime_pairs = [str(p).strip().upper() for p in runtime.get("trading_pairs", []) if str(p).strip()]
-        if not runtime_pairs:
-            runtime_pairs = list(self.cfg.trading_pairs)
-
-        runtime_params = runtime.get("strategy_params", {})
-        if not isinstance(runtime_params, dict):
-            runtime_params = {}
-
-        mode_changed = runtime_mode != self._active_strategy_mode
-        pairs_changed_raw = runtime_pairs != self._active_runtime_pairs
-        params_changed = runtime_params != self._active_runtime_params
-
-        if not force and not mode_changed and not pairs_changed_raw and not params_changed:
+        if not force and not runtime_has_changes(
+            payload=payload,
+            active_mode=self._active_strategy_mode,
+            active_pairs=self._active_runtime_pairs,
+            active_params=self._active_runtime_params,
+        ):
             return
 
         validated_pairs = self._validate_trading_pairs(runtime_pairs)
