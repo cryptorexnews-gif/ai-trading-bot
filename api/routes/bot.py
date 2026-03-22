@@ -20,6 +20,7 @@ from api.config import (
 from api.helpers import read_json_file
 from api.rate_limit_utils import build_rate_limiter, rate_limited_response
 from api.services.account_snapshot_service import get_hyperliquid_account_snapshot
+from api.services.bot_payload_service import build_config_payload, build_status_payload
 from api.services.managed_positions_service import build_managed_positions_payload
 from runtime_config_store import RuntimeConfigStore
 from state_store import StateStore
@@ -54,19 +55,15 @@ def bot_status():
         wallet = os.getenv("HYPERLIQUID_WALLET_ADDRESS", "").strip()
         account_snapshot = get_hyperliquid_account_snapshot(wallet)
 
-        return jsonify({
-            "bot": live_status,
-            "account": account_snapshot,
-            "state": {
-                "peak_portfolio_value": state.get("peak_portfolio_value", "0"),
-                "consecutive_failed_cycles": state.get("consecutive_failed_cycles", 0),
-                "consecutive_losses": state.get("consecutive_losses", 0),
-            },
-            "metrics": metrics,
-            "circuit_breakers": get_all_circuit_states(),
-            "rate_limiters": get_all_rate_limiter_stats(),
-            "timestamp": time.time()
-        })
+        payload = build_status_payload(
+            live_status=live_status,
+            state=state,
+            metrics=metrics,
+            account_snapshot=account_snapshot,
+            circuit_breakers=get_all_circuit_states(),
+            rate_limiters=get_all_rate_limiter_stats(),
+        )
+        return jsonify(payload)
     except Exception:
         logger.error("Bot status endpoint failed", exc_info=True)
         return jsonify({"error": "internal_error"}), 500
@@ -157,38 +154,8 @@ def config():
         return rate_limit_resp
 
     try:
-        env_pairs_raw = os.getenv(
-            "TRADING_PAIRS",
-            "BTC,ETH,SOL,BNB,ADA,DOGE,XRP,AVAX,LINK,SUI,ARB,OP,NEAR,WIF,PEPE,INJ,TIA,SEI,RENDER,FET"
-        )
-        env_pairs = [p.strip().upper() for p in env_pairs_raw.split(",") if p.strip()]
-
         runtime_cfg = _runtime_store.load()
-        runtime_pairs = [str(p).strip().upper() for p in runtime_cfg.get("trading_pairs", []) if str(p).strip()]
-        strategy_mode = str(runtime_cfg.get("strategy_mode", "trend")).strip().lower()
-
-        trading_pairs = runtime_pairs if runtime_pairs else env_pairs
-        source = "runtime_config" if runtime_pairs else "env_default"
-
-        return jsonify({
-            "execution_mode": os.getenv("EXECUTION_MODE", "paper"),
-            "enable_mainnet_trading": os.getenv("ENABLE_MAINNET_TRADING", "false"),
-            "llm_model": os.getenv("LLM_MODEL", "deepseek/deepseek-v3.2"),
-            "max_leverage": os.getenv("HARD_MAX_LEVERAGE", "10"),
-            "max_drawdown_pct": os.getenv("MAX_DRAWDOWN_PCT", "0.15"),
-            "default_sl_pct": os.getenv("TREND_SL_PCT", "0.04"),
-            "default_tp_pct": os.getenv("TREND_TP_PCT", "0.08"),
-            "enable_trailing_stop": os.getenv("ENABLE_TRAILING_STOP", "true"),
-            "break_even_activation_pct": os.getenv("TREND_BREAK_EVEN_ACTIVATION_PCT", "0.02"),
-            "max_order_notional_usd": os.getenv("MAX_ORDER_NOTIONAL_USD", "0"),
-            "min_confidence_open": os.getenv("MIN_CONFIDENCE_OPEN", "0.72"),
-            "min_confidence_manage": os.getenv("MIN_CONFIDENCE_MANAGE", "0.50"),
-            "strategy_mode": strategy_mode,
-            "trading_pairs": trading_pairs,
-            "trading_pairs_count": len(trading_pairs),
-            "trading_pairs_source": source,
-            "timestamp": time.time()
-        })
+        return jsonify(build_config_payload(runtime_cfg))
     except Exception:
         logger.error("Bot config endpoint failed", exc_info=True)
         return jsonify({"error": "internal_error"}), 500
