@@ -597,8 +597,9 @@ class CycleOrchestrator:
         trades_executed = 0
         notional_added = Decimal("0")
 
+        current_portfolio = portfolio
         open_position_coins = [
-            coin for coin, pos in portfolio.positions.items()
+            coin for coin, pos in current_portfolio.positions.items()
             if Decimal(str(pos.get("size", 0))) != 0
         ]
 
@@ -617,7 +618,7 @@ class CycleOrchestrator:
                 logger.info("Shutdown requested, stopping coin analysis")
                 break
 
-            has_open_position = coin in portfolio.positions and Decimal(str(portfolio.positions[coin].get("size", 0))) != 0
+            has_open_position = coin in current_portfolio.positions and Decimal(str(current_portfolio.positions[coin].get("size", 0))) != 0
             if trades_executed >= self.cfg.max_trades_per_cycle and not has_open_position:
                 continue
 
@@ -627,13 +628,13 @@ class CycleOrchestrator:
                 execution_mode=self.cfg.execution_mode,
                 cycle_count=self._cycle_count,
                 last_cycle_duration=0,
-                portfolio=portfolio,
+                portfolio=current_portfolio,
                 current_coin=coin,
             )
 
             result = self.coin_processor.process_single_coin(
                 coin=coin,
-                portfolio=portfolio,
+                portfolio=current_portfolio,
                 state=state,
                 daily_notional_used=daily_notional_used + notional_added,
                 peak=peak,
@@ -648,6 +649,9 @@ class CycleOrchestrator:
                 notional_added += result["notional"]
                 if result["trades"] > 0:
                     state["consecutive_losses"] = 0
+
+                    current_portfolio = self.portfolio_service.get_portfolio_state()
+                    self.position_manager.sync_with_exchange(current_portfolio.positions)
                 elif result.get("failed"):
                     state["consecutive_losses"] = state.get("consecutive_losses", 0) + 1
 

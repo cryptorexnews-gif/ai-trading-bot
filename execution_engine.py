@@ -1,4 +1,5 @@
 import logging
+import time
 from decimal import Decimal, ROUND_UP
 from typing import Any, Dict
 
@@ -15,6 +16,8 @@ class ExecutionEngine:
     def __init__(self, exchange_client: HyperliquidExchangeClient):
         self.exchange_client = exchange_client
         self.allowed_actions = {action.value for action in TradingAction}
+        self._leverage_cache_by_coin: Dict[str, Dict[str, Any]] = {}
+        self._leverage_cache_ttl_sec = 300.0  # 5 minuti
 
     def _adjust_open_size_for_exchange_minimum(self, coin: str, size: Decimal, price: Decimal) -> Decimal:
         """
@@ -38,13 +41,42 @@ class ExecutionEngine:
         adjusted = (required_size / step).to_integral_value(rounding=ROUND_UP) * step
         return adjusted
 
-    def _set_leverage_with_vault_fallback(self, coin: str, leverage: int) -> bool:
+    def _is_leverage_cached(self, coin: str, leverage: int) -> bool:
+        cached = self._leverage_cache_by_coin.get(coin)
+        if not cached:
+            return False
+
+        cached_leverage = int(cached.get("leverage", -1))
+        cached_at = float(cached.get("ts", 0.0))
+        if cached_leverage != int(leverage):
+            return False
+
+        age = time.time() - cached_at
+        return age <= self._leverage_cache_ttl_sec
+
+    def _remember_leverage(self, coin: str, leverage: int) -> None:
+        self._leverage_cache_by_coin[coin] = {
+            "leverage": int(leverage),
+            "ts": time.time(),
+        }
+
+    def _invalidate_leverage_cache(self, coin: str) -> None:
+        if coin in self._leverage_cache_by_coin:
+            del self._leverage_cache_by_coin[coin]
+
+    def _set_leverage_with_vault_fallback(self, coin: str, leverage: int, force: bool = False) -> bool:
         """
         Imposta leva con fallback automatico:
         se fallisce e vault_address è presente, disabilita il vault runtime e ritenta una volta.
+        Ottimizzazione: se già impostata di recente alla stessa leva, salta la chiamata.
         """
+        if not force and self._is_leverage_cached(coin, leverage):
+            logger.debug(f"Skip set leverage for {coin}: cached {leverage}x")
+            return True
+
         ok = self.exchange_client.set_leverage(coin, leverage)
         if ok:
+            self._remember_leverage(coin, leverage)
             return True
 
         vault = getattr(self.exchange_client, "vault_address", None)
@@ -57,8 +89,10 @@ class ExecutionEngine:
             ok_retry = self.exchange_client.set_leverage(coin, leverage)
             if ok_retry:
                 logger.info(f"Leverage fallback without vault succeeded for {coin}")
+                self._remember_leverage(coin, leverage)
                 return True
 
+        self._invalidate_leverage_cache(coin)
         return False
 
     def execute(
@@ -81,7 +115,7 @@ class ExecutionEngine:
         if action == TradingAction.CHANGE_LEVERAGE.value:
             if coin not in positions:
                 return {"success": False, "notional": Decimal("0"), "reason": "no_position_for_leverage_change"}
-            ok = self._set_leverage_with_vault_fallback(coin, leverage)
+            ok = self._set_leverage_with_vault_fallback(coin, leverage, force=True)
             return {"success": ok, "notional": Decimal("0"), "reason": "change_leverage"}
 
         if action == TradingAction.CLOSE_POSITION.value:
