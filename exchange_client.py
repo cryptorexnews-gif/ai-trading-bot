@@ -57,6 +57,9 @@ class HyperliquidExchangeClient:
 
         self.account = Account.from_key(private_key)
 
+        # Monotonic nonce tracker to avoid same-ms collisions on consecutive signed actions.
+        self._last_nonce: int = 0
+
         self._meta_cache: Optional[Dict[str, Any]] = None
         self._meta_cache_at = 0.0
         self._mids_cache: Optional[Dict[str, str]] = None
@@ -106,6 +109,13 @@ class HyperliquidExchangeClient:
     def validate_wallet_address(private_key: str, expected_address: str) -> bool:
         derived = Account.from_key(private_key).address
         return derived.lower() == expected_address.lower()
+
+    def _next_nonce(self) -> int:
+        current_ms = int(time.time() * 1000)
+        if current_ms <= self._last_nonce:
+            current_ms = self._last_nonce + 1
+        self._last_nonce = current_ms
+        return current_ms
 
     def _post_info(self, payload: Dict[str, Any], timeout: Optional[int] = None) -> Optional[Any]:
         if timeout is None:
@@ -172,13 +182,21 @@ class HyperliquidExchangeClient:
         message = str(result.get("response", "")).lower()
         return "vault not registered" in message
 
+    def _is_user_or_api_wallet_not_found_error(self, result: Optional[Dict[str, Any]]) -> bool:
+        if not isinstance(result, dict):
+            return False
+        if result.get("status") != "err":
+            return False
+        message = str(result.get("response", "")).lower()
+        return "user or api wallet" in message and "does not exist" in message
+
     def _post_signed_action_once(
         self,
         action: Dict[str, Any],
         vault_address: Optional[str],
         timeout: Optional[int] = None,
     ) -> Optional[Dict[str, Any]]:
-        nonce = int(time.time() * 1000)
+        nonce = self._next_nonce()
         signature = self.sign_l1_action_exact(action, vault_address, nonce, None, True)
         payload = {
             "action": action,
@@ -211,6 +229,12 @@ class HyperliquidExchangeClient:
                 os.environ["HYPERLIQUID_VAULT_ADDRESS"] = ""
                 return retry_result
 
+            return retry_result
+
+        # Retry once with fresh nonce in case of transient wallet/API wallet resolution errors.
+        if self._is_user_or_api_wallet_not_found_error(result):
+            logger.warning("Exchange reported wallet/API wallet not found. Retrying once with fresh nonce.")
+            retry_result = self._post_signed_action_once(action, self.vault_address, timeout=timeout)
             return retry_result
 
         return result
