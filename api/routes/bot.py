@@ -65,44 +65,80 @@ def _mask_wallet(wallet: str) -> str:
 def _get_hyperliquid_account_snapshot():
     wallet = os.getenv("HYPERLIQUID_WALLET_ADDRESS", "").strip()
     if not wallet:
-        return None
+        return {
+            "wallet": "",
+            "wallet_masked": "not_configured",
+            "portfolio": {
+                "total_balance": Decimal("0"),
+                "available_balance": Decimal("0"),
+                "margin_usage": Decimal("0"),
+                "positions": {},
+                "position_count": 0,
+                "total_unrealized_pnl": Decimal("0"),
+                "total_exposure": Decimal("0"),
+                "open_orders_count": 0,
+            },
+            "margin_summary": {},
+            "withdrawable": "0",
+            "updated_at": time.time(),
+        }
 
-    user_state = post_hyperliquid_info({"type": "clearinghouseState", "user": wallet}, timeout=20)
-    if not isinstance(user_state, dict):
-        return None
+    try:
+        user_state = post_hyperliquid_info({"type": "clearinghouseState", "user": wallet}, timeout=20)
+        if not isinstance(user_state, dict):
+            raise ValueError("Invalid user_state response")
 
-    balances = get_account_balances(user_state)
-    positions = get_open_positions(user_state)
+        balances = get_account_balances(user_state)
+        positions = get_open_positions(user_state)
 
-    total_unrealized_pnl = Decimal("0")
-    total_exposure = Decimal("0")
-    for pos in positions.values():
-        size = Decimal(str(pos.get("size", 0)))
-        entry = Decimal(str(pos.get("entry_price", 0)))
-        pnl = Decimal(str(pos.get("unrealized_pnl", 0)))
-        total_unrealized_pnl += pnl
-        total_exposure += abs(size * entry)
+        total_unrealized_pnl = Decimal("0")
+        total_exposure = Decimal("0")
+        for pos in positions.values():
+            size = Decimal(str(pos.get("size", 0)))
+            entry = Decimal(str(pos.get("entry_price", 0)))
+            pnl = Decimal(str(pos.get("unrealized_pnl", 0)))
+            total_unrealized_pnl += pnl
+            total_exposure += abs(size * entry)
 
-    open_orders = post_hyperliquid_info({"type": "openOrders", "user": wallet}, timeout=15)
-    open_orders_count = len(open_orders) if isinstance(open_orders, list) else 0
+        open_orders = post_hyperliquid_info({"type": "openOrders", "user": wallet}, timeout=15)
+        open_orders_count = len(open_orders) if isinstance(open_orders, list) else 0
 
-    return {
-        "wallet": wallet,
-        "wallet_masked": _mask_wallet(wallet),
-        "portfolio": {
-            "total_balance": balances["total_balance"],
-            "available_balance": balances["available_balance"],
-            "margin_usage": balances["margin_usage"],
-            "positions": positions,
-            "position_count": len(positions),
-            "total_unrealized_pnl": total_unrealized_pnl,
-            "total_exposure": total_exposure,
-            "open_orders_count": open_orders_count,
-        },
-        "margin_summary": user_state.get("marginSummary", {}),
-        "withdrawable": user_state.get("withdrawable", "0"),
-        "updated_at": time.time(),
-    }
+        return {
+            "wallet": wallet,
+            "wallet_masked": _mask_wallet(wallet),
+            "portfolio": {
+                "total_balance": balances["total_balance"],
+                "available_balance": balances["available_balance"],
+                "margin_usage": balances["margin_usage"],
+                "positions": positions,
+                "position_count": len(positions),
+                "total_unrealized_pnl": total_unrealized_pnl,
+                "total_exposure": total_exposure,
+                "open_orders_count": open_orders_count,
+            },
+            "margin_summary": user_state.get("marginSummary", {}),
+            "withdrawable": user_state.get("withdrawable", "0"),
+            "updated_at": time.time(),
+        }
+    except Exception as e:
+        logger.error(f"Failed to get Hyperliquid account snapshot: {e}")
+        return {
+            "wallet": wallet,
+            "wallet_masked": _mask_wallet(wallet),
+            "portfolio": {
+                "total_balance": Decimal("0"),
+                "available_balance": Decimal("0"),
+                "margin_usage": Decimal("0"),
+                "positions": {},
+                "position_count": 0,
+                "total_unrealized_pnl": Decimal("0"),
+                "total_exposure": Decimal("0"),
+                "open_orders_count": 0,
+            },
+            "margin_summary": {},
+            "withdrawable": "0",
+            "updated_at": time.time(),
+        }
 
 
 def _fetch_hyperliquid_universe():
@@ -180,17 +216,9 @@ def portfolio():
 
     try:
         account_snapshot = _get_hyperliquid_account_snapshot()
-        if account_snapshot and isinstance(account_snapshot.get("portfolio"), dict):
-            return jsonify({
-                "portfolio": account_snapshot.get("portfolio", {}),
-                "source": "hyperliquid_account",
-                "timestamp": time.time()
-            })
-
-        live_status = read_json_file(LIVE_STATUS_PATH)
         return jsonify({
-            "portfolio": live_status.get("portfolio", {}),
-            "source": "bot_live_file_fallback",
+            "portfolio": account_snapshot.get("portfolio", {}),
+            "source": "hyperliquid_account",
             "timestamp": time.time()
         })
     except Exception:
@@ -207,18 +235,9 @@ def positions():
 
     try:
         account_snapshot = _get_hyperliquid_account_snapshot()
-        if account_snapshot and isinstance(account_snapshot.get("portfolio"), dict):
-            return jsonify({
-                "positions": account_snapshot["portfolio"].get("positions", {}),
-                "source": "hyperliquid_account",
-                "timestamp": time.time()
-            })
-
-        live_status = read_json_file(LIVE_STATUS_PATH)
-        portfolio_data = live_status.get("portfolio", {})
         return jsonify({
-            "positions": portfolio_data.get("positions", {}),
-            "source": "bot_live_file_fallback",
+            "positions": account_snapshot.get("portfolio", {}).get("positions", {}),
+            "source": "hyperliquid_account",
             "timestamp": time.time()
         })
     except Exception:
