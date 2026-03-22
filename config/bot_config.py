@@ -116,7 +116,8 @@ class BotConfig:
         self.break_even_offset_pct = _env_decimal("BREAK_EVEN_OFFSET_PCT", "0.001")
         self.correlation_threshold = _env_decimal("CORRELATION_THRESHOLD", "0.7")
 
-        self.vault_address = _env("HYPERLIQUID_VAULT_ADDRESS", "").strip()
+        self.requested_vault_address = _env("HYPERLIQUID_VAULT_ADDRESS", "").strip()
+        self.vault_address = None
 
         self._normalize_runtime_values()
 
@@ -148,10 +149,9 @@ class BotConfig:
                 f"Expected 0x-prefixed 42-character hex string, got: {self.wallet_address[:10]}..."
             )
 
-        if self.vault_address and not _is_valid_eth_address(self.vault_address):
-            raise SystemExit(
-                f"CRITICAL: HYPERLIQUID_VAULT_ADDRESS has invalid format. "
-                f"Expected 0x-prefixed 42-character hex string, got: {self.vault_address[:10]}..."
+        if self.requested_vault_address:
+            warnings.append(
+                "HYPERLIQUID_VAULT_ADDRESS è impostato ma ignorato: modalità master-only attiva."
             )
 
         from exchange_client import HyperliquidExchangeClient
