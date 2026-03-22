@@ -343,7 +343,7 @@ class HyperliquidExchangeClient:
 
         return result
 
-    def _find_trigger_order_id(
+    def _list_matching_trigger_orders(
         self,
         user: str,
         coin: str,
@@ -352,16 +352,14 @@ class HyperliquidExchangeClient:
         trigger_price: Decimal,
         tpsl: str,
         strict_tpsl: bool = True,
-    ) -> Optional[int]:
+    ) -> List[Dict[str, Any]]:
         open_orders = self.get_open_orders(user)
         wanted_coin = coin.upper()
         wanted_side = side.lower()
         wanted_tpsl = tpsl.lower()
         wanted_size = abs(size)
 
-        best_oid: Optional[int] = None
-        best_score: Optional[Decimal] = None
-
+        matches: List[Dict[str, Any]] = []
         for order in open_orders:
             if not isinstance(order, dict):
                 continue
@@ -396,12 +394,43 @@ class HyperliquidExchangeClient:
             if oid is None:
                 continue
 
-            score = abs(order_trigger_px - trigger_price)
-            if best_score is None or score < best_score:
-                best_score = score
-                best_oid = oid
+            matches.append(
+                {
+                    "oid": oid,
+                    "trigger_px": order_trigger_px,
+                    "size": order_size,
+                }
+            )
 
-        return best_oid
+        return matches
+
+    def _select_best_match_oid(self, matches: List[Dict[str, Any]], trigger_price: Decimal) -> Optional[int]:
+        if not matches:
+            return None
+
+        best = min(matches, key=lambda m: abs(m["trigger_px"] - trigger_price))
+        return int(best["oid"])
+
+    def _find_trigger_order_id(
+        self,
+        user: str,
+        coin: str,
+        side: str,
+        size: Decimal,
+        trigger_price: Decimal,
+        tpsl: str,
+        strict_tpsl: bool = True,
+    ) -> Optional[int]:
+        matches = self._list_matching_trigger_orders(
+            user=user,
+            coin=coin,
+            side=side,
+            size=size,
+            trigger_price=trigger_price,
+            tpsl=tpsl,
+            strict_tpsl=strict_tpsl,
+        )
+        return self._select_best_match_oid(matches, trigger_price)
 
     def _wait_for_trigger_order_id(
         self,
@@ -442,6 +471,32 @@ class HyperliquidExchangeClient:
             time.sleep(delay_sec)
 
         return None
+
+    def _cancel_duplicate_trigger_orders(
+        self,
+        user: str,
+        coin: str,
+        side: str,
+        size: Decimal,
+        trigger_price: Decimal,
+        tpsl: str,
+        keep_oid: int,
+    ) -> None:
+        strict_matches = self._list_matching_trigger_orders(
+            user=user,
+            coin=coin,
+            side=side,
+            size=size,
+            trigger_price=trigger_price,
+            tpsl=tpsl,
+            strict_tpsl=True,
+        )
+        for match in strict_matches:
+            oid = int(match["oid"])
+            if oid == keep_oid:
+                continue
+            self.cancel_order(coin, oid)
+            logger.warning(f"Cancelled duplicate {tpsl.upper()} order for {coin}, oid={oid}, keep_oid={keep_oid}")
 
     def get_wallet_address_masked(self) -> str:
         return self._mask_address(self.account.address)
@@ -645,6 +700,24 @@ class HyperliquidExchangeClient:
         if normalized_size <= 0:
             return {"success": False, "reason": "invalid_size_after_normalization"}
 
+        # Avoid duplicates: if same trigger already exists, reuse it
+        existing_oid = self._wait_for_trigger_order_id(
+            user=self.account.address,
+            coin=coin,
+            side=side,
+            size=normalized_size,
+            trigger_price=trigger_price,
+            tpsl=tpsl,
+            attempts=1,
+            delay_sec=0.0,
+        )
+        if existing_oid is not None:
+            logger.info(
+                f"Reusing existing trigger order for {coin} {tpsl.upper()} {side.upper()} "
+                f"size={normalized_size} trigger={trigger_price} oid={existing_oid}"
+            )
+            return {"success": True, "order_id": existing_oid}
+
         asset_id = self.get_asset_id(coin)
         if asset_id is None:
             logger.error(f"Asset ID not found for trigger order {coin}")
@@ -680,22 +753,17 @@ class HyperliquidExchangeClient:
             logger.error(f"Trigger order not acknowledged by Hyperliquid statuses for {coin}: {statuses}")
             return {"success": False, "reason": "not_acknowledged"}
 
-        # Try direct extraction first (fast path)
-        order_ids = extract_order_ids(result)
-        order_id = order_ids[0] if order_ids else None
-
-        # If missing, use openOrders reconciliation (source of truth)
-        if order_id is None:
-            order_id = self._wait_for_trigger_order_id(
-                user=self.account.address,
-                coin=coin,
-                side=side,
-                size=normalized_size,
-                trigger_price=rounded_trigger,
-                tpsl=tpsl,
-                attempts=10,
-                delay_sec=0.6,
-            )
+        # Confirm ID from openOrders (source of truth)
+        order_id = self._wait_for_trigger_order_id(
+            user=self.account.address,
+            coin=coin,
+            side=side,
+            size=normalized_size,
+            trigger_price=rounded_trigger,
+            tpsl=tpsl,
+            attempts=10,
+            delay_sec=0.6,
+        )
 
         if order_id is None:
             logger.warning(
@@ -703,6 +771,17 @@ class HyperliquidExchangeClient:
                 f"size={normalized_size} trigger={rounded_trigger}"
             )
             return {"success": False, "reason": "missing_trigger_order_id"}
+
+        # Clean duplicates if any
+        self._cancel_duplicate_trigger_orders(
+            user=self.account.address,
+            coin=coin,
+            side=side,
+            size=normalized_size,
+            trigger_price=rounded_trigger,
+            tpsl=tpsl,
+            keep_oid=order_id,
+        )
 
         logger.info(
             f"LIVE trigger order placed {coin} {tpsl.upper()} {side.upper()} "
@@ -778,6 +857,24 @@ class HyperliquidExchangeClient:
             )
 
         if existing_sl_id is not None and existing_tp_id is not None:
+            self._cancel_duplicate_trigger_orders(
+                user=self.account.address,
+                coin=coin,
+                side=close_side,
+                size=close_size,
+                trigger_price=stop_loss_price,
+                tpsl="sl",
+                keep_oid=existing_sl_id,
+            )
+            self._cancel_duplicate_trigger_orders(
+                user=self.account.address,
+                coin=coin,
+                side=close_side,
+                size=close_size,
+                trigger_price=take_profit_price,
+                tpsl="tp",
+                keep_oid=existing_tp_id,
+            )
             return {
                 "success": True,
                 "stop_loss_order_id": existing_sl_id,
