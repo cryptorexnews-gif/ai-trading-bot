@@ -1,5 +1,5 @@
 from decimal import Decimal
-from typing import Any, Dict, Tuple
+from typing import Any, Dict, Set, Tuple
 
 
 def strategy_presets() -> Dict[str, Dict[str, str]]:
@@ -135,3 +135,59 @@ def normalize_strategy_params(raw_params: Dict[str, Any]) -> Tuple[Dict[str, Any
             continue
 
     return normalized, ""
+
+
+def validate_runtime_update_payload(
+    payload: Dict[str, Any],
+    coin_pattern,
+    live_allowed_pairs: Set[str],
+) -> Tuple[Dict[str, Any], str]:
+    if not isinstance(payload, dict):
+        return {}, "invalid_request"
+
+    strategy_mode = str(payload.get("strategy_mode", "trend")).strip().lower()
+    if strategy_mode not in {"trend", "scalping"}:
+        return {}, "invalid_strategy_mode"
+
+    raw_pairs = payload.get("trading_pairs", [])
+    if not isinstance(raw_pairs, list):
+        return {}, "invalid_trading_pairs"
+
+    normalized_pairs = []
+    for coin in raw_pairs:
+        c = str(coin).strip().upper()
+        if not c:
+            continue
+        if not coin_pattern.match(c):
+            return {}, f"invalid_coin_{c}"
+
+        if live_allowed_pairs and c not in live_allowed_pairs:
+            return {}, f"coin_not_available_on_hyperliquid_{c}"
+
+        if c not in normalized_pairs:
+            normalized_pairs.append(c)
+
+    if len(normalized_pairs) == 0:
+        return {}, "at_least_one_coin_required"
+    if len(normalized_pairs) > 20:
+        return {}, "too_many_coins_max_20"
+
+    preset_params = default_strategy_params(strategy_mode)
+    provided_params = payload.get("strategy_params", None)
+
+    if provided_params is None:
+        merged_params = dict(preset_params)
+    elif isinstance(provided_params, dict):
+        merged_params = {**preset_params, **provided_params}
+    else:
+        return {}, "invalid_strategy_params"
+
+    normalized_params, params_error = normalize_strategy_params(merged_params)
+    if params_error:
+        return {}, params_error
+
+    return {
+        "strategy_mode": strategy_mode,
+        "trading_pairs": normalized_pairs,
+        "strategy_params": normalized_params,
+    }, ""
