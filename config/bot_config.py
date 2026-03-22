@@ -163,7 +163,7 @@ class BotConfig:
 
         if self.llm_model != self.REQUIRED_LLM_MODEL:
             warnings.append(
-                f"LLM_MODEL '{self.llm_model}' non conforme: forzato a '{self.REQUIRED_LLM_MODEL}'."
+                f"LLM_MODEL '{self.llm_model}' non conforme: forzo '{self.REQUIRED_LLM_MODEL}'."
             )
             self.llm_model = self.REQUIRED_LLM_MODEL
 
