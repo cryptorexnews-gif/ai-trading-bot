@@ -1,5 +1,4 @@
 import logging
-import time
 from decimal import Decimal
 from typing import Any, Callable, Dict, List, Optional
 
@@ -7,12 +6,13 @@ from config.bot_config import BotConfig
 from correlation_engine import CorrelationEngine
 from execution_engine import ExecutionEngine
 from llm_engine import LLMEngine
-from models import MarketData, PortfolioState
+from models import PortfolioState
 from notifier import Notifier
 from orchestration.coin_processing_utils import log_coin_indicators
 from orchestration.decision_service import get_decision_for_coin
 from orchestration.execution_flow_service import execute_and_verify_trade
 from orchestration.execution_result_service import build_trade_record
+from orchestration.market_data_service import build_market_data
 from orchestration.post_trade_service import handle_successful_execution
 from orchestration.risk_gate_service import evaluate_trade_gates
 from order_verifier import OrderVerifier
@@ -86,19 +86,11 @@ class CoinCycleProcessor:
             logger.warning(f"Skipping {coin}: no market data")
             return None
 
-        market_data = MarketData(
-            coin=coin,
-            last_price=tech_data["current_price"],
-            change_24h=tech_data["change_24h"],
-            volume_24h=tech_data["volume_24h"],
-            funding_rate=tech_data["funding_rate"],
-            timestamp=time.time(),
-        )
-
+        market_data = build_market_data(coin=coin, technical_data=tech_data)
         log_coin_indicators(coin, market_data, tech_data)
 
         funding_data = technical_fetcher.get_funding_for_coin(coin)
-        decision = self._get_decision(
+        decision = get_decision_for_coin(
             coin=coin,
             market_data=market_data,
             portfolio=portfolio,
@@ -108,6 +100,13 @@ class CoinCycleProcessor:
             recent_trades=recent_trades,
             peak=peak,
             consecutive_losses=consecutive_losses,
+            llm_engine=self.llm_engine,
+            llm_rate_limiter=self.llm_rate_limiter,
+            metrics=self.metrics,
+            position_manager=self.position_manager,
+            exchange_client=self.execution_engine.exchange_client,
+            sync_exchange_protective_orders=self.sync_exchange_protective_orders,
+            logger=logger,
         )
 
         logger.info(
@@ -186,34 +185,3 @@ class CoinCycleProcessor:
         self.metrics.increment("execution_failures_total")
         logger.warning(f"{coin} execution failed: {result.get('reason', 'unknown')}")
         return {"trades": 0, "notional": Decimal("0"), "failed": True}
-
-    def _get_decision(
-        self,
-        coin: str,
-        market_data: MarketData,
-        portfolio: PortfolioState,
-        tech_data: Dict[str, Any],
-        all_mids: Optional[Dict[str, str]],
-        funding_data: Optional[Dict[str, Any]],
-        recent_trades: List[Dict[str, Any]],
-        peak: Decimal,
-        consecutive_losses: int,
-    ) -> Dict[str, Any]:
-        return get_decision_for_coin(
-            coin=coin,
-            market_data=market_data,
-            portfolio=portfolio,
-            tech_data=tech_data,
-            all_mids=all_mids,
-            funding_data=funding_data,
-            recent_trades=recent_trades,
-            peak=peak,
-            consecutive_losses=consecutive_losses,
-            llm_engine=self.llm_engine,
-            llm_rate_limiter=self.llm_rate_limiter,
-            metrics=self.metrics,
-            position_manager=self.position_manager,
-            exchange_client=self.execution_engine.exchange_client,
-            sync_exchange_protective_orders=self.sync_exchange_protective_orders,
-            logger=logger,
-        )
