@@ -1,5 +1,5 @@
 import time
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Set, Tuple
 
 
 _VALID_INTERVAL_MS = {
@@ -11,6 +11,28 @@ _VALID_INTERVAL_MS = {
     "4h": 14_400_000,
     "1d": 86_400_000,
 }
+
+
+def validate_coin(coin_raw: str, coin_pattern, known_pairs: Set[str]) -> str:
+    coin = (coin_raw or "").strip().upper()
+    if not coin_pattern.match(coin):
+        return ""
+    if coin not in known_pairs:
+        # Allowed, but route may choose to log informational message
+        return coin
+    return coin
+
+
+def validate_interval(interval: str, allowed_intervals: Set[str]) -> bool:
+    return interval in allowed_intervals
+
+
+def validate_limit(limit: int, min_limit: int = 1, max_limit: int = 500) -> bool:
+    return limit is not None and min_limit <= int(limit) <= max_limit
+
+
+def validate_n_sig_figs(n_sig_figs: int, min_val: int = 2, max_val: int = 5) -> bool:
+    return n_sig_figs is not None and min_val <= int(n_sig_figs) <= max_val
 
 
 def candle_request_payload(coin: str, interval: str, limit: int, now_ms: int = 0) -> Dict[str, Any]:

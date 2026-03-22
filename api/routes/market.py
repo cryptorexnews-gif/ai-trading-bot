@@ -11,6 +11,10 @@ from api.services.market_service import (
     serialize_candles_response,
     serialize_orderbook_debug,
     serialize_orderbook_response,
+    validate_coin,
+    validate_interval,
+    validate_limit,
+    validate_n_sig_figs,
 )
 
 logger = logging.getLogger(__name__)
@@ -21,15 +25,6 @@ _VALID_INTERVALS = {"1m", "3m", "5m", "15m", "1h", "4h", "1d"}
 _market_rl = build_rate_limiter("api_market_endpoints", max_tokens=120, tokens_per_second=4.0)
 
 
-def _validate_coin(coin_raw: str) -> str:
-    coin = (coin_raw or "").strip().upper()
-    if not COIN_PATTERN.match(coin):
-        return ""
-    if coin not in KNOWN_TRADING_PAIRS:
-        logger.info(f"Coin {coin} non presente in TRADING_PAIRS env, tentativo comunque consentito")
-    return coin
-
-
 @market_bp.route("/api/candles", methods=["GET"])
 @require_api_key
 def candles():
@@ -37,16 +32,18 @@ def candles():
     if rate_limit_resp:
         return rate_limit_resp
 
-    coin = _validate_coin(request.args.get("coin", ""))
+    coin = validate_coin(request.args.get("coin", ""), COIN_PATTERN, KNOWN_TRADING_PAIRS)
     if not coin:
         return jsonify({"error": "invalid_request"}), 400
+    if coin not in KNOWN_TRADING_PAIRS:
+        logger.info(f"Coin {coin} non presente in TRADING_PAIRS env, tentativo comunque consentito")
 
     interval = request.args.get("interval", "15m")
-    if interval not in _VALID_INTERVALS:
+    if not validate_interval(interval, _VALID_INTERVALS):
         return jsonify({"error": "invalid_request"}), 400
 
     limit = request.args.get("limit", 100, type=int)
-    if limit is None or limit < 1 or limit > 500:
+    if not validate_limit(limit):
         return jsonify({"error": "invalid_request"}), 400
 
     try:
@@ -65,12 +62,14 @@ def orderbook():
     if rate_limit_resp:
         return rate_limit_resp
 
-    coin = _validate_coin(request.args.get("coin", ""))
+    coin = validate_coin(request.args.get("coin", ""), COIN_PATTERN, KNOWN_TRADING_PAIRS)
     if not coin:
         return jsonify({"error": "invalid_request"}), 400
+    if coin not in KNOWN_TRADING_PAIRS:
+        logger.info(f"Coin {coin} non presente in TRADING_PAIRS env, tentativo comunque consentito")
 
     n_sig_figs = request.args.get("nSigFigs", 5, type=int)
-    if n_sig_figs is None or n_sig_figs < 2 or n_sig_figs > 5:
+    if not validate_n_sig_figs(n_sig_figs):
         return jsonify({"error": "invalid_request"}), 400
 
     try:
@@ -100,9 +99,11 @@ def orderbook_debug():
     if rate_limit_resp:
         return rate_limit_resp
 
-    coin = _validate_coin(request.args.get("coin", ""))
+    coin = validate_coin(request.args.get("coin", ""), COIN_PATTERN, KNOWN_TRADING_PAIRS)
     if not coin:
         return jsonify({"error": "invalid_request"}), 400
+    if coin not in KNOWN_TRADING_PAIRS:
+        logger.info(f"Coin {coin} non presente in TRADING_PAIRS env, tentativo comunque consentito")
 
     try:
         data = post_hyperliquid_info({
