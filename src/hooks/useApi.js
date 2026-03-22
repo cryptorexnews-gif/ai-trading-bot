@@ -7,6 +7,10 @@ function normalizeBaseUrl(value) {
 }
 
 const API_BASE = normalizeBaseUrl(import.meta.env.VITE_API_BASE_URL)
+const inFlightByEndpoint = new Map()
+const latestByEndpoint = new Map()
+const lastFetchAtByEndpoint = new Map()
+const MIN_ENDPOINT_REFETCH_MS = 700
 
 export function getApiBase() {
   return API_BASE
@@ -15,6 +19,47 @@ export function getApiBase() {
 export function getHeaders() {
   // Security: never send secrets from browser code.
   return {}
+}
+
+async function fetchEndpointJson(endpoint) {
+  const now = Date.now()
+  const lastFetchAt = lastFetchAtByEndpoint.get(endpoint) || 0
+  const hasFreshCache = latestByEndpoint.has(endpoint) && (now - lastFetchAt) < MIN_ENDPOINT_REFETCH_MS
+
+  if (hasFreshCache) {
+    return latestByEndpoint.get(endpoint)
+  }
+
+  if (inFlightByEndpoint.has(endpoint)) {
+    return inFlightByEndpoint.get(endpoint)
+  }
+
+  const requestPromise = (async () => {
+    const response = await fetch(`${API_BASE}${endpoint}`, {
+      credentials: 'same-origin',
+      headers: getHeaders(),
+    })
+
+    if (!response.ok) {
+      if (response.status === 401) {
+        throw new Error('Unauthorized')
+      }
+      throw new Error(`HTTP ${response.status}`)
+    }
+
+    const json = await response.json()
+    latestByEndpoint.set(endpoint, json)
+    lastFetchAtByEndpoint.set(endpoint, Date.now())
+    return json
+  })()
+
+  inFlightByEndpoint.set(endpoint, requestPromise)
+
+  try {
+    return await requestPromise
+  } finally {
+    inFlightByEndpoint.delete(endpoint)
+  }
 }
 
 export function useApi(endpoint, intervalMs = 1000) {
@@ -30,19 +75,7 @@ export function useApi(endpoint, intervalMs = 1000) {
     const currentFetchId = ++fetchIdRef.current
 
     try {
-      const response = await fetch(`${API_BASE}${endpoint}`, {
-        credentials: 'same-origin',
-        headers: getHeaders(),
-      })
-
-      if (!response.ok) {
-        if (response.status === 401) {
-          throw new Error('Unauthorized')
-        }
-        throw new Error(`HTTP ${response.status}`)
-      }
-
-      const json = await response.json()
+      const json = await fetchEndpointJson(endpoint)
 
       if (mountedRef.current && currentFetchId === fetchIdRef.current) {
         setData(json)
