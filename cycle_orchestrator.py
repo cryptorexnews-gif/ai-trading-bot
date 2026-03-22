@@ -264,7 +264,7 @@ class CycleOrchestrator:
             close_size = abs(pos_size)
 
             self.hl_rate_limiter.acquire(1)
-            result = self.exchange_client.place_order(coin, side, close_size, current_price)
+            result = self.exchange_client.place_order(coin, side, close_size, current_price, reduce_only=True)
 
             if result.get("success"):
                 triggered += 1
@@ -336,7 +336,7 @@ class CycleOrchestrator:
 
         if current_price > 0:
             self.hl_rate_limiter.acquire(1)
-            result = self.exchange_client.place_order(worst_coin, side, close_size, current_price)
+            result = self.exchange_client.place_order(worst_coin, side, close_size, current_price, reduce_only=True)
             if result.get("success"):
                 self._cancel_exchange_protective_orders(worst_coin)
                 self.position_manager.remove_position(worst_coin)

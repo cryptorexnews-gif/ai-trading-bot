@@ -47,17 +47,11 @@ class HyperliquidExchangeClient:
         self.info_timeout = info_timeout
         self.exchange_timeout = exchange_timeout
 
-        # IMPORTANT:
-        # - If vault_address is explicitly provided (including empty string), use it as-is.
-        # - Only if it's None, read from env as optional fallback.
-        # This prevents accidental reactivation of vault mode when bot wants wallet-only mode.
-        if vault_address is None:
-            env_vault = os.getenv("HYPERLIQUID_VAULT_ADDRESS", "").strip()
-            normalized_vault = env_vault
-        else:
-            normalized_vault = str(vault_address).strip()
-
-        self.vault_address: Optional[str] = normalized_vault if normalized_vault else None
+        requested_vault = str(vault_address).strip() if vault_address is not None else os.getenv("HYPERLIQUID_VAULT_ADDRESS", "").strip()
+        if requested_vault:
+            logger.warning("Vault mode requested but disabled by policy. Ignoring vault and using signer wallet only.")
+        self.vault_address: Optional[str] = None
+        os.environ["HYPERLIQUID_VAULT_ADDRESS"] = ""
 
         self.session = create_robust_session()
 
@@ -393,12 +387,12 @@ class HyperliquidExchangeClient:
         logger.error(f"Set leverage failed for {coin}: {result}")
         return False
 
-    def place_order(self, coin: str, side: str, size: Decimal, desired_price: Decimal) -> Dict[str, Any]:
+    def place_order(self, coin: str, side: str, size: Decimal, desired_price: Decimal, reduce_only: bool = False) -> Dict[str, Any]:
         if self.execution_mode != "live" or not self.enable_mainnet_trading:
             slip = (self.paper_slippage_bps / Decimal("10000"))
             fill_price = desired_price * (Decimal("1") + slip) if side.lower() == "buy" else desired_price * (Decimal("1") - slip)
             notional = abs(size * fill_price)
-            logger.info(f"PAPER order {coin} {side.upper()} size={size} fill={fill_price}")
+            logger.info(f"PAPER order {coin} {side.upper()} size={size} fill={fill_price} reduce_only={reduce_only}")
             return {"success": True, "mode": "paper", "filled_price": str(fill_price), "notional": str(notional)}
 
         asset_id = self.get_asset_id(coin)
@@ -430,7 +424,7 @@ class HyperliquidExchangeClient:
             "b": is_buy,
             "p": str(limit_price),
             "s": size_str,
-            "r": False,
+            "r": bool(reduce_only),
             "t": {"limit": {"tif": "Gtc"}}
         }
         action = {"type": "order", "orders": [order_wire], "grouping": "na"}
@@ -449,7 +443,7 @@ class HyperliquidExchangeClient:
                 return {"success": False, "mode": "live", "reason": "status_error", "notional": "0"}
 
         notional = abs(size * limit_price)
-        logger.info(f"LIVE order success {coin} {side.upper()} size={size_str} limit={limit_price}")
+        logger.info(f"LIVE order success {coin} {side.upper()} size={size_str} limit={limit_price} reduce_only={reduce_only}")
         return {"success": True, "mode": "live", "filled_price": str(limit_price), "notional": str(notional)}
 
     def place_trigger_order(

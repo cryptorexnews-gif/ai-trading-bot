@@ -90,7 +90,7 @@ class ExecutionEngine:
             pos_size = safe_decimal(positions[coin]["size"])
             side = "sell" if pos_size > 0 else "buy"
             close_size = abs(pos_size)
-            result = self.exchange_client.place_order(coin, side, close_size, market_data.last_price)
+            result = self.exchange_client.place_order(coin, side, close_size, market_data.last_price, reduce_only=True)
             return {
                 "success": bool(result.get("success", False)),
                 "notional": safe_decimal(result.get("notional", "0")),
@@ -104,7 +104,7 @@ class ExecutionEngine:
             current_size = abs(pos_size)
             reduce_size = size if size <= current_size else current_size
             side = "sell" if pos_size > 0 else "buy"
-            result = self.exchange_client.place_order(coin, side, reduce_size, market_data.last_price)
+            result = self.exchange_client.place_order(coin, side, reduce_size, market_data.last_price, reduce_only=True)
             return {
                 "success": bool(result.get("success", False)),
                 "notional": safe_decimal(result.get("notional", "0")),
