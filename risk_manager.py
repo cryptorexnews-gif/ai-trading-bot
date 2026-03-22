@@ -9,13 +9,9 @@ logger = logging.getLogger(__name__)
 
 class RiskManager:
     """
-    Risk manager con controlli operativi essenziali:
-    - validazione azioni/size/leverage
-    - soglie confidenza open/manage
-    - drawdown, margin usage, cap margine ordine
-    - cooldown per coin
-    - cap notionale giornaliero
-    - conflitti direzione posizione
+    Risk manager in modalità permissiva:
+    - lascia piena decisione all'LLM su leverage, size, confidence e timing
+    - mantiene solo validazioni operative minime (azione valida, presenza posizione per close/reduce/change leverage)
     """
 
     def __init__(
@@ -62,8 +58,6 @@ class RiskManager:
     ) -> Tuple[bool, str]:
         action = str(order.get("action", "")).strip().lower()
         raw_size = Decimal(str(order.get("size", 0)))
-        leverage = Decimal(str(order.get("leverage", 1)))
-        confidence = Decimal(str(order.get("confidence", 0)))
 
         valid_actions = {a.value for a in TradingAction}
         if action not in valid_actions:
@@ -71,25 +65,6 @@ class RiskManager:
 
         if action == TradingAction.HOLD.value:
             return True, "hold"
-
-        if leverage < 1 or leverage > self.hard_max_leverage:
-            return False, "leverage_out_of_bounds"
-
-        open_actions = {
-            TradingAction.BUY.value,
-            TradingAction.SELL.value,
-            TradingAction.INCREASE_POSITION.value,
-        }
-        manage_actions = {
-            TradingAction.CLOSE_POSITION.value,
-            TradingAction.REDUCE_POSITION.value,
-            TradingAction.CHANGE_LEVERAGE.value,
-        }
-
-        if action in open_actions and confidence < self.min_confidence_open:
-            return False, "confidence_open_too_low"
-        if action in manage_actions and confidence < self.min_confidence_manage:
-            return False, "confidence_manage_too_low"
 
         existing_size = Decimal("0")
         if coin in portfolio.positions:
@@ -110,53 +85,14 @@ class RiskManager:
         if action == TradingAction.REDUCE_POSITION.value:
             if existing_size == 0:
                 return False, "no_position_to_reduce"
-            if raw_size <= 0:
-                return False, "size_zero_or_negative"
-            order["size"] = min(abs(raw_size), abs(existing_size))
+            requested = abs(raw_size)
+            if requested <= 0:
+                requested = abs(existing_size)
+            order["size"] = min(requested, abs(existing_size))
             return True, "ok"
 
-        if raw_size <= 0:
-            return False, "size_zero_or_negative"
-
+        # Azioni di apertura/incremento: nessun limite imposto, solo normalizzazione size.
         size = abs(raw_size)
-        min_size = self.min_size_by_coin.get(coin, Decimal("0"))
-        if size < min_size:
-            return False, "size_below_min"
-
-        if action in {TradingAction.BUY.value, TradingAction.INCREASE_POSITION.value} and existing_size < 0:
-            return False, "conflict_buy_while_short"
-        if action == TradingAction.SELL.value and existing_size > 0:
-            return False, "conflict_sell_while_long"
-
-        if peak_portfolio_value is not None and peak_portfolio_value > 0:
-            drawdown = (peak_portfolio_value - portfolio.total_balance) / peak_portfolio_value
-            if drawdown > self.max_drawdown_pct:
-                return False, "max_drawdown_breached"
-
-        if portfolio.margin_usage > self.max_margin_usage:
-            return False, "margin_usage_too_high"
-
-        last_ts = last_trade_timestamps.get(coin)
-        if last_ts is not None:
-            elapsed = current_time - float(last_ts)
-            if elapsed < self.trade_cooldown_sec:
-                return False, "cooldown_active"
-
-        order_notional = size * current_price
-        if self.max_order_notional_usd > 0 and order_notional > self.max_order_notional_usd:
-            return False, "order_notional_cap_exceeded"
-
-        if self.daily_notional_limit_usd > 0 and (daily_notional_used + order_notional) > self.daily_notional_limit_usd:
-            return False, "daily_notional_cap_exceeded"
-
-        margin_required = order_notional / leverage if leverage > 0 else Decimal("0")
-        if margin_required > portfolio.available_balance:
-            return False, "insufficient_available_balance"
-
-        max_order_margin = portfolio.total_balance * self.max_order_margin_pct
-        if margin_required > max_order_margin:
-            return False, "order_margin_pct_exceeded"
-
         order["size"] = size
         return True, "ok"
 
