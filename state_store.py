@@ -138,7 +138,6 @@ class StateStore:
 
         trade_actions = {"buy", "sell", "close_position", "increase_position", "reduce_position"}
         hold_actions = {"hold", "no_trade", "skip"}
-        filled_statuses = {"filled", "partially_filled", "filled_late", "partially_filled_late"}
 
         wins = 0
         losses = 0
@@ -148,22 +147,29 @@ class StateStore:
         for t in history:
             action = str(t.get("action", "")).strip().lower()
             success = bool(t.get("success", False))
-            order_status = str(t.get("order_status", "")).strip().lower()
 
             if action in hold_actions or action not in trade_actions:
                 holds += 1
                 continue
 
+            # Qualsiasi execution con success=False è fallimento tecnico, non perdita trading.
             if not success:
-                # Failed execution / not filled should NOT count as losing trade.
-                if order_status in filled_statuses:
-                    losses += 1
-                else:
-                    failed_executions += 1
+                failed_executions += 1
                 continue
 
-            # Executed successful trade (legacy behavior keeps it as "win" in absence of realized pnl field).
-            wins += 1
+            # Se disponibile realized_pnl, usalo per distinguere win/loss.
+            if "realized_pnl" in t:
+                realized = Decimal(str(t.get("realized_pnl", "0")))
+                if realized < 0:
+                    losses += 1
+                elif realized > 0:
+                    wins += 1
+                else:
+                    # break-even: non influisce su win/loss
+                    pass
+            else:
+                # Retrocompatibilità: senza realized_pnl, i trade eseguiti restano classificati come win.
+                wins += 1
 
         actual_trades = wins + losses
 
