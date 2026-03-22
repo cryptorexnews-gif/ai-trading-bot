@@ -26,15 +26,24 @@ export default function useRealtimeStatus() {
 
       ws.onmessage = (event) => {
         if (!active) return
-        const json = JSON.parse(event.data)
-        setData(json)
-        setLastUpdated(new Date())
+        try {
+          const json = JSON.parse(event.data)
+          setData(json)
+          setLastUpdated(new Date())
+        } catch {
+          // Ignore malformed frames and keep stream alive
+        }
       }
 
       ws.onclose = () => {
         if (!active) return
         setConnected(false)
         reconnectTimerRef.current = window.setTimeout(connect, 1500)
+      }
+
+      ws.onerror = () => {
+        if (!active) return
+        setConnected(false)
       }
     }
 

@@ -56,7 +56,14 @@ def _is_authorized() -> bool:
     if not API_AUTH_KEY:
         return False
 
-    provided = request.args.get("api_key", "")
+    # Support both query string and header auth for WS (proxy-friendly)
+    provided_query = request.args.get("api_key", "")
+    provided_header = request.headers.get("X-API-Key", "")
+    provided = provided_query or provided_header
+
+    if not provided:
+        return False
+
     return hmac.compare_digest(provided.encode("utf-8"), API_AUTH_KEY.encode("utf-8"))
 
 
@@ -94,7 +101,10 @@ def ws_status(ws):
 
     while True:
         payload = _build_status_payload()
-        ws.send(json.dumps(payload, default=_json_default))
+        try:
+            ws.send(json.dumps(payload, default=_json_default))
+        except Exception:
+            break
         time.sleep(1.0)
 
 
@@ -125,5 +135,8 @@ def ws_market(ws):
                 "mids": mids,
             }
 
-        ws.send(json.dumps(payload, default=_json_default))
+        try:
+            ws.send(json.dumps(payload, default=_json_default))
+        except Exception:
+            break
         time.sleep(1.0)
