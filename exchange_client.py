@@ -1,5 +1,4 @@
 import logging
-import os
 import time
 from decimal import Decimal, ROUND_DOWN
 from typing import Any, Dict, List, Optional, Tuple
@@ -47,11 +46,10 @@ class HyperliquidExchangeClient:
         self.info_timeout = info_timeout
         self.exchange_timeout = exchange_timeout
 
-        requested_vault = str(vault_address).strip() if vault_address is not None else os.getenv("HYPERLIQUID_VAULT_ADDRESS", "").strip()
+        requested_vault = str(vault_address).strip() if vault_address is not None else ""
         if requested_vault:
             logger.warning("Vault mode requested but disabled by policy. Ignoring vault and using signer wallet only.")
         self.vault_address: Optional[str] = None
-        os.environ["HYPERLIQUID_VAULT_ADDRESS"] = ""
 
         self.session = create_robust_session()
 
@@ -226,12 +224,10 @@ class HyperliquidExchangeClient:
                     "Retry without vault succeeded. Disabling vault mode for subsequent requests."
                 )
                 self.vault_address = None
-                os.environ["HYPERLIQUID_VAULT_ADDRESS"] = ""
                 return retry_result
 
             return retry_result
 
-        # Retry once with fresh nonce in case of transient wallet/API wallet resolution errors.
         if self._is_user_or_api_wallet_not_found_error(result):
             logger.warning("Exchange reported wallet/API wallet not found. Retrying once with fresh nonce.")
             retry_result = self._post_signed_action_once(action, self.vault_address, timeout=timeout)

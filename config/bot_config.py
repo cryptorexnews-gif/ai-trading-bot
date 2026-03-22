@@ -41,9 +41,6 @@ class BotConfig:
 
     def __init__(self):
         self.wallet_address = _env("HYPERLIQUID_WALLET_ADDRESS", "")
-        self._vault_address_env = _env("HYPERLIQUID_VAULT_ADDRESS", "").strip()
-        # Forza modalità wallet+private key: niente vault per ordini/gestione posizioni
-        self.vault_address = ""
         self.execution_mode = _env("EXECUTION_MODE", "paper").lower()
         self.enable_mainnet_trading = _env_bool("ENABLE_MAINNET_TRADING", False)
         self.base_url = _env("HYPERLIQUID_BASE_URL", "https://api.hyperliquid.xyz")
@@ -118,6 +115,10 @@ class BotConfig:
         self.break_even_offset_pct = _env_decimal("BREAK_EVEN_OFFSET_PCT", "0.001")
         self.correlation_threshold = _env_decimal("CORRELATION_THRESHOLD", "0.7")
 
+        # Manteniamo l'attributo solo per compatibilità con il costruttore client,
+        # ma senza leggere alcuna variabile vault da env.
+        self.vault_address = ""
+
         self._normalize_runtime_values()
 
     def _normalize_runtime_values(self) -> None:
@@ -149,22 +150,11 @@ class BotConfig:
                 f"Expected 0x-prefixed 42-character hex string, got: {self.wallet_address[:10]}..."
             )
 
-        # Se presente, ignoriamo esplicitamente il vault e lo azzeriamo anche a runtime
-        # per evitare qualsiasi riutilizzo involontario nei client.
-        if self._vault_address_env:
-            warnings.append(
-                "HYPERLIQUID_VAULT_ADDRESS presente ma ignorato: il bot usa solo "
-                "HYPERLIQUID_WALLET_ADDRESS + HYPERLIQUID_PRIVATE_KEY."
-            )
-            os.environ["HYPERLIQUID_VAULT_ADDRESS"] = ""
-        self.vault_address = ""
-
         from exchange_client import HyperliquidExchangeClient
         from eth_account import Account
 
         signer_address = Account.from_key(private_key).address
 
-        # Modalità standard obbligatoria: signer deve coincidere col wallet configurato.
         if not HyperliquidExchangeClient.validate_wallet_address(private_key, self.wallet_address):
             derived = signer_address
             raise SystemExit(
