@@ -1,4 +1,9 @@
-TP protective order creation with confirmation and rollback, using same trading user as entry orders.">
+TP protective order flow without bulk path.">
+"""
+TP protective order creation with confirmation and rollback,
+using the same trading user as entry orders.
+"""
+
 import logging
 from decimal import Decimal
 from typing import Any, Dict, Optional, Tuple
