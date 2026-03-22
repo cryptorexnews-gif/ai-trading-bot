@@ -7,13 +7,15 @@ from utils.file_io import atomic_write_json, read_json_file
 class RuntimeConfigStore:
     """Persiste la configurazione runtime modificabile dal frontend."""
 
-    def __init__(self, path: str, default_trading_pairs: List[str]):
+    def __init__(self, path: str, default_trading_pairs: List[str], default_strategy_mode: str = "trend"):
         self.path = path
         self.default_trading_pairs = [p.strip().upper() for p in default_trading_pairs if p.strip()]
+        normalized_mode = str(default_strategy_mode or "trend").strip().lower()
+        self.default_strategy_mode = normalized_mode if normalized_mode in {"trend", "scalping"} else "trend"
 
     def _default(self) -> Dict[str, Any]:
         return {
-            "strategy_mode": "trend",
+            "strategy_mode": self.default_strategy_mode,
             "trading_pairs": self.default_trading_pairs or ["BTC", "ETH"],
             "updated_at": time.time(),
         }
@@ -28,7 +30,8 @@ class RuntimeConfigStore:
             if key not in data:
                 data[key] = value
 
-        data["strategy_mode"] = str(data.get("strategy_mode", "trend")).strip().lower()
+        mode = str(data.get("strategy_mode", self.default_strategy_mode)).strip().lower()
+        data["strategy_mode"] = mode if mode in {"trend", "scalping"} else self.default_strategy_mode
         data["trading_pairs"] = [
             str(p).strip().upper() for p in data.get("trading_pairs", []) if str(p).strip()
         ] or defaults["trading_pairs"]
@@ -36,8 +39,9 @@ class RuntimeConfigStore:
         return data
 
     def save(self, config: Dict[str, Any]) -> Dict[str, Any]:
+        mode = str(config.get("strategy_mode", self.default_strategy_mode)).strip().lower()
         payload = {
-            "strategy_mode": str(config.get("strategy_mode", "trend")).strip().lower(),
+            "strategy_mode": mode if mode in {"trend", "scalping"} else self.default_strategy_mode,
             "trading_pairs": [
                 str(p).strip().upper() for p in config.get("trading_pairs", []) if str(p).strip()
             ] or self._default()["trading_pairs"],

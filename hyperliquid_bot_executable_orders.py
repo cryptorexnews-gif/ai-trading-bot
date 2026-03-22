@@ -60,7 +60,7 @@ class HyperliquidBot:
         self._next_cycle_sec = self.cfg.default_cycle_sec
         self._shutdown_requested = False
         self._last_portfolio: Optional[PortfolioState] = None
-        self._active_strategy_mode = "trend"
+        self._active_strategy_mode = self.cfg.default_strategy_mode
         self._active_runtime_pairs: List[str] = list(self.cfg.trading_pairs)
 
         self._base_profile = {
@@ -101,7 +101,11 @@ class HyperliquidBot:
         )
 
         self.state_store = StateStore(self.cfg.state_path, self.cfg.metrics_path)
-        self.runtime_config_store = RuntimeConfigStore("state/runtime_config.json", self.cfg.trading_pairs)
+        self.runtime_config_store = RuntimeConfigStore(
+            "state/runtime_config.json",
+            self.cfg.trading_pairs,
+            default_strategy_mode=self.cfg.default_strategy_mode,
+        )
         self.metrics = MetricsCollector()
         self.notifier = Notifier(enabled=True)
         self.health_monitor = HealthMonitor()
@@ -203,27 +207,27 @@ class HyperliquidBot:
         pm = self.orchestrator.position_manager
 
         if strategy_mode == "scalping":
-            self.cfg.default_cycle_sec = 300
-            self.cfg.min_cycle_sec = 300
-            self.cfg.max_cycle_sec = 900
-            self.cfg.max_trades_per_cycle = 3
+            self.cfg.default_cycle_sec = self.cfg.scalping_default_cycle_sec
+            self.cfg.min_cycle_sec = self.cfg.scalping_min_cycle_sec
+            self.cfg.max_cycle_sec = self.cfg.scalping_max_cycle_sec
+            self.cfg.max_trades_per_cycle = self.cfg.scalping_max_trades_per_cycle
 
-            self.cfg.hard_max_leverage = Decimal("2")
-            self.cfg.min_confidence_open = Decimal("0.66")
-            self.cfg.min_confidence_manage = Decimal("0.45")
-            self.cfg.max_order_margin_pct = Decimal("0.06")
-            self.cfg.trade_cooldown_sec = 120
-            self.cfg.daily_notional_limit_usd = Decimal("25")
-            self.cfg.max_drawdown_pct = Decimal("0.08")
-            self.cfg.max_single_asset_pct = Decimal("0.25")
-            self.cfg.emergency_margin_threshold = Decimal("0.80")
-            self.cfg.trend_position_size_pct = Decimal("0.01")
-            self.cfg.volume_confirmation_threshold = Decimal("1.2")
-            self.cfg.trend_sl_pct = Decimal("0.02")
-            self.cfg.trend_tp_pct = Decimal("0.04")
-            self.cfg.trend_break_even_activation_pct = Decimal("0.01")
-            self.cfg.trend_trailing_activation_pct = Decimal("0.015")
-            self.cfg.trend_trailing_callback = Decimal("0.01")
+            self.cfg.hard_max_leverage = self.cfg.scalping_hard_max_leverage
+            self.cfg.min_confidence_open = self.cfg.scalping_min_confidence_open
+            self.cfg.min_confidence_manage = self.cfg.scalping_min_confidence_manage
+            self.cfg.max_order_margin_pct = self.cfg.scalping_max_order_margin_pct
+            self.cfg.trade_cooldown_sec = self.cfg.scalping_trade_cooldown_sec
+            self.cfg.daily_notional_limit_usd = self.cfg.scalping_daily_notional_limit_usd
+            self.cfg.max_drawdown_pct = self.cfg.scalping_max_drawdown_pct
+            self.cfg.max_single_asset_pct = self.cfg.scalping_max_single_asset_pct
+            self.cfg.emergency_margin_threshold = self.cfg.scalping_emergency_margin_threshold
+            self.cfg.trend_position_size_pct = self.cfg.scalping_position_size_pct
+            self.cfg.volume_confirmation_threshold = self.cfg.scalping_volume_confirmation_threshold
+            self.cfg.trend_sl_pct = self.cfg.scalping_sl_pct
+            self.cfg.trend_tp_pct = self.cfg.scalping_tp_pct
+            self.cfg.trend_break_even_activation_pct = self.cfg.scalping_break_even_activation_pct
+            self.cfg.trend_trailing_activation_pct = self.cfg.scalping_trailing_activation_pct
+            self.cfg.trend_trailing_callback = self.cfg.scalping_trailing_callback
         else:
             self.cfg.default_cycle_sec = self._base_profile["default_cycle_sec"]
             self.cfg.min_cycle_sec = self._base_profile["min_cycle_sec"]
@@ -267,23 +271,23 @@ class HyperliquidBot:
 
     def _apply_runtime_config(self, force: bool = False) -> None:
         runtime = self.runtime_config_store.load()
-        runtime_mode = str(runtime.get("strategy_mode", "trend")).strip().lower()
+        runtime_mode = str(runtime.get("strategy_mode", self.cfg.default_strategy_mode)).strip().lower()
         if runtime_mode not in {"trend", "scalping"}:
-            runtime_mode = "trend"
+            runtime_mode = self.cfg.default_strategy_mode
 
         runtime_pairs = [str(p).strip().upper() for p in runtime.get("trading_pairs", []) if str(p).strip()]
         if not runtime_pairs:
             runtime_pairs = list(self.cfg.trading_pairs)
 
+        mode_changed = runtime_mode != self._active_strategy_mode
+        pairs_changed_raw = runtime_pairs != self._active_runtime_pairs
+
+        if not force and not mode_changed and not pairs_changed_raw:
+            return
+
         validated_pairs = self._validate_trading_pairs(runtime_pairs)
         if not validated_pairs:
             validated_pairs = self._validate_trading_pairs(list(self.cfg.trading_pairs))
-
-        mode_changed = runtime_mode != self._active_strategy_mode
-        pairs_changed = validated_pairs != self._active_runtime_pairs
-
-        if not force and not mode_changed and not pairs_changed:
-            return
 
         self._apply_strategy_profile(runtime_mode)
         self.orchestrator.trading_pairs = validated_pairs

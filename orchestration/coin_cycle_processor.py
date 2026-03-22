@@ -91,12 +91,6 @@ class CoinCycleProcessor:
 
         self._log_coin_indicators(coin, market_data, tech_data)
 
-        corr_ok, corr_reason = self.correlation_engine.check_correlation_risk(
-            coin, "buy", portfolio.positions, correlations
-        )
-        if not corr_ok:
-            logger.info(f"{coin} correlation risk: {corr_reason}")
-
         funding_data = technical_fetcher.get_funding_for_coin(coin)
         decision = self._get_decision(
             coin=coin,
@@ -116,6 +110,9 @@ class CoinCycleProcessor:
             f"sl_pct={decision.get('stop_loss_pct')}, tp_pct={decision.get('take_profit_pct')}"
         )
 
+        corr_ok, corr_reason = self.correlation_engine.check_correlation_risk(
+            coin, decision["action"], portfolio.positions, correlations
+        )
         if not corr_ok and decision["action"] in ["buy", "sell", "increase_position"]:
             logger.info(f"{coin} blocked by correlation risk: {corr_reason}")
             self.metrics.increment("risk_rejections_total")

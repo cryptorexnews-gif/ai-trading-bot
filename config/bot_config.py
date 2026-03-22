@@ -112,6 +112,32 @@ class BotConfig:
         self.trend_trailing_activation_pct = _env_decimal("TREND_TRAILING_ACTIVATION_PCT", "0.03")
         self.trend_trailing_callback = _env_decimal("TREND_TRAILING_CALLBACK", "0.02")
 
+        self.default_strategy_mode = _env("DEFAULT_STRATEGY_MODE", "trend").strip().lower()
+        if self.default_strategy_mode not in {"trend", "scalping"}:
+            self.default_strategy_mode = "trend"
+
+        # Profilo scalping parametrizzabile via .env
+        self.scalping_default_cycle_sec = _env_int("SCALPING_DEFAULT_CYCLE_SEC", 300)
+        self.scalping_min_cycle_sec = _env_int("SCALPING_MIN_CYCLE_SEC", 300)
+        self.scalping_max_cycle_sec = _env_int("SCALPING_MAX_CYCLE_SEC", 900)
+        self.scalping_max_trades_per_cycle = _env_int("SCALPING_MAX_TRADES_PER_CYCLE", 3)
+        self.scalping_hard_max_leverage = _env_decimal("SCALPING_HARD_MAX_LEVERAGE", "2")
+        self.scalping_min_confidence_open = _env_decimal("SCALPING_MIN_CONFIDENCE_OPEN", "0.66")
+        self.scalping_min_confidence_manage = _env_decimal("SCALPING_MIN_CONFIDENCE_MANAGE", "0.45")
+        self.scalping_max_order_margin_pct = _env_decimal("SCALPING_MAX_ORDER_MARGIN_PCT", "0.06")
+        self.scalping_trade_cooldown_sec = _env_int("SCALPING_TRADE_COOLDOWN_SEC", 120)
+        self.scalping_daily_notional_limit_usd = _env_decimal("SCALPING_DAILY_NOTIONAL_LIMIT_USD", "25")
+        self.scalping_max_drawdown_pct = _env_decimal("SCALPING_MAX_DRAWDOWN_PCT", "0.08")
+        self.scalping_max_single_asset_pct = _env_decimal("SCALPING_MAX_SINGLE_ASSET_PCT", "0.25")
+        self.scalping_emergency_margin_threshold = _env_decimal("SCALPING_EMERGENCY_MARGIN_THRESHOLD", "0.80")
+        self.scalping_position_size_pct = _env_decimal("SCALPING_POSITION_SIZE_PCT", "0.01")
+        self.scalping_volume_confirmation_threshold = _env_decimal("SCALPING_VOLUME_CONFIRMATION_THRESHOLD", "1.2")
+        self.scalping_sl_pct = _env_decimal("SCALPING_SL_PCT", "0.02")
+        self.scalping_tp_pct = _env_decimal("SCALPING_TP_PCT", "0.04")
+        self.scalping_break_even_activation_pct = _env_decimal("SCALPING_BREAK_EVEN_ACTIVATION_PCT", "0.01")
+        self.scalping_trailing_activation_pct = _env_decimal("SCALPING_TRAILING_ACTIVATION_PCT", "0.015")
+        self.scalping_trailing_callback = _env_decimal("SCALPING_TRAILING_CALLBACK", "0.01")
+
         self.enable_trailing_stop = _env_bool("ENABLE_TRAILING_STOP", True)
         self.break_even_offset_pct = _env_decimal("BREAK_EVEN_OFFSET_PCT", "0.001")
         self.correlation_threshold = _env_decimal("CORRELATION_THRESHOLD", "0.7")

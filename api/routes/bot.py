@@ -34,7 +34,8 @@ bot_bp = Blueprint("bot", __name__)
 _state_store = StateStore(STATE_PATH, METRICS_PATH)
 _runtime_store = RuntimeConfigStore(
     RUNTIME_CONFIG_PATH,
-    [p.strip().upper() for p in os.getenv("TRADING_PAIRS", "BTC,ETH,SOL").split(",") if p.strip()]
+    [p.strip().upper() for p in os.getenv("TRADING_PAIRS", "BTC,ETH,SOL").split(",") if p.strip()],
+    default_strategy_mode=os.getenv("DEFAULT_STRATEGY_MODE", "trend"),
 )
 _bot_rl = get_rate_limiter("api_bot_endpoints", max_tokens=100, tokens_per_second=3.0)
 _config_rl = get_rate_limiter("api_bot_config_endpoint", max_tokens=300, tokens_per_second=20.0)
