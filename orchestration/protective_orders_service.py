@@ -133,7 +133,6 @@ class ProtectiveOrdersService:
 
         if changed:
             self.position_manager.clear_protective_order_ids(coin)
-            self.position_manager._save_state()
             logger.warning(
                 f"{coin} repaired managed SL/TP config: "
                 f"sl_pct={managed.stop_loss.percentage}, tp_pct={managed.take_profit.percentage}"

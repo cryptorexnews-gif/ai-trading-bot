@@ -61,16 +61,19 @@ class BotBootstrap:
         health_monitor.add_check("state_writable", lambda: check_file_writable("state"), interval=300.0)
 
     @staticmethod
-    def build() -> BotRuntimeContext:
+    def _build_cfg() -> BotConfig:
         cfg = BotConfig.from_env()
         setup_logging(log_level=cfg.log_level, json_format=True, log_file=cfg.log_file, console_output=True)
 
         warnings = cfg.validate()
         for warning in warnings:
             logging.warning(f"CONFIG WARNING: {warning}")
+        return cfg
 
+    @staticmethod
+    def _build_exchange_client(cfg: BotConfig) -> HyperliquidExchangeClient:
         private_key = os.getenv("HYPERLIQUID_PRIVATE_KEY", "")
-        exchange_client = HyperliquidExchangeClient(
+        return HyperliquidExchangeClient(
             base_url=cfg.base_url,
             private_key=private_key,
             enable_mainnet_trading=cfg.enable_mainnet_trading,
@@ -82,6 +85,11 @@ class BotBootstrap:
             vault_address=cfg.vault_address,
         )
 
+    @staticmethod
+    def _build_state_runtime_metrics_notifier_health(
+        cfg: BotConfig,
+        exchange_client: HyperliquidExchangeClient,
+    ):
         state_store = StateStore(cfg.state_path, cfg.metrics_path)
         runtime_config_store = RuntimeConfigStore(
             "state/runtime_config.json",
@@ -92,10 +100,23 @@ class BotBootstrap:
         notifier = Notifier(enabled=True)
         health_monitor = HealthMonitor()
         BotBootstrap._setup_health_checks(health_monitor, exchange_client)
+        return state_store, runtime_config_store, metrics, notifier, health_monitor
 
-        portfolio_service = PortfolioService(exchange_client, cfg.wallet_address)
+    @staticmethod
+    def _build_portfolio_service(exchange_client: HyperliquidExchangeClient, cfg: BotConfig) -> PortfolioService:
+        return PortfolioService(exchange_client, cfg.wallet_address)
 
-        orchestrator = CycleOrchestrator(
+    @staticmethod
+    def _build_orchestrator(
+        cfg: BotConfig,
+        exchange_client: HyperliquidExchangeClient,
+        state_store: StateStore,
+        metrics: MetricsCollector,
+        notifier: Notifier,
+        health_monitor: HealthMonitor,
+        portfolio_service: PortfolioService,
+    ) -> CycleOrchestrator:
+        return CycleOrchestrator(
             cfg=cfg,
             exchange_client=exchange_client,
             execution_engine=ExecutionEngine(exchange_client),
@@ -141,7 +162,9 @@ class BotBootstrap:
             trading_pairs=list(cfg.trading_pairs),
         )
 
-        base_profile = {
+    @staticmethod
+    def _build_base_profile(cfg: BotConfig) -> Dict[str, Any]:
+        return {
             "default_cycle_sec": cfg.default_cycle_sec,
             "min_cycle_sec": cfg.min_cycle_sec,
             "max_cycle_sec": cfg.max_cycle_sec,
@@ -163,6 +186,25 @@ class BotBootstrap:
             "trend_position_size_pct": cfg.trend_position_size_pct,
             "volume_confirmation_threshold": cfg.volume_confirmation_threshold,
         }
+
+    @staticmethod
+    def build() -> BotRuntimeContext:
+        cfg = BotBootstrap._build_cfg()
+        exchange_client = BotBootstrap._build_exchange_client(cfg)
+        state_store, runtime_config_store, metrics, notifier, health_monitor = (
+            BotBootstrap._build_state_runtime_metrics_notifier_health(cfg, exchange_client)
+        )
+        portfolio_service = BotBootstrap._build_portfolio_service(exchange_client, cfg)
+        orchestrator = BotBootstrap._build_orchestrator(
+            cfg=cfg,
+            exchange_client=exchange_client,
+            state_store=state_store,
+            metrics=metrics,
+            notifier=notifier,
+            health_monitor=health_monitor,
+            portfolio_service=portfolio_service,
+        )
+        base_profile = BotBootstrap._build_base_profile(cfg)
 
         return BotRuntimeContext(
             cfg=cfg,

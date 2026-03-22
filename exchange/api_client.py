@@ -1,11 +1,11 @@
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from exchange.transport import post_exchange_with_circuit_breaker, post_json_with_circuit_breaker
 
 
 class ExchangeAPIClient:
-    """Thin API client for Hyperliquid /info and /exchange with cache support."""
+    """Thin API client for Hyperliquid /info and /exchange with single-source cache ownership."""
 
     def __init__(self, session, base_url, info_timeout, exchange_timeout, info_cb, exchange_cb, meta_cache_ttl_sec=120):
         self.session = session
@@ -50,32 +50,52 @@ class ExchangeAPIClient:
         result = self.post_info({"type": "batch", "requests": requests_payload}, timeout=timeout)
         return result if isinstance(result, list) else []
 
-    def get_meta(self, force_refresh: bool = False) -> Optional[Dict[str, Any]]:
+    def get_meta(
+        self,
+        force_refresh: bool = False,
+        fetcher: Optional[Callable[[Dict[str, Any], Optional[int]], Optional[Any]]] = None,
+    ) -> Optional[Dict[str, Any]]:
         now = time.time()
         if not force_refresh and self._meta_cache and (now - self._meta_cache_at) < self.meta_cache_ttl_sec:
             return self._meta_cache
 
-        meta = self.post_info({"type": "meta"})
+        effective_fetcher = fetcher if fetcher is not None else self.post_info
+        meta = effective_fetcher({"type": "meta"}, None)
         if meta is not None:
             self._meta_cache = meta
             self._meta_cache_at = now
         return self._meta_cache
 
-    def get_all_mids(self, force_refresh: bool = False) -> Optional[Dict[str, str]]:
+    def get_all_mids(
+        self,
+        force_refresh: bool = False,
+        fetcher: Optional[Callable[[Dict[str, Any], Optional[int]], Optional[Any]]] = None,
+    ) -> Optional[Dict[str, str]]:
         now = time.time()
         if not force_refresh and self._mids_cache and (now - self._mids_cache_at) < self._mids_cache_ttl:
             return self._mids_cache
 
-        mids = self.post_info({"type": "allMids"})
+        effective_fetcher = fetcher if fetcher is not None else self.post_info
+        mids = effective_fetcher({"type": "allMids"}, None)
         if mids is not None:
             self._mids_cache = mids
             self._mids_cache_at = now
         return self._mids_cache
 
-    def get_user_state(self, user: str) -> Optional[Dict[str, Any]]:
-        return self.post_info({"type": "clearinghouseState", "user": user})
+    def get_user_state(
+        self,
+        user: str,
+        fetcher: Optional[Callable[[Dict[str, Any], Optional[int]], Optional[Any]]] = None,
+    ) -> Optional[Dict[str, Any]]:
+        effective_fetcher = fetcher if fetcher is not None else self.post_info
+        return effective_fetcher({"type": "clearinghouseState", "user": user}, None)
 
-    def get_open_orders(self, user: str, force_refresh: bool = False) -> List[Dict[str, Any]]:
+    def get_open_orders(
+        self,
+        user: str,
+        force_refresh: bool = False,
+        fetcher: Optional[Callable[[Dict[str, Any], Optional[int]], Optional[Any]]] = None,
+    ) -> List[Dict[str, Any]]:
         effective_user = str(user or "").strip()
         now = time.time()
 
@@ -84,7 +104,8 @@ class ExchangeAPIClient:
             data = cached.get("data", [])
             return data if isinstance(data, list) else []
 
-        data = self.post_info({"type": "openOrders", "user": effective_user})
+        effective_fetcher = fetcher if fetcher is not None else self.post_info
+        data = effective_fetcher({"type": "openOrders", "user": effective_user}, None)
         orders = data if isinstance(data, list) else []
         self._open_orders_cache_by_user[effective_user] = {"at": now, "data": orders}
         return orders

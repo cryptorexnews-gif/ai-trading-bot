@@ -11,9 +11,9 @@ CycleOrchestrator — runs a single trading cycle through clear phases:
 
 import logging
 from decimal import Decimal
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Tuple
 
-from orchestration.coin_cycle_processor import CoinCycleProcessor
+from orchestration.coin_cycle_processor import CoinCycleProcessor, CoinProcessingContext
 from orchestration.coin_scheduler import CoinScheduler
 from orchestration.emergency_derisk_service import EmergencyDeriskService
 from orchestration.protective_orders_service import ProtectiveOrdersService
@@ -94,7 +94,7 @@ class CycleOrchestrator:
             cfg=self.cfg,
         )
 
-        self.coin_processor = CoinCycleProcessor(
+        coin_context = CoinProcessingContext(
             cfg=self.cfg,
             execution_engine=self.execution_engine,
             risk_manager=self.risk_manager,
@@ -113,6 +113,8 @@ class CycleOrchestrator:
             cancel_exchange_protective_orders=self._cancel_exchange_protective_orders,
         )
 
+        self.coin_processor = CoinCycleProcessor(context=coin_context)
+
         self.coin_scheduler = CoinScheduler(
             correlation_engine=self.correlation_engine,
             coin_processor=self.coin_processor,
@@ -120,8 +122,6 @@ class CycleOrchestrator:
 
     def set_cycle_count(self, count: int) -> None:
         self._cycle_count = count
-
-    # ─── Phase 1: Health Check ────────────────────────────────────────────
 
     def _run_health_check(self, cycle_count: int) -> None:
         if cycle_count % 10 != 1:
@@ -132,8 +132,6 @@ class CycleOrchestrator:
             self.notifier.notify_error(f"Health check unhealthy: {health_result['summary']}")
         elif health_result["status"] == HealthStatus.DEGRADED:
             logger.warning(f"Health check DEGRADED: {health_result['summary']}")
-
-    # ─── Phase 2: Portfolio Snapshot ──────────────────────────────────────
 
     def _fetch_portfolio(self):
         self.hl_rate_limiter.acquire(1)
@@ -151,17 +149,11 @@ class CycleOrchestrator:
         )
         return portfolio
 
-    # ─── Phase 3: SL/TP/Trailing/Break-Even ───────────────────────────────
-
     def _process_risk_triggers(self, portfolio) -> int:
         return self.risk_trigger_service.process_risk_triggers(portfolio)
 
-    # ─── Phase 4: Emergency De-Risk ───────────────────────────────────────
-
     def _handle_emergency_derisk(self, portfolio):
         return self.emergency_derisk_service.handle_emergency_derisk(portfolio)
-
-    # ─── Phase 5: Per-Coin Analysis & Execution ──────────────────────────
 
     def _analyze_and_trade(
         self,
@@ -183,8 +175,6 @@ class CycleOrchestrator:
             consecutive_losses=consecutive_losses,
             shutdown_requested=shutdown_requested,
         )
-
-    # ─── Delegated callbacks for coin processor ────────────────────────────
 
     def _sync_exchange_protective_orders(self, coin: str) -> bool:
         return self.protective_orders_service.sync_exchange_protective_orders(coin)

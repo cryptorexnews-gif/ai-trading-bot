@@ -1,31 +1,17 @@
 import logging
 import os
-import time
 from decimal import Decimal, ROUND_DOWN
 from typing import Any, Dict, List, Optional, Tuple
 
 from eth_account import Account
 
 from exchange.api_client import ExchangeAPIClient
-from exchange.market_rules import (
-    default_tick_size_for_asset,
-    infer_tick_size_and_precision_from_mid,
-    normalize_size_for_decimals,
-)
-from exchange.order_builder import (
-    build_cancel_action,
-    build_limit_order_action,
-    build_update_leverage_action,
-)
+from exchange.market_data_service import ExchangeMarketDataService
+from exchange.market_rules import normalize_size_for_decimals
+from exchange.order_execution_service import OrderExecutionService
 from exchange.order_query import OrderQueryService
-from exchange.parsers import (
-    extract_order_ids,
-    extract_statuses,
-    get_first_status_error,
-    has_acknowledged_order_status,
-)
 from exchange.protective_orders import ProtectiveOrdersService
-from exchange.signing import sign_l1_action_exact
+from exchange.signed_action_service import SignedActionService
 from utils.circuit_breaker import get_or_create_circuit_breaker
 from utils.decimals import safe_decimal
 from utils.http import create_robust_session
@@ -83,20 +69,6 @@ class HyperliquidExchangeClient:
         self._trading_user_address = env_wallet
         self._fixed_vault_for_signing = None
 
-        self._last_nonce: int = 0
-        self._meta_cache: Optional[Dict[str, Any]] = None
-        self._meta_cache_at = 0.0
-        self._mids_cache: Optional[Dict[str, str]] = None
-        self._mids_cache_at = 0.0
-        self._mids_cache_ttl = 30.0
-
-        self._open_orders_cache_by_user: Dict[str, Dict[str, Any]] = {}
-        self._open_orders_cache_ttl_sec = 2.0
-
-        self._auth_error_count = 0
-        self._auth_block_until = 0.0
-        self._auth_cooldown_sec = 120.0
-
         self._info_cb = get_or_create_circuit_breaker(
             "hyperliquid_info", failure_threshold=5, recovery_timeout=30.0
         )
@@ -113,6 +85,14 @@ class HyperliquidExchangeClient:
             exchange_cb=self._exchange_cb,
             meta_cache_ttl_sec=self.meta_cache_ttl_sec,
         )
+        self._market_data = ExchangeMarketDataService(self._api_client)
+
+        self._signed_actions = SignedActionService(
+            account=self.account,
+            post_exchange_func=self._post_exchange,
+            is_auth_error_func=self._is_auth_error,
+        )
+
         self._order_query = OrderQueryService(
             get_open_orders=self.get_open_orders,
             cancel_order=self.cancel_order,
@@ -121,6 +101,7 @@ class HyperliquidExchangeClient:
             client=self,
             order_query_service=self._order_query,
         )
+        self._execution = OrderExecutionService(self)
 
         logger.info(
             f"Exchange client initialized: base_url={self.base_url}, mode={self.execution_mode}, "
@@ -162,12 +143,8 @@ class HyperliquidExchangeClient:
         derived = Account.from_key(private_key).address
         return derived.lower() == expected_address.lower()
 
-    def _next_nonce(self) -> int:
-        current_ms = int(time.time() * 1000)
-        if current_ms <= self._last_nonce:
-            current_ms = self._last_nonce + 1
-        self._last_nonce = current_ms
-        return current_ms
+    def get_wallet_address_masked(self) -> str:
+        return self._mask_address(self.account.address)
 
     def _post_info(self, payload: Dict[str, Any], timeout: Optional[int] = None) -> Optional[Any]:
         return self._api_client.post_info(payload, timeout=timeout)
@@ -184,99 +161,40 @@ class HyperliquidExchangeClient:
         timeout: Optional[int] = None,
         vault_address_override: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
-        nonce = self._next_nonce()
-        signature = sign_l1_action_exact(
-            account=self.account,
+        return self._signed_actions.post_signed_action_once(
             action=action,
-            vault_address=vault_address_override,
-            nonce=nonce,
-            expires_after=None,
-            is_mainnet=True,
+            timeout=timeout,
+            vault_address_override=vault_address_override,
         )
-        payload = {
-            "action": action,
-            "nonce": nonce,
-            "signature": signature,
-            "vaultAddress": vault_address_override,
-        }
-        return self._post_exchange(payload, timeout=timeout)
 
     def _post_signed_action_with_master_retry(self, action: Dict[str, Any], timeout: Optional[int] = None) -> Optional[Dict[str, Any]]:
         """
         Nome mantenuto per compatibilità interna.
         Comportamento attuale: identità fissa da .env, nessun retry con utente/vault alternativi.
         """
-        now = time.time()
-        if now < self._auth_block_until:
-            logger.error(
-                f"Auth cooldown active ({int(self._auth_block_until - now)}s left), skipping signed action."
-            )
-            return {"status": "err", "response": "auth_cooldown_active"}
-
-        result = self._post_signed_action_once(
+        return self._signed_actions.post_signed_action_with_auth_guard(
             action=action,
             timeout=timeout,
             vault_address_override=self._fixed_vault_for_signing,
         )
 
-        if self._is_auth_error(result):
-            self._auth_error_count += 1
-            logger.warning(
-                f"Auth failed with fixed trading identity "
-                f"(trading_user={self._mask_address(self._trading_user_address)}, signer={self.get_wallet_address_masked()}): {result}"
-            )
-            if self._auth_error_count >= 2:
-                self._auth_block_until = time.time() + self._auth_cooldown_sec
-                logger.error(
-                    f"Persistent auth errors. Enabling auth cooldown for {int(self._auth_cooldown_sec)}s"
-                )
-        else:
-            self._auth_error_count = 0
-
-        return result
-
-    def get_wallet_address_masked(self) -> str:
-        return self._mask_address(self.account.address)
-
     def get_meta(self, force_refresh: bool = False) -> Optional[Dict[str, Any]]:
-        now = time.time()
-        if not force_refresh and self._meta_cache and (now - self._meta_cache_at) < self.meta_cache_ttl_sec:
-            return self._meta_cache
-        meta = self._post_info({"type": "meta"})
-        if meta is None:
-            return self._meta_cache
-        self._meta_cache = meta
-        self._meta_cache_at = now
-        return meta
+        return self._market_data.get_meta(force_refresh=force_refresh, fetcher=self._post_info)
 
     def get_all_mids(self, force_refresh: bool = False) -> Optional[Dict[str, str]]:
-        now = time.time()
-        if not force_refresh and self._mids_cache and (now - self._mids_cache_at) < self._mids_cache_ttl:
-            return self._mids_cache
-        mids = self._post_info({"type": "allMids"})
-        if mids is None:
-            return self._mids_cache
-        self._mids_cache = mids
-        self._mids_cache_at = now
-        return mids
+        return self._market_data.get_all_mids(force_refresh=force_refresh, fetcher=self._post_info)
 
     def get_user_state(self, user: str) -> Optional[Dict[str, Any]]:
-        return self._post_info({"type": "clearinghouseState", "user": user})
+        return self._market_data.get_user_state(user=user, fetcher=self._post_info)
 
     def get_open_orders(self, user: str, force_refresh: bool = False) -> List[Dict[str, Any]]:
         requested_user = str(user or "").strip()
         effective_user = requested_user if requested_user else self._trading_user_address
-
-        now = time.time()
-        cached = self._open_orders_cache_by_user.get(effective_user)
-        if not force_refresh and cached and (now - float(cached.get("at", 0.0))) < self._open_orders_cache_ttl_sec:
-            data = cached.get("data", [])
-            return data if isinstance(data, list) else []
-
-        data = self._post_info({"type": "openOrders", "user": effective_user})
-        orders = data if isinstance(data, list) else []
-        self._open_orders_cache_by_user[effective_user] = {"at": now, "data": orders}
-        return orders
+        return self._market_data.get_open_orders(
+            user=effective_user,
+            force_refresh=force_refresh,
+            fetcher=self._post_info,
+        )
 
     def are_order_ids_open(self, user: str, coin: str, order_ids: List[int]) -> bool:
         wanted = {int(oid) for oid in order_ids if oid is not None}
@@ -305,54 +223,27 @@ class HyperliquidExchangeClient:
         return wanted.issubset(found)
 
     def get_asset_id(self, coin: str) -> Optional[int]:
-        meta = self.get_meta(force_refresh=False)
-        if meta is None:
-            return None
-        for index, asset in enumerate(meta.get("universe", [])):
-            if asset.get("name") == coin:
-                return index
-        return None
+        return self._market_data.get_asset_id(coin=coin, meta=self.get_meta(force_refresh=False))
 
     def get_max_leverage(self, coin: str) -> int:
-        meta = self.get_meta(force_refresh=False)
-        if meta is None:
-            return 10
-        for asset in meta.get("universe", []):
-            if asset.get("name") == coin:
-                return int(asset.get("maxLeverage", 10))
-        return 10
+        return self._market_data.get_max_leverage(coin=coin, meta=self.get_meta(force_refresh=False))
 
     def get_sz_decimals(self, coin: str) -> Optional[int]:
-        meta = self.get_meta(force_refresh=False)
-        if meta is None:
-            return None
-        for asset in meta.get("universe", []):
-            if asset.get("name") == coin:
-                return asset.get("szDecimals")
-        return None
+        return self._market_data.get_sz_decimals(coin=coin, meta=self.get_meta(force_refresh=False))
 
     def get_reference_price(self, coin: str, fallback_price: Decimal) -> Decimal:
-        mids = self.get_all_mids()
-        if mids and coin in mids:
-            mid_price = safe_decimal(mids[coin], Decimal("0"))
-            if mid_price > 0:
-                return mid_price
-        return fallback_price
+        return self._market_data.get_reference_price(
+            coin=coin,
+            fallback_price=fallback_price,
+            mids=self.get_all_mids(force_refresh=False),
+        )
 
     def get_tick_size_and_precision(self, asset_id: int) -> Tuple[Decimal, int]:
-        meta = self.get_meta(force_refresh=False)
-        if meta is None:
-            return Decimal("0.01"), 2
-
-        universe = meta.get("universe", [])
-        if not (0 <= asset_id < len(universe)):
-            return Decimal("0.01"), 2
-
-        coin = universe[asset_id].get("name", "")
-        mids = self.get_all_mids()
-        if mids is not None and coin in mids:
-            return infer_tick_size_and_precision_from_mid(str(mids.get(coin, "0")))
-        return default_tick_size_for_asset(asset_id)
+        return self._market_data.get_tick_size_and_precision(
+            asset_id=asset_id,
+            meta=self.get_meta(force_refresh=False),
+            mids=self.get_all_mids(force_refresh=False),
+        )
 
     def _normalize_size_for_coin(self, coin: str, size: Decimal) -> Decimal:
         if size <= 0:
@@ -501,90 +392,16 @@ class HyperliquidExchangeClient:
         )
 
     def set_leverage(self, coin: str, leverage: int) -> bool:
-        if not self._live_orders_enabled():
-            logger.error("Live leverage blocked: EXECUTION_MODE must be live and ENABLE_MAINNET_TRADING=true")
-            return False
-
-        leverage = max(1, leverage)
-        max_leverage = self.get_max_leverage(coin)
-        if leverage > max_leverage:
-            leverage = max_leverage
-
-        asset_id = self.get_asset_id(coin)
-        if asset_id is None:
-            logger.error(f"Asset ID not found for {coin}")
-            return False
-
-        action = build_update_leverage_action(asset_id=asset_id, leverage=leverage)
-        result = self._post_signed_action_with_master_retry(action)
-        if result is None:
-            return False
-        if self._is_ok_result(result):
-            logger.info(f"LIVE leverage set {coin} -> {leverage}x")
-            return True
-        logger.error(f"Set leverage failed for {coin}: {result}")
-        return False
+        return self._execution.set_leverage(coin=coin, leverage=leverage)
 
     def place_order(self, coin: str, side: str, size: Decimal, desired_price: Decimal, reduce_only: bool = False) -> Dict[str, Any]:
-        if not self._live_orders_enabled():
-            return {"success": False, "mode": "live", "reason": "live_disabled_fail_closed", "notional": "0"}
-
-        normalized_size = self._normalize_size_for_coin(coin, abs(size))
-        if normalized_size <= 0:
-            return {"success": False, "mode": "live", "reason": "invalid_size_after_normalization", "notional": "0"}
-
-        asset_id = self.get_asset_id(coin)
-        if asset_id is None:
-            logger.error(f"Asset ID not found for {coin}")
-            return {"success": False, "mode": "live", "reason": "asset_not_found", "notional": "0"}
-
-        normalized_side = side.lower()
-        if normalized_side not in {"buy", "sell"}:
-            return {"success": False, "mode": "live", "reason": "invalid_side", "notional": "0"}
-
-        is_buy = normalized_side == "buy"
-        limit_price = self._resolve_limit_price(coin=coin, side=normalized_side, desired_price=desired_price, asset_id=asset_id)
-        if limit_price <= 0:
-            return {"success": False, "mode": "live", "reason": "invalid_limit_price", "notional": "0"}
-
-        action = build_limit_order_action(
-            asset_id=asset_id,
-            is_buy=is_buy,
-            price=limit_price,
-            size=normalized_size,
+        return self._execution.place_order(
+            coin=coin,
+            side=side,
+            size=size,
+            desired_price=desired_price,
             reduce_only=reduce_only,
         )
-
-        result = self._post_signed_action_with_master_retry(action)
-        if result is None:
-            return {"success": False, "mode": "live", "reason": "http_error", "notional": "0"}
-        if not self._is_ok_result(result):
-            logger.error(f"Exchange rejected order for {coin}: {result}")
-            return {"success": False, "mode": "live", "reason": "exchange_rejected", "notional": "0"}
-
-        statuses = extract_statuses(result)
-        status_error = get_first_status_error(statuses)
-        if status_error is not None:
-            logger.error(f"Order status error for {coin}: {status_error}")
-            return {"success": False, "mode": "live", "reason": "status_error", "notional": "0"}
-
-        if statuses and not has_acknowledged_order_status(statuses):
-            logger.error(f"Order not acknowledged by Hyperliquid statuses for {coin}: {statuses}")
-            return {"success": False, "mode": "live", "reason": "not_acknowledged", "notional": "0"}
-
-        order_ids = extract_order_ids(result)
-        notional = abs(normalized_size * limit_price)
-        logger.info(
-            f"LIVE order success {coin} {normalized_side.upper()} size={normalized_size} "
-            f"limit={limit_price} reduce_only={reduce_only} oids={order_ids}"
-        )
-        return {
-            "success": True,
-            "mode": "live",
-            "filled_price": str(limit_price),
-            "executed_size": str(normalized_size),
-            "notional": str(notional),
-        }
 
     def place_trigger_order(
         self,
@@ -596,204 +413,21 @@ class HyperliquidExchangeClient:
         reduce_only: bool = True,
         is_market: bool = True,
     ) -> Dict[str, Any]:
-        if not self._live_orders_enabled():
-            return {"success": False, "reason": "live_disabled_fail_closed"}
-
-        if tpsl not in {"tp", "sl"}:
-            return {"success": False, "reason": "invalid_tpsl"}
-
-        normalized_side = side.lower()
-        if normalized_side not in {"buy", "sell"}:
-            return {"success": False, "reason": "invalid_side"}
-
-        normalized_size = self._normalize_size_for_coin(coin, abs(size))
-        if normalized_size <= 0:
-            return {"success": False, "reason": "invalid_size_after_normalization"}
-
-        asset_id = self.get_asset_id(coin)
-        if asset_id is None:
-            logger.error(f"Asset ID not found for trigger order {coin}")
-            return {"success": False, "reason": "asset_not_found"}
-
-        rounded_trigger = self._round_price_to_tick(asset_id, trigger_price)
-        if rounded_trigger <= 0:
-            return {"success": False, "reason": "invalid_trigger_price"}
-
-        existing_oid = self._wait_for_trigger_order_id(
-            user=self._trading_user_address,
+        return self._execution.place_trigger_order(
             coin=coin,
-            side=normalized_side,
-            size=normalized_size,
-            trigger_price=rounded_trigger,
+            side=side,
+            size=size,
+            trigger_price=trigger_price,
             tpsl=tpsl,
-            attempts=1,
-            delay_sec=0.0,
+            reduce_only=reduce_only,
+            is_market=is_market,
         )
-        if existing_oid is not None:
-            return {"success": True, "order_id": existing_oid}
-
-        order_wire = {
-            "a": asset_id,
-            "b": normalized_side == "buy",
-            "p": str(rounded_trigger),
-            "s": str(normalized_size.normalize()),
-            "r": bool(reduce_only),
-            "t": {"trigger": {"isMarket": bool(is_market), "triggerPx": str(rounded_trigger), "tpsl": tpsl}},
-        }
-        action = {"type": "order", "orders": [order_wire], "grouping": "normalTpsl"}
-
-        result = self._post_signed_action_with_master_retry(action)
-        if result is None:
-            return {"success": False, "reason": "http_error"}
-        if not self._is_ok_result(result):
-            logger.error(f"Exchange rejected trigger order for {coin}: {result}")
-            return {"success": False, "reason": "exchange_rejected"}
-
-        statuses = extract_statuses(result)
-        status_error = get_first_status_error(statuses)
-        if status_error is not None:
-            return {"success": False, "reason": "status_error"}
-
-        if statuses and not has_acknowledged_order_status(statuses):
-            return {"success": False, "reason": "not_acknowledged"}
-
-        immediate_oids = extract_order_ids(result)
-        if immediate_oids:
-            return {"success": True, "order_id": int(immediate_oids[0])}
-
-        order_id = self._wait_for_trigger_order_id(
-            user=self._trading_user_address,
-            coin=coin,
-            side=normalized_side,
-            size=normalized_size,
-            trigger_price=rounded_trigger,
-            tpsl=tpsl,
-            attempts=16,
-            delay_sec=0.75,
-        )
-
-        if order_id is not None:
-            return {"success": True, "order_id": order_id}
-
-        fallback_oid = self._find_latest_protective_order_id(
-            user=self._trading_user_address,
-            coin=coin,
-            side=normalized_side,
-            tpsl=tpsl,
-        )
-        if fallback_oid is not None:
-            logger.warning(
-                f"Trigger order accepted and mapped via fallback for {coin} {tpsl.upper()} "
-                f"{normalized_side.upper()} oid={fallback_oid}"
-            )
-            return {"success": True, "order_id": fallback_oid}
-
-        return {"success": False, "reason": "missing_trigger_order_id"}
 
     def bulk_orders(self, orders: List[Dict[str, Any]], grouping: str = "na") -> Dict[str, Any]:
-        if not self._live_orders_enabled():
-            return {"success": False, "reason": "live_disabled_fail_closed"}
-
-        if not isinstance(orders, list) or len(orders) == 0:
-            return {"success": False, "reason": "empty_orders"}
-
-        wire_orders: List[Dict[str, Any]] = []
-
-        for order in orders:
-            coin = str(order.get("coin", "")).strip().upper()
-            if not coin:
-                return {"success": False, "reason": "missing_coin"}
-
-            asset_id = self.get_asset_id(coin)
-            if asset_id is None:
-                return {"success": False, "reason": f"asset_not_found:{coin}"}
-
-            is_buy = bool(order.get("is_buy", False))
-            side = "buy" if is_buy else "sell"
-
-            raw_size = safe_decimal(order.get("sz", "0"), Decimal("0"))
-            normalized_size = self._normalize_size_for_coin(coin, abs(raw_size))
-            if normalized_size <= 0:
-                return {"success": False, "reason": f"invalid_size:{coin}"}
-
-            raw_px = safe_decimal(order.get("limit_px", "0"), Decimal("0"))
-            if raw_px <= 0:
-                return {"success": False, "reason": f"invalid_limit_px:{coin}"}
-
-            order_type = order.get("order_type", {"limit": {"tif": "Gtc"}})
-            if not isinstance(order_type, dict):
-                return {"success": False, "reason": f"invalid_order_type:{coin}"}
-
-            if "trigger" in order_type:
-                trigger_obj = order_type.get("trigger", {})
-                trigger_px = safe_decimal(trigger_obj.get("triggerPx", "0"), Decimal("0"))
-                if trigger_px <= 0:
-                    return {"success": False, "reason": f"invalid_trigger_px:{coin}"}
-                rounded_trigger = self._round_price_to_tick(asset_id, trigger_px)
-                order_type = {
-                    "trigger": {
-                        "isMarket": bool(trigger_obj.get("isMarket", True)),
-                        "triggerPx": str(rounded_trigger),
-                        "tpsl": str(trigger_obj.get("tpsl", "")).strip().lower(),
-                    }
-                }
-                rounded_px = self._round_price_to_tick(asset_id, raw_px)
-            else:
-                rounded_px = self._resolve_limit_price(
-                    coin=coin,
-                    side=side,
-                    desired_price=raw_px,
-                    asset_id=asset_id,
-                )
-
-            reduce_only = bool(order.get("reduce_only", False))
-
-            wire_orders.append(
-                {
-                    "a": asset_id,
-                    "b": is_buy,
-                    "p": str(rounded_px),
-                    "s": str(normalized_size.normalize()),
-                    "r": reduce_only,
-                    "t": order_type,
-                }
-            )
-
-        action = {"type": "order", "orders": wire_orders, "grouping": grouping}
-        result = self._post_signed_action_with_master_retry(action)
-
-        if result is None:
-            return {"success": False, "reason": "http_error"}
-        if not self._is_ok_result(result):
-            return {"success": False, "reason": "exchange_rejected", "raw": result}
-
-        statuses = extract_statuses(result)
-        status_error = get_first_status_error(statuses)
-        if status_error is not None:
-            return {"success": False, "reason": "status_error", "raw": result}
-
-        if statuses and not has_acknowledged_order_status(statuses):
-            return {"success": False, "reason": "not_acknowledged", "raw": result}
-
-        return {"success": True, "order_ids": extract_order_ids(result), "raw": result}
+        return self._execution.bulk_orders(orders=orders, grouping=grouping)
 
     def cancel_order(self, coin: str, order_id: int) -> bool:
-        if not self._live_orders_enabled():
-            return False
-
-        asset_id = self.get_asset_id(coin)
-        if asset_id is None:
-            return False
-
-        action = build_cancel_action(asset_id=asset_id, order_id=order_id)
-        result = self._post_signed_action_with_master_retry(action)
-        if result is None:
-            return False
-        if not self._is_ok_result(result):
-            return False
-
-        logger.info(f"Cancel success {coin} oid={order_id}")
-        return True
+        return self._execution.cancel_order(coin=coin, order_id=order_id)
 
     def upsert_protective_orders(
         self,

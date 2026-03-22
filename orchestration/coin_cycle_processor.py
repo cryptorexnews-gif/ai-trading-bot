@@ -1,12 +1,12 @@
 import logging
+from dataclasses import dataclass
 from decimal import Decimal
-from typing import Any, Callable, Dict, List, Optional
+from typing import Callable, Dict, List, Optional
 
 from config.bot_config import BotConfig
 from correlation_engine import CorrelationEngine
 from execution_engine import ExecutionEngine
 from llm_engine import LLMEngine
-from models import PortfolioState
 from notifier import Notifier
 from orchestration.coin_processing_utils import log_coin_indicators
 from orchestration.decision_service import get_decision_for_coin
@@ -27,60 +27,66 @@ from utils.rate_limiter import TokenBucketRateLimiter
 logger = logging.getLogger(__name__)
 
 
+@dataclass
+class CoinProcessingContext:
+    cfg: BotConfig
+    execution_engine: ExecutionEngine
+    risk_manager: RiskManager
+    state_store: StateStore
+    metrics: MetricsCollector
+    position_manager: PositionManager
+    correlation_engine: CorrelationEngine
+    order_verifier: OrderVerifier
+    notifier: Notifier
+    portfolio_service: PortfolioService
+    llm_engine: Optional[LLMEngine]
+    hl_rate_limiter: TokenBucketRateLimiter
+    llm_rate_limiter: TokenBucketRateLimiter
+    update_protection_without_trade: Callable[[str, Dict], bool]
+    sync_exchange_protective_orders: Callable[[str], bool]
+    cancel_exchange_protective_orders: Callable[[str], None]
+
+
 class CoinCycleProcessor:
     """Gestisce l'intero flusso per singola coin: dati → decisione → risk → esecuzione."""
 
-    def __init__(
-        self,
-        cfg: BotConfig,
-        execution_engine: ExecutionEngine,
-        risk_manager: RiskManager,
-        state_store: StateStore,
-        metrics: MetricsCollector,
-        position_manager: PositionManager,
-        correlation_engine: CorrelationEngine,
-        order_verifier: OrderVerifier,
-        notifier: Notifier,
-        portfolio_service: PortfolioService,
-        llm_engine: Optional[LLMEngine],
-        hl_rate_limiter: TokenBucketRateLimiter,
-        llm_rate_limiter: TokenBucketRateLimiter,
-        update_protection_without_trade: Callable[[str, Dict[str, Any]], bool],
-        sync_exchange_protective_orders: Callable[[str], bool],
-        cancel_exchange_protective_orders: Callable[[str], None],
-    ):
-        self.cfg = cfg
-        self.execution_engine = execution_engine
-        self.risk_manager = risk_manager
-        self.state_store = state_store
-        self.metrics = metrics
-        self.position_manager = position_manager
-        self.correlation_engine = correlation_engine
-        self.order_verifier = order_verifier
-        self.notifier = notifier
-        self.portfolio_service = portfolio_service
-        self.llm_engine = llm_engine
-        self.hl_rate_limiter = hl_rate_limiter
-        self.llm_rate_limiter = llm_rate_limiter
-        self.update_protection_without_trade = update_protection_without_trade
-        self.sync_exchange_protective_orders = sync_exchange_protective_orders
-        self.cancel_exchange_protective_orders = cancel_exchange_protective_orders
-
+    def __init__(self, context: CoinProcessingContext):
+        self.context = context
         self._dynamic_min_sizes: Dict[str, Decimal] = {}
+
+    @property
+    def cfg(self) -> BotConfig:
+        return self.context.cfg
+
+    @property
+    def state_store(self) -> StateStore:
+        return self.context.state_store
+
+    @property
+    def metrics(self) -> MetricsCollector:
+        return self.context.metrics
+
+    @property
+    def position_manager(self) -> PositionManager:
+        return self.context.position_manager
+
+    @property
+    def portfolio_service(self) -> PortfolioService:
+        return self.context.portfolio_service
 
     def process_single_coin(
         self,
         coin: str,
-        portfolio: PortfolioState,
-        state: Dict[str, Any],
+        portfolio,
+        state: Dict[str, any],
         daily_notional_used: Decimal,
         peak: Decimal,
         consecutive_losses: int,
         all_mids: Optional[Dict[str, str]],
-        recent_trades: List[Dict[str, Any]],
+        recent_trades: List[Dict[str, any]],
         correlations: Dict[str, Dict[str, Decimal]],
-    ) -> Optional[Dict[str, Any]]:
-        self.hl_rate_limiter.acquire(3)
+    ) -> Optional[Dict[str, any]]:
+        self.context.hl_rate_limiter.acquire(3)
         tech_data = technical_fetcher.get_technical_indicators(coin)
         if not tech_data:
             logger.warning(f"Skipping {coin}: no market data")
@@ -100,12 +106,12 @@ class CoinCycleProcessor:
             recent_trades=recent_trades,
             peak=peak,
             consecutive_losses=consecutive_losses,
-            llm_engine=self.llm_engine,
-            llm_rate_limiter=self.llm_rate_limiter,
-            metrics=self.metrics,
-            position_manager=self.position_manager,
-            exchange_client=self.execution_engine.exchange_client,
-            sync_exchange_protective_orders=self.sync_exchange_protective_orders,
+            llm_engine=self.context.llm_engine,
+            llm_rate_limiter=self.context.llm_rate_limiter,
+            metrics=self.context.metrics,
+            position_manager=self.context.position_manager,
+            exchange_client=self.context.execution_engine.exchange_client,
+            sync_exchange_protective_orders=self.context.sync_exchange_protective_orders,
             logger=logger,
         )
 
@@ -120,14 +126,14 @@ class CoinCycleProcessor:
             decision=decision,
             portfolio=portfolio,
             correlations=correlations,
-            correlation_engine=self.correlation_engine,
-            risk_manager=self.risk_manager,
-            cfg=self.cfg,
+            correlation_engine=self.context.correlation_engine,
+            risk_manager=self.context.risk_manager,
+            cfg=self.context.cfg,
             dynamic_min_sizes=self._dynamic_min_sizes,
             state=state,
             daily_notional_used=daily_notional_used,
             peak=peak,
-            metrics=self.metrics,
+            metrics=self.context.metrics,
             tech_data=tech_data,
             market_price=market_data.last_price,
         )
@@ -136,17 +142,17 @@ class CoinCycleProcessor:
             return None
 
         if decision["action"] == "hold" and coin in portfolio.positions:
-            updated = self.update_protection_without_trade(coin, decision)
+            updated = self.context.update_protection_without_trade(coin, decision)
             if updated:
                 logger.info(f"{coin} hold with SL/TP update applied")
-            self.metrics.increment("holds_total")
+            self.context.metrics.increment("holds_total")
             return {"trades": 0, "notional": Decimal("0"), "failed": False}
 
         result, executed_price, executed_size, fill_status = execute_and_verify_trade(
-            cfg=self.cfg,
-            execution_engine=self.execution_engine,
-            order_verifier=self.order_verifier,
-            portfolio_service=self.portfolio_service,
+            cfg=self.context.cfg,
+            execution_engine=self.context.execution_engine,
+            order_verifier=self.context.order_verifier,
+            portfolio_service=self.context.portfolio_service,
             coin=coin,
             decision=decision,
             market_data=market_data,
@@ -161,9 +167,9 @@ class CoinCycleProcessor:
             executed_price=executed_price,
             result=result,
             fill_status=fill_status,
-            execution_mode=self.cfg.execution_mode,
+            execution_mode=self.context.cfg.execution_mode,
         )
-        self.state_store.add_trade_record(state, trade_record)
+        self.context.state_store.add_trade_record(state, trade_record)
 
         if result["success"]:
             return handle_successful_execution(
@@ -173,15 +179,15 @@ class CoinCycleProcessor:
                 executed_price=executed_price,
                 result=result,
                 state=state,
-                metrics=self.metrics,
-                position_manager=self.position_manager,
-                sync_exchange_protective_orders=self.sync_exchange_protective_orders,
-                cancel_exchange_protective_orders=self.cancel_exchange_protective_orders,
-                notifier=self.notifier,
+                metrics=self.context.metrics,
+                position_manager=self.context.position_manager,
+                sync_exchange_protective_orders=self.context.sync_exchange_protective_orders,
+                cancel_exchange_protective_orders=self.context.cancel_exchange_protective_orders,
+                notifier=self.context.notifier,
                 trade_record=trade_record,
                 logger=logger,
             )
 
-        self.metrics.increment("execution_failures_total")
+        self.context.metrics.increment("execution_failures_total")
         logger.warning(f"{coin} execution failed: {result.get('reason', 'unknown')}")
         return {"trades": 0, "notional": Decimal("0"), "failed": True}
