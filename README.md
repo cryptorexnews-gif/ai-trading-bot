@@ -45,7 +45,7 @@ L’uso vault è disabilitato nella logica attuale, quindi non è richiesto conf
 
 ---
 
-## 4) Avvio applicazione (in questa UI)
+## 4) Avvio nell’interfaccia Dyad (consigliato qui)
 
 Usa i pulsanti azione sopra la chat:
 
@@ -58,7 +58,65 @@ Usa i pulsanti azione sopra la chat:
 
 ---
 
-## 5) Avvio bot e dashboard
+## 5) Comandi CMD (Windows) per esecuzione locale
+
+> Usa questi comandi se stai eseguendo il progetto fuori dalla preview Dyad, da Prompt dei comandi.
+
+### 5.1 Setup ambiente Python (prima volta)
+
+```bat
+cd C:\percorso\progetto\hyperliquid-ai-trading-bot
+python -m venv .venv
+.venv\Scripts\activate
+pip install -r requirements.txt
+```
+
+### 5.2 Setup frontend (prima volta)
+
+```bat
+cd C:\percorso\progetto\hyperliquid-ai-trading-bot
+npm install
+```
+
+### 5.3 Avvio API server
+
+```bat
+cd C:\percorso\progetto\hyperliquid-ai-trading-bot
+.venv\Scripts\activate
+python api_server.py
+```
+
+### 5.4 Avvio dashboard frontend (nuova finestra CMD)
+
+```bat
+cd C:\percorso\progetto\hyperliquid-ai-trading-bot
+npm run dev
+```
+
+### 5.5 Avvio bot trading (nuova finestra CMD)
+
+```bat
+cd C:\percorso\progetto\hyperliquid-ai-trading-bot
+.venv\Scripts\activate
+python hyperliquid_bot_executable_orders.py
+```
+
+### 5.6 Esecuzione singolo ciclo (test sicuro)
+
+```bat
+cd C:\percorso\progetto\hyperliquid-ai-trading-bot
+.venv\Scripts\activate
+python hyperliquid_bot_executable_orders.py --single-cycle
+```
+
+### 5.7 Stop processi in CMD
+
+- API / Bot: `CTRL + C` nella finestra relativa
+- Frontend Vite: `CTRL + C` nella finestra frontend
+
+---
+
+## 6) Avvio bot e dashboard dalla UI
 
 Dalla dashboard:
 
@@ -71,7 +129,7 @@ Per fermarlo:
 
 ---
 
-## 6) Configurazione runtime (senza riavvio codice)
+## 7) Configurazione runtime (senza riavvio codice)
 
 In **Settings → Runtime Trading Controls** puoi:
 
@@ -83,7 +141,7 @@ Le modifiche vengono applicate dal bot nel ciclo successivo.
 
 ---
 
-## 7) Modalità operative
+## 8) Modalità operative
 
 ### Paper mode (consigliato per test)
 - `EXECUTION_MODE=paper`
@@ -96,7 +154,7 @@ Le modifiche vengono applicate dal bot nel ciclo successivo.
 
 ---
 
-## 8) Struttura dashboard
+## 9) Struttura dashboard
 
 - **Overview**: saldo, PnL, drawdown, grafico principale
 - **Settings**: controllo processo bot + runtime config
@@ -106,7 +164,7 @@ Le modifiche vengono applicate dal bot nel ciclo successivo.
 
 ---
 
-## 9) Gestione quotidiana consigliata
+## 10) Gestione quotidiana consigliata
 
 1. Controlla che API e dashboard siano raggiungibili
 2. Verifica modalità (`paper` vs `live`)
@@ -121,7 +179,7 @@ Le modifiche vengono applicate dal bot nel ciclo successivo.
 
 ---
 
-## 10) Troubleshooting rapido
+## 11) Troubleshooting rapido
 
 ### Il bot non apre posizioni
 Controlla nei log se trovi:
@@ -144,7 +202,7 @@ Controlla nei log se trovi:
 
 ---
 
-## 11) Sicurezza
+## 12) Sicurezza
 
 - Non condividere mai `.env`
 - Non esporre chiavi in log o screenshot
@@ -153,7 +211,7 @@ Controlla nei log se trovi:
 
 ---
 
-## 12) Checklist prima di andare live
+## 13) Checklist prima di andare live
 
 - [ ] Wallet e private key corretti
 - [ ] `EXECUTION_MODE=live`
