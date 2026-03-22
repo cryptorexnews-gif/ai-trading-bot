@@ -1,147 +1,199 @@
-# 🤖 Hyperliquid Trading Bot
+# 🤖 Hyperliquid AI Trading Bot
 
-**AI-Powered Trading Bot for Hyperliquid** | Claude Opus 4.6 | Real-time Dashboard
+Bot di trading automatico per Hyperliquid con dashboard React in tempo reale, analisi multi-timeframe e gestione rischio integrata.
 
-## 🚀 QUICK START (3 MINUTI)
+## ✅ Cosa fa questo progetto
 
-### 1. Installa
+- Trading AI con modello `anthropic/claude-opus-4.6` via OpenRouter
+- Dati di mercato **solo da Hyperliquid** (nessuna fonte esterna)
+- Strategia trend multi-timeframe (1H/4H/1D)
+- Risk management automatico (SL/TP, trailing, break-even, drawdown, correlazione)
+- Dashboard live con:
+  - stato bot
+  - posizioni
+  - trade history
+  - equity/performance
+  - chart candele + indicatori
+  - logs + circuit breaker + metriche
+
+---
+
+## 📦 Requisiti
+
+- Python 3.10+
+- Node.js 18+
+- npm
+
+---
+
+## ⚙️ Setup rapido
+
+### 1) Installa dipendenze
+
 ```bash
 pip install -r requirements.txt
 npm install
 ```
 
-### 2. Configura .env (COPIA E MODIFICA)
-```bash
-cp .env.example .env
-```
-**APRI `.env` e COMPILA SOLO QUESTI**:
-```
-HYPERLIQUID_WALLET_ADDRESS=0xIlTuoWallet
-HYPERLIQUID_PRIVATE_KEY=0xLaTuaChiavePrivata
-OPENROUTER_API_KEY=sk-or-LaTuaChiaveOpenRouter
-DASHBOARD_API_KEY=hyperliquid123-super-secure-key-456
+### 2) Configura variabili ambiente
+
+Crea `.env` partendo dal template e imposta almeno queste chiavi:
+
+```env
+HYPERLIQUID_WALLET_ADDRESS=0x...
+HYPERLIQUID_PRIVATE_KEY=0x...
+OPENROUTER_API_KEY=sk-or-...
+DASHBOARD_API_KEY=una-chiave-lunga-e-casuale
 ```
 
-### 3. Test Configurazione
+### 3) Verifica configurazione
+
 ```bash
 python scripts/test_connection.py
 ```
-✅ **Tutti verdi?** Procedi!
 
-### 4. Test Singolo Ciclo (SICURO)
+---
+
+## 🚀 Avvio locale (3 processi)
+
+### Terminale 1 — Bot
+
+```bash
+python hyperliquid_bot_executable_orders.py
+```
+
+### Terminale 2 — API server
+
+```bash
+python api_server.py
+```
+
+### Terminale 3 — Dashboard frontend
+
+```bash
+npm run dev
+```
+
+Apri: **http://localhost:3000**
+
+---
+
+## 🧪 Test sicuro prima della produzione
+
+Esegui prima un ciclo singolo:
+
 ```bash
 python hyperliquid_bot_executable_orders.py --single-cycle
 ```
 
-### 5. AVVIA (3 TERMINALI)
-```
-# TERMINALE 1: BOT
-python hyperliquid_bot_executable_orders.py
+---
 
-# TERMINALE 2: API SERVER
-python api_server.py
+## 🔐 Sicurezza operativa (IMPORTANTISSIMO)
 
-# TERMINALE 3: DASHBOARD
-npm run dev
-```
+- `EXECUTION_MODE=paper` = simulazione (consigliato per test)
+- `EXECUTION_MODE=live` + `ENABLE_MAINNET_TRADING=true` = ordini reali
+- In live:
+  - usa API key robuste
+  - non condividere mai `.env`
+  - limita esposizione e leverage
+  - verifica sempre dashboard e log
 
-✅ **Dashboard**: [http://localhost:3000](http://localhost:3000)
+---
 
-## ✅ DASHBOARD_API_KEY CHECK
+## 🧠 Strategia (sintesi)
 
-Assicurati che `.env` contenga:
-```
-DASHBOARD_API_KEY=...
-```
+- Trend principale su 4H
+- Conferma su 1D
+- Timing entrata su 1H
+- Filtri su volume/RSI/struttura trend
+- Chiusure automatiche via SL/TP/trailing/break-even
+- Blocco trade in caso di rischio correlazione o violazione limiti
 
-In sviluppo, Vite inoltra automaticamente questa chiave all’API backend via proxy (`X-API-Key`).
+---
 
-Poi riavvia `api_server.py` e `npm run dev`.
+## 📊 Endpoint utili
 
-## 🛠️ Risoluzione Problemi Comuni
+- `GET /api/health` → health check pubblico
+- `GET /api/status` → stato bot
+- `GET /api/portfolio` → portafoglio/posizioni
+- `GET /api/trades` → storico trade
+- `GET /api/performance` → metriche e curve
+- `GET /api/candles` → dati chart
+- `GET /metrics` → export Prometheus
 
-| ❌ Errore | ✅ Soluzione |
-|-----------|-------------|
-| `DASHBOARD_API_KEY not set` | Imposta `DASHBOARD_API_KEY` nel `.env` |
-| Dashboard vuota | Avvia `python api_server.py` (Terminale 2) |
-| 401 Unauthorized | Verifica `DASHBOARD_API_KEY` e riavvia backend/frontend |
-| No trades | `EXECUTION_MODE=live` + `ENABLE_MAINNET_TRADING=true` |
+> Gli endpoint protetti richiedono `X-API-Key: DASHBOARD_API_KEY`.
 
-## 📊 Dashboard Live
+---
 
-| Sezione | Cosa vedi |
-|---------|-----------|
-| **Stats** | Balance • PnL • Margin • Win Rate |
-| **Drawdown** | Barra rossa >8% (stop automatico 12%) |
-| **TradingView** | Candele live + Orderbook |
-| **Equity** | Curva portfolio reale |
-| **Risk Mgmt** | SL/TP/Trailing/BE attivi |
-| **Trades** | Storia + AI reasoning + CSV Export |
+## 🛠️ Troubleshooting veloce
 
-## ⚙️ Configurazione Principale (.env)
+### Dashboard vuota o dati mancanti
+- Verifica che `api_server.py` sia avviato
+- Verifica `DASHBOARD_API_KEY` in `.env`
+- Riavvia backend e frontend
 
-```
-# MODALITÀ TRADING
-EXECUTION_MODE=paper     # paper (sicuro) / live (reale)
-ENABLE_MAINNET_TRADING=false  # ⚠️ true = SOLDI VERI!
+### Errori 401 Unauthorized
+- API key assente o errata
+- Controlla header e variabile `DASHBOARD_API_KEY`
 
-# RISCHIO
-MAX_DRAWDOWN_PCT=0.12    # Stop 12%
-DAILY_NOTIONAL_LIMIT_USD=500
-MAX_ORDER_MARGIN_PCT=0.10
-MAX_ORDER_NOTIONAL_USD=0
+### Errori 429 rate_limited
+- Troppo polling concorrente dalla dashboard
+- Riduci frequenza refresh o apri meno tab contemporaneamente
 
-# STRATEGIA TREND
-TREND_SL_PCT=0.04
-TREND_TP_PCT=0.08
-TREND_BREAK_EVEN_ACTIVATION_PCT=0.02
+### Nessun trade eseguito
+- Potresti essere in `paper` o in fase `hold` per filtri rischio
+- Controlla se `ENABLE_MAINNET_TRADING=true` (solo se vuoi live)
 
-# LLM
-LLM_MODEL=anthropic/claude-opus-4.6
-LLM_TEMPERATURE=0.2
-```
+### Coin non riconosciuta in chart
+- La coin potrebbe non essere nella lista runtime o nelle pair abilitate
+- Salva la coin dalla sezione runtime controls
 
-**Completa**: `.env.example`
+---
 
-## 🛡️ Protezioni Automatiche
+## 🗂️ Struttura progetto (alto livello)
 
-- **Paper Mode** (default)
-- **Drawdown 12%** → Stop trading
-- **Margin 85%** → Chiude peggior posizione
-- **Circuit Breakers** → API down = stop
-- **Correlazione** → Blocca BTC+ETH long
-- **Fill Verification** → Conferma ordini eseguiti
+- `hyperliquid_bot_executable_orders.py` → entrypoint bot
+- `cycle_orchestrator.py` → logica ciclo trading
+- `exchange_client.py` → client Hyperliquid + firma ordini
+- `llm_engine.py` → integrazione OpenRouter
+- `risk_manager.py` / `position_manager.py` → gestione rischio
+- `api/` → server Flask + endpoints dashboard
+- `src/` → frontend React + chart + pagine dashboard
+- `state/` → stato runtime persistito (json atomici)
 
-## 📱 Telegram (Opzionale)
-```
-TELEGRAM_BOT_TOKEN=...
-TELEGRAM_CHAT_ID=...
-```
-Alert: trades, SL/TP, emergenze.
+---
 
-## 🧪 Script Utili
-```bash
-python scripts/test_connection.py     # Test tutto
-python close_sol_position.py          # Chiudi SOL emergenza
-python check_current_positions.py     # Vedi posizioni
-```
+## 📁 File di stato runtime
 
-## 🏃‍♂️ Production (Background)
-```bash
-python hyperliquid_bot_executable_orders.py
-python api_server.py
-npm run dev
-```
+Generati automaticamente sotto `state/`:
 
-**Stop**: `Ctrl+C` o `kill -SIGTERM <pid>`
+- `bot_state.json`
+- `bot_metrics.json`
+- `bot_live_status.json`
+- `managed_positions.json`
+- `runtime_config.json`
 
-## 📈 Costi
-- **LLM**: dipende dal modello e dal numero di chiamate
-- **Hyperliquid**: Fee normali maker/taker
+---
 
-**Scalabile**: `DEFAULT_CYCLE_SEC=300` → dimezza costi.
+## 🧾 Note operative
+
+- I log sono strutturati JSON
+- Le scritture file stato sono atomiche
+- I calcoli finanziari usano `Decimal`
+- Circuit breaker/rate limiter sono attivi lato API e client
+
+---
+
+## 📌 Best practice consigliate
+
+1. Parti sempre in `paper`
+2. Esegui `--single-cycle` dopo ogni modifica importante
+3. Passa a `live` solo dopo validazione completa
+4. Monitora dashboard + log nei primi cicli live
+5. Mantieni limiti rischio conservativi
+
+---
 
 ## 📄 Licenza
-MIT — Free uso personale/commerciale.
 
-**Buon Trading! 🚀🇮🇹**
+MIT
