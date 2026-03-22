@@ -193,6 +193,34 @@ def wait_order_open_confirmation(
     return False
 
 
+def _validate_trigger_preview_payload(preview_action: Dict, tpsl: str) -> None:
+    grouping = preview_action.get("grouping")
+    if grouping != "positionTpsl":
+        raise RuntimeError(
+            f"Payload trigger non valido ({tpsl.upper()}): grouping atteso='positionTpsl', ricevuto='{grouping}'"
+        )
+
+    orders = preview_action.get("orders", [])
+    if not orders:
+        raise RuntimeError(f"Payload trigger non valido ({tpsl.upper()}): orders vuoto")
+
+    order = orders[0]
+    wire_p = str(order.get("p", ""))
+    if wire_p != "0":
+        raise RuntimeError(
+            f"Payload trigger non valido ({tpsl.upper()}): p atteso='0' per isMarket=true, ricevuto='{wire_p}'"
+        )
+
+    trigger_obj = order.get("t", {}).get("trigger", {})
+    if not bool(trigger_obj.get("isMarket", False)):
+        raise RuntimeError(f"Payload trigger non valido ({tpsl.upper()}): isMarket deve essere true")
+
+    if str(trigger_obj.get("tpsl", "")).lower() != tpsl.lower():
+        raise RuntimeError(
+            f"Payload trigger non valido ({tpsl.upper()}): tpsl atteso='{tpsl}', ricevuto='{trigger_obj.get('tpsl')}'"
+        )
+
+
 def place_single_protective_order_with_confirmation(
     client: HyperliquidExchangeClient,
     wallet: str,
@@ -220,6 +248,8 @@ def place_single_protective_order_with_confirmation(
             f"Trigger payload preview ({tpsl.upper()}): "
             f"{json.dumps(preview_action, ensure_ascii=False)}"
         )
+        _validate_trigger_preview_payload(preview_action, tpsl)
+        logger.info(f"Trigger payload validation ({tpsl.upper()}): OK")
 
     result = client.place_trigger_order(
         coin=coin,
