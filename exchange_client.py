@@ -1,6 +1,6 @@
 import logging
 import time
-from decimal import Decimal
+from decimal import Decimal, ROUND_DOWN
 from typing import Any, Dict, List, Optional, Tuple
 
 from eth_account import Account
@@ -17,6 +17,7 @@ from exchange.order_builder import (
     build_update_leverage_action,
 )
 from exchange.parsers import (
+    extract_order_ids,
     extract_statuses,
     get_first_status_error,
     has_acknowledged_order_status,
@@ -177,12 +178,14 @@ class HyperliquidExchangeClient:
 
         nested_order = order.get("order", {})
         if isinstance(nested_order, dict):
-            candidates.extend([
-                nested_order.get("sz"),
-                nested_order.get("s"),
-                nested_order.get("size"),
-                nested_order.get("origSz"),
-            ])
+            candidates.extend(
+                [
+                    nested_order.get("sz"),
+                    nested_order.get("s"),
+                    nested_order.get("size"),
+                    nested_order.get("origSz"),
+                ]
+            )
 
         for c in candidates:
             val = safe_decimal(c, Decimal("0"))
@@ -213,11 +216,13 @@ class HyperliquidExchangeClient:
 
         nested_order = order.get("order", {})
         if isinstance(nested_order, dict):
-            candidates.extend([
-                nested_order.get("triggerPx"),
-                nested_order.get("tpTriggerPx"),
-                nested_order.get("slTriggerPx"),
-            ])
+            candidates.extend(
+                [
+                    nested_order.get("triggerPx"),
+                    nested_order.get("tpTriggerPx"),
+                    nested_order.get("slTriggerPx"),
+                ]
+            )
             nested_trigger = nested_order.get("trigger", {})
             if isinstance(nested_trigger, dict):
                 candidates.append(nested_trigger.get("triggerPx"))
@@ -327,12 +332,12 @@ class HyperliquidExchangeClient:
         max_wallet_error_retries = 3
         while is_master_wallet_not_found_error(result) and attempt < max_wallet_error_retries:
             attempt += 1
-            backoff_sec = 0.25 * attempt
+            backoff_sec = Decimal("0.25") * Decimal(str(attempt))
             logger.warning(
                 f"Exchange reported master wallet not found (attempt {attempt}/{max_wallet_error_retries}). "
-                f"Retrying with fresh nonce in {backoff_sec:.2f}s."
+                f"Retrying with fresh nonce in {float(backoff_sec):.2f}s."
             )
-            time.sleep(backoff_sec)
+            time.sleep(float(backoff_sec))
             result = self._post_signed_action_once(action, timeout=timeout)
 
         if is_master_wallet_not_found_error(result):
@@ -610,6 +615,51 @@ class HyperliquidExchangeClient:
             return infer_tick_size_and_precision_from_mid(str(mids.get(coin, "0")))
         return default_tick_size_for_asset(asset_id)
 
+    def _normalize_size_for_coin(self, coin: str, size: Decimal) -> Decimal:
+        if size <= 0:
+            return Decimal("0")
+
+        sz_decimals = self.get_sz_decimals(coin)
+        normalized = normalize_size_for_decimals(size, sz_decimals if sz_decimals is not None else -1)
+        if normalized <= 0:
+            return Decimal("0")
+        return normalized
+
+    def _round_price_to_tick(self, asset_id: int, price: Decimal) -> Decimal:
+        if price <= 0:
+            return price
+
+        tick_size, precision = self.get_tick_size_and_precision(asset_id)
+        if tick_size <= 0:
+            return price
+
+        units = (price / tick_size).to_integral_value(rounding=ROUND_DOWN)
+        rounded = units * tick_size
+
+        if precision >= 0:
+            quantizer = Decimal("1").scaleb(-precision)
+            rounded = rounded.quantize(quantizer)
+
+        return rounded
+
+    def _resolve_limit_price(self, coin: str, side: str, desired_price: Decimal, asset_id: int) -> Decimal:
+        reference_price = self.get_reference_price(coin, desired_price)
+        if reference_price <= 0:
+            reference_price = desired_price
+
+        if reference_price <= 0:
+            return self._round_price_to_tick(asset_id, Decimal("0"))
+
+        execution_buffer = Decimal("0.0025")  # 25 bps per miglior fill reliability
+        if side.lower() == "buy":
+            aggressive = reference_price * (Decimal("1") + execution_buffer)
+            target = max(desired_price, aggressive) if desired_price > 0 else aggressive
+        else:
+            aggressive = reference_price * (Decimal("1") - execution_buffer)
+            target = min(desired_price, aggressive) if desired_price > 0 else aggressive
+
+        return self._round_price_to_tick(asset_id, target)
+
     def set_leverage(self, coin: str, leverage: int) -> bool:
         if not self._live_orders_enabled():
             logger.error("Live leverage blocked: EXECUTION_MODE must be live and ENABLE_MAINNET_TRADING=true")
@@ -648,8 +698,14 @@ class HyperliquidExchangeClient:
             logger.error(f"Asset ID not found for {coin}")
             return {"success": False, "mode": "live", "reason": "asset_not_found", "notional": "0"}
 
-        is_buy = side.lower() == "buy"
-        limit_price = self._resolve_limit_price(coin=coin, side=side, desired_price=desired_price, asset_id=asset_id)
+        normalized_side = side.lower()
+        if normalized_side not in {"buy", "sell"}:
+            return {"success": False, "mode": "live", "reason": "invalid_side", "notional": "0"}
+
+        is_buy = normalized_side == "buy"
+        limit_price = self._resolve_limit_price(coin=coin, side=normalized_side, desired_price=desired_price, asset_id=asset_id)
+        if limit_price <= 0:
+            return {"success": False, "mode": "live", "reason": "invalid_limit_price", "notional": "0"}
 
         action = build_limit_order_action(
             asset_id=asset_id,
@@ -676,8 +732,15 @@ class HyperliquidExchangeClient:
             logger.error(f"Order not acknowledged by Hyperliquid statuses for {coin}: {statuses}")
             return {"success": False, "mode": "live", "reason": "not_acknowledged", "notional": "0"}
 
+        order_ids = extract_order_ids(result)
+        if not order_ids and statuses:
+            logger.warning(f"No order id extracted for {coin} despite acknowledged status")
+
         notional = abs(normalized_size * limit_price)
-        logger.info(f"LIVE order success {coin} {side.upper()} size={normalized_size} limit={limit_price} reduce_only={reduce_only}")
+        logger.info(
+            f"LIVE order success {coin} {normalized_side.upper()} size={normalized_size} "
+            f"limit={limit_price} reduce_only={reduce_only} oids={order_ids}"
+        )
         return {"success": True, "mode": "live", "filled_price": str(limit_price), "notional": str(notional)}
 
     def place_trigger_order(
@@ -696,36 +759,41 @@ class HyperliquidExchangeClient:
         if tpsl not in {"tp", "sl"}:
             return {"success": False, "reason": "invalid_tpsl"}
 
+        normalized_side = side.lower()
+        if normalized_side not in {"buy", "sell"}:
+            return {"success": False, "reason": "invalid_side"}
+
         normalized_size = self._normalize_size_for_coin(coin, abs(size))
         if normalized_size <= 0:
             return {"success": False, "reason": "invalid_size_after_normalization"}
-
-        # Avoid duplicates: if same trigger already exists, reuse it
-        existing_oid = self._wait_for_trigger_order_id(
-            user=self.account.address,
-            coin=coin,
-            side=side,
-            size=normalized_size,
-            trigger_price=trigger_price,
-            tpsl=tpsl,
-            attempts=1,
-            delay_sec=0.0,
-        )
-        if existing_oid is not None:
-            logger.info(
-                f"Reusing existing trigger order for {coin} {tpsl.upper()} {side.upper()} "
-                f"size={normalized_size} trigger={trigger_price} oid={existing_oid}"
-            )
-            return {"success": True, "order_id": existing_oid}
 
         asset_id = self.get_asset_id(coin)
         if asset_id is None:
             logger.error(f"Asset ID not found for trigger order {coin}")
             return {"success": False, "reason": "asset_not_found"}
 
-        is_buy = side.lower() == "buy"
         rounded_trigger = self._round_price_to_tick(asset_id, trigger_price)
+        if rounded_trigger <= 0:
+            return {"success": False, "reason": "invalid_trigger_price"}
 
+        existing_oid = self._wait_for_trigger_order_id(
+            user=self.account.address,
+            coin=coin,
+            side=normalized_side,
+            size=normalized_size,
+            trigger_price=rounded_trigger,
+            tpsl=tpsl,
+            attempts=1,
+            delay_sec=0.0,
+        )
+        if existing_oid is not None:
+            logger.info(
+                f"Reusing existing trigger order for {coin} {tpsl.upper()} {normalized_side.upper()} "
+                f"size={normalized_size} trigger={rounded_trigger} oid={existing_oid}"
+            )
+            return {"success": True, "order_id": existing_oid}
+
+        is_buy = normalized_side == "buy"
         action = build_trigger_order_action(
             asset_id=asset_id,
             is_buy=is_buy,
@@ -753,11 +821,10 @@ class HyperliquidExchangeClient:
             logger.error(f"Trigger order not acknowledged by Hyperliquid statuses for {coin}: {statuses}")
             return {"success": False, "reason": "not_acknowledged"}
 
-        # Confirm ID from openOrders (source of truth)
         order_id = self._wait_for_trigger_order_id(
             user=self.account.address,
             coin=coin,
-            side=side,
+            side=normalized_side,
             size=normalized_size,
             trigger_price=rounded_trigger,
             tpsl=tpsl,
@@ -767,16 +834,15 @@ class HyperliquidExchangeClient:
 
         if order_id is None:
             logger.warning(
-                f"Trigger order accepted but oid unresolved for {coin} {tpsl.upper()} {side.upper()} "
+                f"Trigger order accepted but oid unresolved for {coin} {tpsl.upper()} {normalized_side.upper()} "
                 f"size={normalized_size} trigger={rounded_trigger}"
             )
             return {"success": False, "reason": "missing_trigger_order_id"}
 
-        # Clean duplicates if any
         self._cancel_duplicate_trigger_orders(
             user=self.account.address,
             coin=coin,
-            side=side,
+            side=normalized_side,
             size=normalized_size,
             trigger_price=rounded_trigger,
             tpsl=tpsl,
@@ -784,7 +850,7 @@ class HyperliquidExchangeClient:
         )
 
         logger.info(
-            f"LIVE trigger order placed {coin} {tpsl.upper()} {side.upper()} "
+            f"LIVE trigger order placed {coin} {tpsl.upper()} {normalized_side.upper()} "
             f"size={normalized_size} trigger={rounded_trigger} oid={order_id}"
         )
         return {"success": True, "order_id": order_id}
@@ -828,7 +894,6 @@ class HyperliquidExchangeClient:
         if close_size <= 0:
             return {"success": False, "reason": "invalid_size"}
 
-        # Reuse if already present on open orders
         existing_sl_id = current_stop_order_id
         existing_tp_id = current_take_profit_order_id
 
@@ -881,7 +946,6 @@ class HyperliquidExchangeClient:
                 "take_profit_order_id": existing_tp_id,
             }
 
-        # Recreate cleanly
         if current_stop_order_id is not None:
             self.cancel_order(coin, current_stop_order_id)
         if current_take_profit_order_id is not None:
