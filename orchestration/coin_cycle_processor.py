@@ -16,6 +16,7 @@ from orchestration.execution_result_service import (
     normalize_executed_price_and_size,
 )
 from orchestration.fill_verification_service import verify_fill_after_execution
+from orchestration.post_trade_service import handle_successful_execution
 from orchestration.risk_gate_service import evaluate_trade_gates
 from order_verifier import OrderVerifier
 from portfolio_service import PortfolioService
@@ -185,41 +186,21 @@ class CoinCycleProcessor:
         self.state_store.add_trade_record(state, trade_record)
 
         if result["success"]:
-            notional = Decimal(str(result["notional"]))
-            if notional > 0:
-                state.setdefault("last_trade_timestamp_by_coin", {})[coin] = time.time()
-                self.metrics.increment("trades_executed_total")
-
-                if decision["action"] in ["buy", "sell", "increase_position"]:
-                    is_long = decision["action"] in ["buy", "increase_position"]
-                    sl_pct = decision.get("stop_loss_pct")
-                    tp_pct = decision.get("take_profit_pct")
-
-                    self.position_manager.register_position(
-                        coin=coin,
-                        size=executed_size,
-                        entry_price=executed_price,
-                        is_long=is_long,
-                        leverage=decision["leverage"],
-                        sl_pct=sl_pct if isinstance(sl_pct, Decimal) else None,
-                        tp_pct=tp_pct if isinstance(tp_pct, Decimal) else None,
-                    )
-                    self.sync_exchange_protective_orders(coin)
-
-                elif decision["action"] == "close_position":
-                    self.cancel_exchange_protective_orders(coin)
-                    self.position_manager.remove_position(coin)
-
-                elif decision["action"] == "reduce_position":
-                    self.sync_exchange_protective_orders(coin)
-
-                self.notifier.notify_trade(trade_record)
-                logger.info(f"{coin} executed: reason={result['reason']}, notional=${notional}")
-                return {"trades": 1, "notional": notional, "failed": False}
-
-            self.metrics.increment("holds_total")
-            logger.info(f"{coin}: hold (no trade)")
-            return {"trades": 0, "notional": Decimal("0"), "failed": False}
+            return handle_successful_execution(
+                coin=coin,
+                decision=decision,
+                executed_size=executed_size,
+                executed_price=executed_price,
+                result=result,
+                state=state,
+                metrics=self.metrics,
+                position_manager=self.position_manager,
+                sync_exchange_protective_orders=self.sync_exchange_protective_orders,
+                cancel_exchange_protective_orders=self.cancel_exchange_protective_orders,
+                notifier=self.notifier,
+                trade_record=trade_record,
+                logger=logger,
+            )
 
         self.metrics.increment("execution_failures_total")
         logger.warning(f"{coin} execution failed: {result.get('reason', 'unknown')}")
