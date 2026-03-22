@@ -20,7 +20,7 @@ from api.config import (
     METRICS_PATH,
     RUNTIME_CONFIG_PATH,
 )
-from api.rate_limit_utils import build_rate_limiter, rate_limited_response
+from api.rate_limit import rate_limited
 from api.services.account_route_service import (
     build_account_config_response,
     build_managed_positions_response,
@@ -42,17 +42,12 @@ _runtime_store = RuntimeConfigStore(
     [p.strip().upper() for p in os.getenv("TRADING_PAIRS", "BTC,ETH,SOL").split(",") if p.strip()],
     default_strategy_mode=os.getenv("DEFAULT_STRATEGY_MODE", "trend"),
 )
-_account_rl = build_rate_limiter("api_account_endpoints", max_tokens=100, tokens_per_second=3.0)
-_config_rl = build_rate_limiter("api_account_config_endpoint", max_tokens=300, tokens_per_second=20.0)
 
 
 @account_bp.route("/api/status", methods=["GET"])
 @require_api_key
+@rate_limited("api_account_endpoints", max_tokens=100, tokens_per_second=3.0)
 def bot_status():
-    rate_limit_resp = rate_limited_response(_account_rl)
-    if rate_limit_resp:
-        return rate_limit_resp
-
     try:
         wallet = get_wallet_address()
         return jsonify(build_account_status_response(_state_store, LIVE_STATUS_PATH, wallet))
@@ -63,11 +58,8 @@ def bot_status():
 
 @account_bp.route("/api/portfolio", methods=["GET"])
 @require_api_key
+@rate_limited("api_account_endpoints", max_tokens=100, tokens_per_second=3.0)
 def portfolio():
-    rate_limit_resp = rate_limited_response(_account_rl)
-    if rate_limit_resp:
-        return rate_limit_resp
-
     try:
         wallet = get_wallet_address()
         return jsonify(build_portfolio_response(wallet))
@@ -78,11 +70,8 @@ def portfolio():
 
 @account_bp.route("/api/positions", methods=["GET"])
 @require_api_key
+@rate_limited("api_account_endpoints", max_tokens=100, tokens_per_second=3.0)
 def positions():
-    rate_limit_resp = rate_limited_response(_account_rl)
-    if rate_limit_resp:
-        return rate_limit_resp
-
     try:
         wallet = get_wallet_address()
         return jsonify(build_positions_response(wallet))
@@ -93,11 +82,8 @@ def positions():
 
 @account_bp.route("/api/managed-positions", methods=["GET"])
 @require_api_key
+@rate_limited("api_account_endpoints", max_tokens=100, tokens_per_second=3.0)
 def managed_positions():
-    rate_limit_resp = rate_limited_response(_account_rl)
-    if rate_limit_resp:
-        return rate_limit_resp
-
     try:
         wallet = get_wallet_address()
         return jsonify(build_managed_positions_response(wallet, MANAGED_POSITIONS_PATH))
@@ -108,11 +94,8 @@ def managed_positions():
 
 @account_bp.route("/api/config", methods=["GET"])
 @require_api_key
+@rate_limited("api_account_config_endpoint", max_tokens=300, tokens_per_second=20.0)
 def config():
-    rate_limit_resp = rate_limited_response(_config_rl)
-    if rate_limit_resp:
-        return rate_limit_resp
-
     try:
         return jsonify(build_account_config_response(_runtime_store))
     except Exception:

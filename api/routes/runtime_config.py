@@ -4,7 +4,7 @@ from flask import Blueprint, jsonify, request
 
 from api.auth import require_api_key
 from api.config import COIN_PATTERN, KNOWN_TRADING_PAIRS, RUNTIME_CONFIG_PATH
-from api.rate_limit_utils import build_rate_limiter, rate_limited_response
+from api.rate_limit import rate_limited
 from api.services.account_snapshot_service import fetch_hyperliquid_universe
 from api.services.available_pairs_service import AvailablePairsService
 from api.services.runtime_config_service import (
@@ -20,7 +20,6 @@ _runtime_store = RuntimeConfigStore(
     RUNTIME_CONFIG_PATH,
     [p for p in KNOWN_TRADING_PAIRS],
 )
-_runtime_rl = build_rate_limiter("api_runtime_config_endpoints", max_tokens=100, tokens_per_second=3.0)
 
 _available_pairs_service = AvailablePairsService(
     fetch_universe_fn=fetch_hyperliquid_universe,
@@ -32,11 +31,8 @@ _available_pairs_service = AvailablePairsService(
 
 @runtime_config_bp.route("/api/runtime-config", methods=["GET"])
 @require_api_key
+@rate_limited("api_runtime_config_endpoints", max_tokens=100, tokens_per_second=3.0)
 def runtime_config():
-    rate_limit_resp = rate_limited_response(_runtime_rl)
-    if rate_limit_resp:
-        return rate_limit_resp
-
     runtime = _runtime_store.load()
     mode = str(runtime.get("strategy_mode", "trend")).strip().lower()
     presets = strategy_presets()
@@ -52,11 +48,8 @@ def runtime_config():
 
 @runtime_config_bp.route("/api/runtime-config", methods=["POST"])
 @require_api_key
+@rate_limited("api_runtime_config_endpoints", max_tokens=100, tokens_per_second=3.0)
 def update_runtime_config():
-    rate_limit_resp = rate_limited_response(_runtime_rl)
-    if rate_limit_resp:
-        return rate_limit_resp
-
     payload = request.get_json(silent=True) or {}
     validated, error = validate_runtime_update_payload(
         payload=payload,
