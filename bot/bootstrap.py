@@ -1,0 +1,178 @@
+import logging
+import os
+from dataclasses import dataclass
+from typing import Any, Dict, List
+
+from config.bot_config import BotConfig
+from correlation_engine import CorrelationEngine
+from cycle_orchestrator import CycleOrchestrator
+from exchange_client import HyperliquidExchangeClient
+from execution_engine import ExecutionEngine
+from llm_engine import LLMEngine
+from notifier import Notifier
+from order_verifier import OrderVerifier
+from portfolio_service import PortfolioService
+from position_manager import PositionManager
+from risk_manager import RiskManager
+from runtime_config_store import RuntimeConfigStore
+from state_store import StateStore
+from utils.health import HealthCheckResult, HealthMonitor, HealthStatus, check_disk_space, check_file_writable
+from utils.logging_config import setup_logging
+from utils.metrics import MetricsCollector
+from utils.rate_limiter import get_rate_limiter
+
+
+@dataclass
+class BotRuntimeContext:
+    cfg: BotConfig
+    exchange_client: HyperliquidExchangeClient
+    state_store: StateStore
+    runtime_config_store: RuntimeConfigStore
+    metrics: MetricsCollector
+    notifier: Notifier
+    health_monitor: HealthMonitor
+    portfolio_service: PortfolioService
+    orchestrator: CycleOrchestrator
+    base_profile: Dict[str, Any]
+
+
+class BotBootstrap:
+    """Wires the full bot dependency graph and returns a runtime context."""
+
+    @staticmethod
+    def _setup_health_checks(health_monitor: HealthMonitor, exchange_client: HyperliquidExchangeClient) -> None:
+        def _check_exchange_health() -> HealthCheckResult:
+            meta = exchange_client.get_meta(force_refresh=True)
+            if meta:
+                return HealthCheckResult(
+                    name="exchange_connectivity",
+                    status=HealthStatus.HEALTHY,
+                    message="Hyperliquid API reachable",
+                    details={"assets_count": len(meta.get("universe", []))}
+                )
+            return HealthCheckResult(
+                name="exchange_connectivity",
+                status=HealthStatus.UNHEALTHY,
+                message="Hyperliquid API unreachable"
+            )
+
+        health_monitor.add_check("exchange_connectivity", _check_exchange_health, interval=60.0)
+        health_monitor.add_check("disk_space", lambda: check_disk_space(".", min_free_gb=0.5), interval=300.0)
+        health_monitor.add_check("state_writable", lambda: check_file_writable("state"), interval=300.0)
+
+    @staticmethod
+    def build() -> BotRuntimeContext:
+        cfg = BotConfig.from_env()
+        setup_logging(log_level=cfg.log_level, json_format=True, log_file=cfg.log_file, console_output=True)
+
+        warnings = cfg.validate()
+        for warning in warnings:
+            logging.warning(f"CONFIG WARNING: {warning}")
+
+        private_key = os.getenv("HYPERLIQUID_PRIVATE_KEY", "")
+        exchange_client = HyperliquidExchangeClient(
+            base_url=cfg.base_url,
+            private_key=private_key,
+            enable_mainnet_trading=cfg.enable_mainnet_trading,
+            execution_mode=cfg.execution_mode,
+            meta_cache_ttl_sec=cfg.meta_cache_ttl_sec,
+            paper_slippage_bps=cfg.paper_slippage_bps,
+            info_timeout=cfg.info_timeout,
+            exchange_timeout=cfg.exchange_timeout,
+            vault_address=cfg.vault_address,
+        )
+
+        state_store = StateStore(cfg.state_path, cfg.metrics_path)
+        runtime_config_store = RuntimeConfigStore(
+            "state/runtime_config.json",
+            cfg.trading_pairs,
+            default_strategy_mode=cfg.default_strategy_mode,
+        )
+        metrics = MetricsCollector()
+        notifier = Notifier(enabled=True)
+        health_monitor = HealthMonitor()
+        BotBootstrap._setup_health_checks(health_monitor, exchange_client)
+
+        portfolio_service = PortfolioService(exchange_client, cfg.wallet_address)
+
+        orchestrator = CycleOrchestrator(
+            cfg=cfg,
+            exchange_client=exchange_client,
+            execution_engine=ExecutionEngine(exchange_client),
+            risk_manager=RiskManager(
+                min_size_by_coin=dict(cfg.min_size_by_coin),
+                hard_max_leverage=cfg.hard_max_leverage,
+                min_confidence_open=cfg.min_confidence_open,
+                min_confidence_manage=cfg.min_confidence_manage,
+                max_margin_usage=cfg.max_margin_usage,
+                max_order_margin_pct=cfg.max_order_margin_pct,
+                max_order_notional_usd=cfg.max_order_notional_usd,
+                trade_cooldown_sec=cfg.trade_cooldown_sec,
+                daily_notional_limit_usd=cfg.daily_notional_limit_usd,
+                volatility_multiplier=cfg.volatility_multiplier,
+                max_drawdown_pct=cfg.max_drawdown_pct,
+                max_single_asset_pct=cfg.max_single_asset_pct,
+                emergency_margin_threshold=cfg.emergency_margin_threshold,
+            ),
+            state_store=state_store,
+            metrics=metrics,
+            position_manager=PositionManager(
+                default_sl_pct=cfg.trend_sl_pct,
+                default_tp_pct=cfg.trend_tp_pct,
+                default_trailing_callback=cfg.trend_trailing_callback,
+                enable_trailing_stop=cfg.enable_trailing_stop,
+                trailing_activation_pct=cfg.trend_trailing_activation_pct,
+                break_even_activation_pct=cfg.trend_break_even_activation_pct,
+                break_even_offset_pct=cfg.break_even_offset_pct,
+            ),
+            correlation_engine=CorrelationEngine(correlation_threshold=cfg.correlation_threshold),
+            order_verifier=OrderVerifier(exchange_client=exchange_client, max_wait_sec=20.0, check_interval=2.0),
+            notifier=notifier,
+            health_monitor=health_monitor,
+            portfolio_service=portfolio_service,
+            llm_engine=LLMEngine(
+                api_key=cfg.openrouter_api_key,
+                model=cfg.llm_model,
+                max_tokens=cfg.llm_max_tokens,
+                temperature=cfg.llm_temperature,
+            ) if cfg.openrouter_api_key else None,
+            hl_rate_limiter=get_rate_limiter("hyperliquid_api", max_tokens=20, tokens_per_second=2.0),
+            llm_rate_limiter=get_rate_limiter("openrouter_api", max_tokens=5, tokens_per_second=0.5),
+            trading_pairs=list(cfg.trading_pairs),
+        )
+
+        base_profile = {
+            "default_cycle_sec": cfg.default_cycle_sec,
+            "min_cycle_sec": cfg.min_cycle_sec,
+            "max_cycle_sec": cfg.max_cycle_sec,
+            "max_trades_per_cycle": cfg.max_trades_per_cycle,
+            "hard_max_leverage": cfg.hard_max_leverage,
+            "min_confidence_open": cfg.min_confidence_open,
+            "min_confidence_manage": cfg.min_confidence_manage,
+            "max_order_margin_pct": cfg.max_order_margin_pct,
+            "trade_cooldown_sec": cfg.trade_cooldown_sec,
+            "daily_notional_limit_usd": cfg.daily_notional_limit_usd,
+            "max_drawdown_pct": cfg.max_drawdown_pct,
+            "max_single_asset_pct": cfg.max_single_asset_pct,
+            "emergency_margin_threshold": cfg.emergency_margin_threshold,
+            "trend_sl_pct": cfg.trend_sl_pct,
+            "trend_tp_pct": cfg.trend_tp_pct,
+            "trend_break_even_activation_pct": cfg.trend_break_even_activation_pct,
+            "trend_trailing_activation_pct": cfg.trend_trailing_activation_pct,
+            "trend_trailing_callback": cfg.trend_trailing_callback,
+            "trend_position_size_pct": cfg.trend_position_size_pct,
+            "volume_confirmation_threshold": cfg.volume_confirmation_threshold,
+        }
+
+        return BotRuntimeContext(
+            cfg=cfg,
+            exchange_client=exchange_client,
+            state_store=state_store,
+            runtime_config_store=runtime_config_store,
+            metrics=metrics,
+            notifier=notifier,
+            health_monitor=health_monitor,
+            portfolio_service=portfolio_service,
+            orchestrator=orchestrator,
+            base_profile=base_profile,
+        )
