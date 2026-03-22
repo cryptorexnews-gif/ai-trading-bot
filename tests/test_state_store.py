@@ -162,9 +162,13 @@ def test_performance_summary_with_trades():
         # Success open trade (executed but not classifiable for win/loss)
         store.add_trade_record(state, {"action": "buy", "success": True})
 
-        # Hold + failed
+        # Hold + explicit failure
         store.add_trade_record(state, {"action": "hold", "success": True})
         store.add_trade_record(state, {"action": "buy", "success": False})
+
+        # Legacy-like failures wrongly marked success=True but with error status/reason
+        store.add_trade_record(state, {"action": "increase_position", "success": True, "order_status": "not_filled"})
+        store.add_trade_record(state, {"action": "increase_position", "success": True, "reason": "set_leverage_failed"})
 
         summary = store.get_performance_summary(state)
         assert summary["executed_trades"] == 3
@@ -173,7 +177,7 @@ def test_performance_summary_with_trades():
         assert summary["wins"] == 1
         assert summary["losses"] == 1
         assert summary["holds"] == 1
-        assert summary["failed_executions"] == 0
+        assert summary["failed_executions"] == 3
         assert summary["win_rate"] == 50.0
 
 

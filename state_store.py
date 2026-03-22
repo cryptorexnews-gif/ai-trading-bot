@@ -117,6 +117,22 @@ class StateStore:
         history = state.get("trade_history", [])
         return history[-count:] if history else []
 
+    @staticmethod
+    def _is_failed_transaction(trade: Dict[str, Any]) -> bool:
+        """Strict failure detection (including legacy/partial records)."""
+        if not bool(trade.get("success", False)):
+            return True
+
+        order_status = str(trade.get("order_status", "")).strip().lower()
+        if order_status in {"not_filled", "rejected", "status_error", "exchange_rejected", "http_error"}:
+            return True
+
+        reason = str(trade.get("reason", "")).strip().lower()
+        if reason in {"set_leverage_failed", "order_not_filled", "exchange_rejected", "http_error", "status_error"}:
+            return True
+
+        return False
+
     def get_performance_summary(self, state: Dict[str, Any]) -> Dict[str, Any]:
         history = state.get("trade_history", [])
         if not history:
@@ -139,15 +155,15 @@ class StateStore:
         wins = 0
         losses = 0
         holds = 0
+        failed_executions = 0
         executed_trades = 0
 
         for t in history:
             action = str(t.get("action", "")).strip().lower()
-            success = bool(t.get("success", False))
             trigger = str(t.get("trigger", "")).strip().lower()
 
-            # Exclude failed transactions from ALL counts
-            if not success:
+            if self._is_failed_transaction(t):
+                failed_executions += 1
                 continue
 
             if action in hold_actions or action not in trade_actions:
@@ -164,7 +180,6 @@ class StateStore:
                     losses += 1
                 continue
 
-            # Fallback classification only for close events with explicit trigger
             if action == "close_position":
                 if trigger in {"take_profit", "trailing_stop"}:
                     wins += 1
@@ -179,7 +194,7 @@ class StateStore:
             "wins": wins,
             "losses": losses,
             "holds": holds,
-            "failed_executions": 0,
+            "failed_executions": failed_executions,
             "executed_trades": executed_trades,
             "classified_trades": classified_trades,
             "win_rate": win_rate,
