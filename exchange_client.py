@@ -110,27 +110,124 @@ class HyperliquidExchangeClient:
         return ""
 
     @staticmethod
+    def _extract_order_oid(order: Dict[str, Any]) -> Optional[int]:
+        if not isinstance(order, dict):
+            return None
+
+        direct_oid = order.get("oid")
+        if direct_oid is not None:
+            try:
+                return int(direct_oid)
+            except (TypeError, ValueError):
+                pass
+
+        nested_order = order.get("order", {})
+        if isinstance(nested_order, dict):
+            nested_oid = nested_order.get("oid")
+            if nested_oid is not None:
+                try:
+                    return int(nested_oid)
+                except (TypeError, ValueError):
+                    pass
+
+        resting = order.get("resting", {})
+        if isinstance(resting, dict):
+            resting_oid = resting.get("oid")
+            if resting_oid is not None:
+                try:
+                    return int(resting_oid)
+                except (TypeError, ValueError):
+                    pass
+
+        return None
+
+    @staticmethod
+    def _extract_order_size(order: Dict[str, Any]) -> Decimal:
+        if not isinstance(order, dict):
+            return Decimal("0")
+
+        candidates = [
+            order.get("sz"),
+            order.get("s"),
+            order.get("size"),
+            order.get("origSz"),
+        ]
+
+        nested_order = order.get("order", {})
+        if isinstance(nested_order, dict):
+            candidates.extend([
+                nested_order.get("sz"),
+                nested_order.get("s"),
+                nested_order.get("size"),
+                nested_order.get("origSz"),
+            ])
+
+        for c in candidates:
+            val = safe_decimal(c, Decimal("0"))
+            if val != 0:
+                return val
+
+        return Decimal("0")
+
+    def _extract_order_side(self, order: Dict[str, Any]) -> str:
+        if not isinstance(order, dict):
+            return ""
+
+        for candidate in [order.get("side"), order.get("dir"), order.get("b")]:
+            side = self._normalize_side(candidate)
+            if side:
+                return side
+
+        nested_order = order.get("order", {})
+        if isinstance(nested_order, dict):
+            for candidate in [nested_order.get("side"), nested_order.get("dir"), nested_order.get("b")]:
+                side = self._normalize_side(candidate)
+                if side:
+                    return side
+
+        return ""
+
+    @staticmethod
     def _extract_trigger_px(order: Dict[str, Any]) -> Decimal:
         if not isinstance(order, dict):
             return Decimal("0")
 
-        direct = order.get("triggerPx")
-        if direct is not None:
-            return safe_decimal(direct, Decimal("0"))
+        candidates = [
+            order.get("triggerPx"),
+            order.get("tpTriggerPx"),
+            order.get("slTriggerPx"),
+        ]
 
         trigger_obj = order.get("trigger", {})
         if isinstance(trigger_obj, dict):
-            nested = trigger_obj.get("triggerPx")
-            if nested is not None:
-                return safe_decimal(nested, Decimal("0"))
+            candidates.append(trigger_obj.get("triggerPx"))
 
         order_type = order.get("orderType", {})
         if isinstance(order_type, dict):
             trigger_obj_2 = order_type.get("trigger", {})
             if isinstance(trigger_obj_2, dict):
-                nested2 = trigger_obj_2.get("triggerPx")
-                if nested2 is not None:
-                    return safe_decimal(nested2, Decimal("0"))
+                candidates.append(trigger_obj_2.get("triggerPx"))
+
+        nested_order = order.get("order", {})
+        if isinstance(nested_order, dict):
+            candidates.extend([
+                nested_order.get("triggerPx"),
+                nested_order.get("tpTriggerPx"),
+                nested_order.get("slTriggerPx"),
+            ])
+            nested_trigger = nested_order.get("trigger", {})
+            if isinstance(nested_trigger, dict):
+                candidates.append(nested_trigger.get("triggerPx"))
+            nested_order_type = nested_order.get("orderType", {})
+            if isinstance(nested_order_type, dict):
+                nested_trigger_2 = nested_order_type.get("trigger", {})
+                if isinstance(nested_trigger_2, dict):
+                    candidates.append(nested_trigger_2.get("triggerPx"))
+
+        for c in candidates:
+            px = safe_decimal(c, Decimal("0"))
+            if px > 0:
+                return px
 
         return Decimal("0")
 
@@ -139,23 +236,48 @@ class HyperliquidExchangeClient:
         if not isinstance(order, dict):
             return ""
 
-        direct = str(order.get("tpsl", "")).strip().lower()
-        if direct in {"tp", "sl"}:
-            return direct
+        candidates: List[Any] = [order.get("tpsl"), order.get("triggerType")]
 
         trigger_obj = order.get("trigger", {})
         if isinstance(trigger_obj, dict):
-            nested = str(trigger_obj.get("tpsl", "")).strip().lower()
-            if nested in {"tp", "sl"}:
-                return nested
+            candidates.append(trigger_obj.get("tpsl"))
+            candidates.append(trigger_obj.get("triggerType"))
 
         order_type = order.get("orderType", {})
         if isinstance(order_type, dict):
             trigger_obj_2 = order_type.get("trigger", {})
             if isinstance(trigger_obj_2, dict):
-                nested2 = str(trigger_obj_2.get("tpsl", "")).strip().lower()
-                if nested2 in {"tp", "sl"}:
-                    return nested2
+                candidates.append(trigger_obj_2.get("tpsl"))
+                candidates.append(trigger_obj_2.get("triggerType"))
+
+        nested_order = order.get("order", {})
+        if isinstance(nested_order, dict):
+            candidates.append(nested_order.get("tpsl"))
+            candidates.append(nested_order.get("triggerType"))
+
+            nested_trigger = nested_order.get("trigger", {})
+            if isinstance(nested_trigger, dict):
+                candidates.append(nested_trigger.get("tpsl"))
+                candidates.append(nested_trigger.get("triggerType"))
+
+            nested_order_type = nested_order.get("orderType", {})
+            if isinstance(nested_order_type, dict):
+                nested_trigger_2 = nested_order_type.get("trigger", {})
+                if isinstance(nested_trigger_2, dict):
+                    candidates.append(nested_trigger_2.get("tpsl"))
+                    candidates.append(nested_trigger_2.get("triggerType"))
+
+        for c in candidates:
+            value = str(c or "").strip().lower()
+            if value in {"tp", "sl"}:
+                return value
+
+        is_tp = bool(order.get("isTp"))
+        is_sl = bool(order.get("isSl"))
+        if is_tp:
+            return "tp"
+        if is_sl:
+            return "sl"
 
         return ""
 
@@ -296,24 +418,24 @@ class HyperliquidExchangeClient:
             if not isinstance(order, dict):
                 continue
 
-            order_coin = str(order.get("coin", "")).strip().upper()
+            order_coin = str(order.get("coin", order.get("symbol", ""))).strip().upper()
+            if not order_coin and isinstance(order.get("order"), dict):
+                order_coin = str(order["order"].get("coin", order["order"].get("symbol", ""))).strip().upper()
             if order_coin != wanted_coin:
                 continue
 
-            order_side = self._normalize_side(order.get("side"))
-            if not order_side:
-                order_side = self._normalize_side(order.get("dir"))
+            order_side = self._extract_order_side(order)
             if order_side != wanted_side:
                 continue
 
-            order_size = abs(safe_decimal(order.get("sz", order.get("s", "0")), Decimal("0")))
-            if not self._is_close_enough(order_size, wanted_size, rel_tol=Decimal("0.05")):
+            order_size = abs(self._extract_order_size(order))
+            if not self._is_close_enough(order_size, wanted_size, rel_tol=Decimal("0.06")):
                 continue
 
             order_trigger_px = self._extract_trigger_px(order)
             if order_trigger_px <= 0:
                 continue
-            if not self._is_close_enough(order_trigger_px, trigger_price, rel_tol=Decimal("0.015")):
+            if not self._is_close_enough(order_trigger_px, trigger_price, rel_tol=Decimal("0.02")):
                 continue
 
             order_tpsl = self._extract_tpsl(order)
@@ -322,13 +444,8 @@ class HyperliquidExchangeClient:
             if strict_tpsl and not order_tpsl:
                 continue
 
-            oid_raw = order.get("oid")
-            if oid_raw is None:
-                continue
-
-            try:
-                oid = int(oid_raw)
-            except (TypeError, ValueError):
+            oid = self._extract_order_oid(order)
+            if oid is None:
                 continue
 
             score = abs(order_trigger_px - trigger_price)
@@ -346,8 +463,8 @@ class HyperliquidExchangeClient:
         size: Decimal,
         trigger_price: Decimal,
         tpsl: str,
-        attempts: int = 6,
-        delay_sec: float = 0.5,
+        attempts: int = 10,
+        delay_sec: float = 0.6,
     ) -> Optional[int]:
         for _ in range(attempts):
             strict_match = self._find_trigger_order_id(
@@ -429,16 +546,17 @@ class HyperliquidExchangeClient:
         for order in open_orders:
             if not isinstance(order, dict):
                 continue
-            order_coin = str(order.get("coin", "")).strip().upper()
+
+            order_coin = str(order.get("coin", order.get("symbol", ""))).strip().upper()
+            if not order_coin and isinstance(order.get("order"), dict):
+                order_coin = str(order["order"].get("coin", order["order"].get("symbol", ""))).strip().upper()
             if order_coin != coin.upper():
                 continue
-            oid = order.get("oid")
+
+            oid = self._extract_order_oid(order)
             if oid is None:
                 continue
-            try:
-                found.add(int(oid))
-            except (TypeError, ValueError):
-                continue
+            found.add(oid)
 
         return wanted.issubset(found)
 
@@ -628,9 +746,16 @@ class HyperliquidExchangeClient:
                 size=normalized_size,
                 trigger_price=rounded_trigger,
                 tpsl=tpsl,
-                attempts=6,
-                delay_sec=0.5,
+                attempts=10,
+                delay_sec=0.6,
             )
+
+        if order_id is None:
+            logger.warning(
+                f"Trigger order accepted but oid unresolved for {coin} {tpsl.upper()} {side.upper()} "
+                f"size={normalized_size} trigger={rounded_trigger}"
+            )
+            return {"success": False, "reason": "missing_trigger_order_id"}
 
         logger.info(
             f"LIVE trigger order placed {coin} {tpsl.upper()} {side.upper()} "
