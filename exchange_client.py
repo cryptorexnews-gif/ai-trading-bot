@@ -47,8 +47,16 @@ class HyperliquidExchangeClient:
         self.info_timeout = info_timeout
         self.exchange_timeout = exchange_timeout
 
-        env_vault = os.getenv("HYPERLIQUID_VAULT_ADDRESS", "").strip()
-        normalized_vault = (vault_address or env_vault or "").strip()
+        # IMPORTANT:
+        # - If vault_address is explicitly provided (including empty string), use it as-is.
+        # - Only if it's None, read from env as optional fallback.
+        # This prevents accidental reactivation of vault mode when bot wants wallet-only mode.
+        if vault_address is None:
+            env_vault = os.getenv("HYPERLIQUID_VAULT_ADDRESS", "").strip()
+            normalized_vault = env_vault
+        else:
+            normalized_vault = str(vault_address).strip()
+
         self.vault_address: Optional[str] = normalized_vault if normalized_vault else None
 
         self.session = create_robust_session()
