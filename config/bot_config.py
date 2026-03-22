@@ -116,6 +116,8 @@ class BotConfig:
         self.break_even_offset_pct = _env_decimal("BREAK_EVEN_OFFSET_PCT", "0.001")
         self.correlation_threshold = _env_decimal("CORRELATION_THRESHOLD", "0.7")
 
+        self.vault_address = ""
+
         self._normalize_runtime_values()
 
     def _normalize_runtime_values(self) -> None:

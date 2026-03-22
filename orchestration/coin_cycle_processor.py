@@ -205,14 +205,7 @@ class CoinCycleProcessor:
                 self.metrics.increment("trades_executed_total")
 
                 if decision["action"] in ["buy", "sell", "increase_position"]:
-                    if decision["action"] == "buy":
-                        is_long = True
-                    elif decision["action"] == "sell":
-                        is_long = False
-                    else:
-                        existing_size = Decimal(str(portfolio.positions.get(coin, {}).get("size", 0)))
-                        is_long = existing_size >= 0
-
+                    is_long = decision["action"] in ["buy", "increase_position"]
                     sl_pct = decision.get("stop_loss_pct")
                     tp_pct = decision.get("take_profit_pct")
 
@@ -225,18 +218,14 @@ class CoinCycleProcessor:
                         sl_pct=sl_pct if isinstance(sl_pct, Decimal) else None,
                         tp_pct=tp_pct if isinstance(tp_pct, Decimal) else None,
                     )
-                    synced = self.sync_exchange_protective_orders(coin)
-                    if not synced:
-                        logger.error(f"{coin} TP/SL sync failed right after execution; will retry in next cycle")
+                    self.sync_exchange_protective_orders(coin)
 
                 elif decision["action"] == "close_position":
                     self.cancel_exchange_protective_orders(coin)
                     self.position_manager.remove_position(coin)
 
                 elif decision["action"] == "reduce_position":
-                    synced = self.sync_exchange_protective_orders(coin)
-                    if not synced:
-                        logger.error(f"{coin} TP/SL resync failed after reduce; will retry in next cycle")
+                    self.sync_exchange_protective_orders(coin)
 
                 self.notifier.notify_trade(trade_record)
                 logger.info(f"{coin} executed: reason={result['reason']}, notional=${notional}")

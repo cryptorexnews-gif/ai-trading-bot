@@ -78,14 +78,6 @@ class CycleOrchestrator:
         self.trading_pairs = trading_pairs
         self._cycle_count: int = 0
 
-        self._protective_sync_max_attempts = 12
-        self._protective_sync_base_sleep_sec = 1.0
-        self._protective_sync_cooldown_sec = 600.0  # anti-loop per errori terminali
-        self._protective_sync_suppressed_until: Dict[str, float] = {}
-
-        self._trigger_close_max_attempts = 8
-        self._trigger_close_base_sleep_sec = 1.0
-
         self.coin_processor = CoinCycleProcessor(
             cfg=self.cfg,
             execution_engine=self.execution_engine,
@@ -114,43 +106,6 @@ class CycleOrchestrator:
     def _live_orders_enabled(self) -> bool:
         return self.cfg.execution_mode == "live" and self.cfg.enable_mainnet_trading
 
-    def _is_terminal_protective_sync_reason(self, reason: str) -> bool:
-        """
-        Errori terminali: non migliorano con retry immediato e causano loop ordini.
-        """
-        r = str(reason or "").strip().lower()
-        terminal_markers = [
-            "exchange_rejected",
-            "status_error",
-            "not_acknowledged",
-            "asset_not_found",
-            "invalid_side",
-            "invalid_size",
-            "invalid_trigger_price",
-            "live_disabled_fail_closed",
-            "auth_wallet_not_found",
-            "master wallet",
-            "wallet",
-            "does not exist",
-        ]
-        return any(marker in r for marker in terminal_markers)
-
-    def _is_protective_sync_suppressed(self, coin: str) -> bool:
-        until = self._protective_sync_suppressed_until.get(coin, 0.0)
-        return time.time() < until
-
-    def _suppress_protective_sync(self, coin: str, reason: str) -> None:
-        until = time.time() + self._protective_sync_cooldown_sec
-        self._protective_sync_suppressed_until[coin] = until
-        logger.error(
-            f"{coin} protective sync suppressed for {int(self._protective_sync_cooldown_sec)}s "
-            f"due to terminal reason: {reason}"
-        )
-
-    def _clear_protective_sync_suppression(self, coin: str) -> None:
-        if coin in self._protective_sync_suppressed_until:
-            del self._protective_sync_suppressed_until[coin]
-
     def _cancel_exchange_protective_orders(self, coin: str) -> None:
         if not self._live_orders_enabled():
             self.position_manager.clear_protective_order_ids(coin)
@@ -167,25 +122,12 @@ class CycleOrchestrator:
 
         self.position_manager.clear_protective_order_ids(coin)
 
-    def _verify_protective_orders_present(self, coin: str, sl_id: Optional[int], tp_id: Optional[int]) -> bool:
-        if sl_id is None or tp_id is None:
-            return False
-        return self.exchange_client.are_order_ids_open(
-            user=self.cfg.wallet_address,
-            coin=coin,
-            order_ids=[sl_id, tp_id],
-        )
-
     def _sync_exchange_protective_orders(self, coin: str) -> bool:
         if not self._live_orders_enabled():
             self.position_manager.clear_protective_order_ids(coin)
             return True
 
-        if self._is_protective_sync_suppressed(coin):
-            logger.warning(f"{coin} protective sync currently suppressed (cooldown active), skipping")
-            return False
-
-        max_attempts = self._protective_sync_max_attempts
+        max_attempts = 3
         for attempt in range(1, max_attempts + 1):
             refreshed_portfolio = self.portfolio_service.get_portfolio_state()
             self.position_manager.sync_with_exchange(refreshed_portfolio.positions)
@@ -197,7 +139,7 @@ class CycleOrchestrator:
                     f"position not visible yet on exchange"
                 )
                 if attempt < max_attempts:
-                    time.sleep(self._protective_sync_base_sleep_sec)
+                    time.sleep(1.5)
                     continue
                 return False
 
@@ -217,94 +159,26 @@ class CycleOrchestrator:
                 current_take_profit_order_id=managed.take_profit_order_id,
             )
 
-            if not result.get("success"):
-                reason = str(result.get("reason", "unknown"))
-                logger.warning(
-                    f"{coin} protective sync attempt {attempt}/{max_attempts} failed: {reason}"
+            if result.get("success"):
+                self.position_manager.set_protective_order_ids(
+                    coin,
+                    result.get("stop_loss_order_id"),
+                    result.get("take_profit_order_id"),
                 )
-
-                if self._is_terminal_protective_sync_reason(reason):
-                    self._suppress_protective_sync(coin, reason)
-                    return False
-
-                if attempt < max_attempts:
-                    backoff = self._protective_sync_base_sleep_sec + min(2.0, attempt * 0.15)
-                    time.sleep(backoff)
-                continue
-
-            sl_id = result.get("stop_loss_order_id")
-            tp_id = result.get("take_profit_order_id")
-
-            if not self._verify_protective_orders_present(coin, sl_id, tp_id):
-                logger.warning(
-                    f"{coin} protective sync attempt {attempt}/{max_attempts}: "
-                    f"orders not yet confirmed on exchange (sl_id={sl_id}, tp_id={tp_id})"
-                )
-                if attempt < max_attempts:
-                    time.sleep(self._protective_sync_base_sleep_sec)
-                continue
-
-            self.position_manager.set_protective_order_ids(coin, sl_id, tp_id)
-            self._clear_protective_sync_suppression(coin)
-            logger.info(
-                f"{coin} protective orders confirmed on exchange: "
-                f"SL oid={sl_id} TP oid={tp_id}"
-            )
-            return True
-
-        logger.error(f"{coin} failed to confirm TP/SL on exchange after {max_attempts} attempts")
-        return False
-
-    def _execute_trigger_close_with_retries(
-        self,
-        coin: str,
-        side: str,
-        close_size: Decimal,
-        current_price: Decimal,
-        trigger: str,
-        previous_size: Decimal,
-    ) -> Tuple[bool, Dict[str, Any]]:
-        last_result: Dict[str, Any] = {"success": False, "reason": "not_executed"}
-
-        for attempt in range(1, self._trigger_close_max_attempts + 1):
-            self.hl_rate_limiter.acquire(1)
-            result = self.exchange_client.place_order(
-                coin=coin,
-                side=side,
-                size=close_size,
-                desired_price=current_price,
-                reduce_only=True,
-            )
-            last_result = result if isinstance(result, dict) else {"success": False, "reason": "invalid_result"}
-
-            if not last_result.get("success"):
-                logger.warning(
-                    f"{trigger.upper()} close attempt {attempt}/{self._trigger_close_max_attempts} failed for {coin}: "
-                    f"{last_result.get('reason', 'unknown')}"
-                )
-                if attempt < self._trigger_close_max_attempts:
-                    backoff = self._trigger_close_base_sleep_sec + min(2.0, attempt * 0.2)
-                    time.sleep(backoff)
-                continue
-
-            refreshed = self.portfolio_service.get_portfolio_state()
-            new_size = Decimal(str(refreshed.positions.get(coin, {}).get("size", 0)))
-
-            if abs(new_size) < abs(previous_size):
                 logger.info(
-                    f"{trigger.upper()} close confirmed on exchange for {coin}: "
-                    f"size {previous_size} -> {new_size}"
+                    f"{coin} protective orders synced on exchange: "
+                    f"SL oid={result.get('stop_loss_order_id')} TP oid={result.get('take_profit_order_id')}"
                 )
-                return True, last_result
+                return True
 
             logger.warning(
-                f"{trigger.upper()} close attempt {attempt}/{self._trigger_close_max_attempts} not reflected yet on exchange for {coin} "
-                f"(expected reduction from {previous_size}, got {new_size})"
+                f"{coin} protective sync attempt {attempt}/{max_attempts} failed: "
+                f"{result.get('reason', 'unknown')}"
             )
-            if attempt < self._trigger_close_max_attempts:
-                time.sleep(self._trigger_close_base_sleep_sec)
+            if attempt < max_attempts:
+                time.sleep(1.5)
 
-        return False, last_result
+        return False
 
     def _update_protection_without_trade(self, coin: str, decision: Dict[str, Any]) -> bool:
         sl_pct = decision.get("stop_loss_pct")
@@ -361,8 +235,6 @@ class CycleOrchestrator:
     def _process_risk_triggers(self, portfolio: PortfolioState) -> int:
         """Check and execute SL/TP/trailing/break-even triggers."""
         self.position_manager.sync_with_exchange(portfolio.positions)
-        self._ensure_protective_orders_for_open_positions(portfolio)
-
         mids = technical_fetcher.get_all_mids()
         if not mids:
             return 0
@@ -391,16 +263,10 @@ class CycleOrchestrator:
             side = "sell" if pos_size > 0 else "buy"
             close_size = abs(pos_size)
 
-            close_ok, result = self._execute_trigger_close_with_retries(
-                coin=coin,
-                side=side,
-                close_size=close_size,
-                current_price=current_price,
-                trigger=trigger,
-                previous_size=pos_size,
-            )
+            self.hl_rate_limiter.acquire(1)
+            result = self.exchange_client.place_order(coin, side, close_size, current_price, reduce_only=True)
 
-            if close_ok:
+            if result.get("success"):
                 triggered += 1
                 self._cancel_exchange_protective_orders(coin)
                 self.position_manager.remove_position(coin)
@@ -409,7 +275,7 @@ class CycleOrchestrator:
                 self.metrics.increment("trades_executed_total")
                 logger.info(f"{trigger.upper()} close executed for {coin}")
             else:
-                logger.error(f"Failed to execute {trigger} close for {coin} after retries: {result}")
+                logger.error(f"Failed to execute {trigger} close for {coin}: {result}")
 
         return triggered
 
@@ -469,15 +335,9 @@ class CycleOrchestrator:
         current_price = Decimal(str(mids.get(worst_coin, "0"))) if mids and worst_coin in mids else Decimal("0")
 
         if current_price > 0:
-            close_ok, result = self._execute_trigger_close_with_retries(
-                coin=worst_coin,
-                side=side,
-                close_size=close_size,
-                current_price=current_price,
-                trigger="emergency",
-                previous_size=pos_size,
-            )
-            if close_ok:
+            self.hl_rate_limiter.acquire(1)
+            result = self.exchange_client.place_order(worst_coin, side, close_size, current_price, reduce_only=True)
+            if result.get("success"):
                 self._cancel_exchange_protective_orders(worst_coin)
                 self.position_manager.remove_position(worst_coin)
                 logger.info(f"Emergency close executed for {worst_coin}")
@@ -500,7 +360,7 @@ class CycleOrchestrator:
                 self.state_store.add_trade_record(state, trade_record)
                 self.state_store.save_state(state)
                 return self._fetch_portfolio()
-            logger.error(f"Emergency close FAILED for {worst_coin} after retries: {result}")
+            logger.error(f"Emergency close FAILED for {worst_coin}: {result}")
 
         return portfolio
 
@@ -565,36 +425,3 @@ class CycleOrchestrator:
                     state["consecutive_losses"] = state.get("consecutive_losses", 0) + 1
 
         return trades_executed, notional_added
-
-    def _ensure_protective_orders_for_open_positions(self, portfolio: PortfolioState) -> None:
-        """
-        Ensure every managed open position has TP/SL order ids and that they truly exist on Hyperliquid.
-        If missing or stale, force recreate/sync.
-        """
-        if not self._live_orders_enabled():
-            return
-
-        for coin, pos in portfolio.positions.items():
-            size = Decimal(str(pos.get("size", 0)))
-            if size == 0:
-                continue
-
-            managed = self.position_manager.get_position(coin)
-            if not managed:
-                continue
-
-            if self._is_protective_sync_suppressed(coin):
-                logger.warning(f"{coin} protective sync suppressed, skipping enforcement this cycle")
-                continue
-
-            sl_id, tp_id = self.position_manager.get_protective_order_ids(coin)
-            ids_present = sl_id is not None and tp_id is not None
-            ids_confirmed = self._verify_protective_orders_present(coin, sl_id, tp_id) if ids_present else False
-
-            if not ids_present or not ids_confirmed:
-                logger.warning(
-                    f"{coin} protective orders missing/stale (sl_id={sl_id}, tp_id={tp_id}, confirmed={ids_confirmed}), recreating"
-                )
-                synced = self._sync_exchange_protective_orders(coin)
-                if not synced:
-                    logger.error(f"{coin} failed to enforce TP/SL on exchange in this cycle")

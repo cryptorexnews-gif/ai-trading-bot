@@ -35,80 +35,16 @@ class StateStore:
             "daily_notional_total": "0"
         }
 
-    @staticmethod
-    def _safe_int(value: Any, default: int = 0) -> int:
-        try:
-            return int(value)
-        except (TypeError, ValueError):
-            return default
-
-    @staticmethod
-    def _safe_decimal_str(value: Any, default: str = "0") -> str:
-        try:
-            return str(Decimal(str(value)))
-        except Exception:
-            return default
-
-    def _normalize_state(self, data: Dict[str, Any]) -> Dict[str, Any]:
-        defaults = self._default_state()
-
-        if not isinstance(data, dict):
-            return defaults
-
-        # Fill missing keys first
-        for key, value in defaults.items():
-            if key not in data:
-                data[key] = value
-
-        # Numeric-ish fields
-        data["peak_portfolio_value"] = self._safe_decimal_str(data.get("peak_portfolio_value", "0"), "0")
-        data["consecutive_failed_cycles"] = self._safe_int(data.get("consecutive_failed_cycles", 0), 0)
-        data["consecutive_losses"] = self._safe_int(data.get("consecutive_losses", 0), 0)
-
-        # Dict fields
-        last_trade_ts = data.get("last_trade_timestamp_by_coin", {})
-        if not isinstance(last_trade_ts, dict):
-            last_trade_ts = {}
-        normalized_last_trade_ts: Dict[str, float] = {}
-        for k, v in last_trade_ts.items():
-            key = str(k).strip().upper()
-            if not key:
-                continue
-            try:
-                normalized_last_trade_ts[key] = float(v)
-            except (TypeError, ValueError):
-                continue
-        data["last_trade_timestamp_by_coin"] = normalized_last_trade_ts
-
-        daily_notional = data.get("daily_notional_by_day", {})
-        if not isinstance(daily_notional, dict):
-            daily_notional = {}
-        normalized_daily_notional: Dict[str, str] = {}
-        for k, v in daily_notional.items():
-            day = str(k).strip()
-            if not day:
-                continue
-            normalized_daily_notional[day] = self._safe_decimal_str(v, "0")
-        data["daily_notional_by_day"] = normalized_daily_notional
-
-        # List fields
-        trade_history = data.get("trade_history", [])
-        if not isinstance(trade_history, list):
-            trade_history = []
-        data["trade_history"] = [t for t in trade_history if isinstance(t, dict)][-100:]
-
-        equity_snapshots = data.get("equity_snapshots", [])
-        if not isinstance(equity_snapshots, list):
-            equity_snapshots = []
-        data["equity_snapshots"] = [s for s in equity_snapshots if isinstance(s, dict)][-500:]
-
-        return data
-
     def load_state(self) -> Dict[str, Any]:
         data = read_json_file(self.state_path, default=None)
         if data is None:
             return self._default_state()
-        return self._normalize_state(data)
+
+        defaults = self._default_state()
+        for key, value in defaults.items():
+            if key not in data:
+                data[key] = value
+        return data
 
     def save_state(self, state: Dict[str, Any]) -> None:
         atomic_write_json(self.state_path, state)
@@ -117,7 +53,7 @@ class StateStore:
         data = read_json_file(self.metrics_path, default=None)
         if data is None:
             return self._default_metrics()
-        return data if isinstance(data, dict) else self._default_metrics()
+        return data
 
     def save_metrics(self, metrics: Dict[str, Any]) -> None:
         atomic_write_json(self.metrics_path, metrics)
@@ -134,9 +70,6 @@ class StateStore:
         if notional <= 0:
             return daily_notional_by_day
 
-        if not isinstance(daily_notional_by_day, dict):
-            daily_notional_by_day = {}
-
         key = self.day_key(ts)
         current = Decimal(str(daily_notional_by_day.get(key, "0")))
         daily_notional_by_day[key] = str(current + notional)
@@ -151,10 +84,7 @@ class StateStore:
         trade: Dict[str, Any]
     ) -> None:
         history = state.get("trade_history", [])
-        if not isinstance(history, list):
-            history = []
-        if isinstance(trade, dict):
-            history.append(trade)
+        history.append(trade)
         if len(history) > 100:
             history = history[-100:]
         state["trade_history"] = history
@@ -168,8 +98,6 @@ class StateStore:
         margin_usage: Decimal,
     ) -> None:
         snapshots = state.get("equity_snapshots", [])
-        if not isinstance(snapshots, list):
-            snapshots = []
         snapshots.append({
             "timestamp": time.time(),
             "balance": str(balance),
@@ -184,21 +112,14 @@ class StateStore:
 
     def get_equity_snapshots(self, state: Dict[str, Any], limit: int = 200) -> List[Dict[str, Any]]:
         snapshots = state.get("equity_snapshots", [])
-        if not isinstance(snapshots, list):
-            return []
         return snapshots[-limit:] if snapshots else []
 
     def get_recent_trades(self, state: Dict[str, Any], count: int = 5) -> List[Dict[str, Any]]:
         history = state.get("trade_history", [])
-        if not isinstance(history, list):
-            return []
-        return [t for t in history if isinstance(t, dict)][-count:] if history else []
+        return history[-count:] if history else []
 
     @staticmethod
-    def _is_failed_transaction(trade: Any) -> bool:
-        if not isinstance(trade, dict):
-            return True
-
+    def _is_failed_transaction(trade: Dict[str, Any]) -> bool:
         if not bool(trade.get("success", False)):
             return True
 
@@ -214,7 +135,7 @@ class StateStore:
 
     def get_performance_summary(self, state: Dict[str, Any]) -> Dict[str, Any]:
         history = state.get("trade_history", [])
-        if not isinstance(history, list) or not history:
+        if not history:
             return {
                 "total_trades": 0,
                 "win_rate": 0.0,
@@ -238,10 +159,6 @@ class StateStore:
         executed_trades = 0
 
         for t in history:
-            if not isinstance(t, dict):
-                failed_executions += 1
-                continue
-
             action = str(t.get("action", "")).strip().lower()
             trigger = str(t.get("trigger", "")).strip().lower()
 

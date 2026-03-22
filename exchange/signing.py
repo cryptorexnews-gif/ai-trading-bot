@@ -5,17 +5,23 @@ from Crypto.Hash import keccak
 from eth_account.messages import encode_typed_data
 
 
+def _address_to_bytes(address: str) -> bytes:
+    return bytes.fromhex(address[2:].lower())
+
+
 def _action_hash(
     action: Dict[str, Any],
+    vault_address: Optional[str],
     nonce: int,
     expires_after: Optional[int],
 ) -> bytes:
     data = msgpack.packb(action)
     data += nonce.to_bytes(8, "big")
-
-    # Master-only mode: no vault address, always append marker 0x00
-    data += b"\x00"
-
+    if vault_address is None:
+        data += b"\x00"
+    else:
+        data += b"\x01"
+        data += _address_to_bytes(vault_address)
     if expires_after is not None:
         data += b"\x00"
         data += expires_after.to_bytes(8, "big")
@@ -50,11 +56,12 @@ def _l1_payload(phantom_agent: Dict[str, str]) -> Dict[str, Any]:
 def sign_l1_action_exact(
     account,
     action: Dict[str, Any],
+    vault_address: Optional[str],
     nonce: int,
     expires_after: Optional[int],
     is_mainnet: bool = True,
 ) -> Dict[str, Any]:
-    hash_bytes = _action_hash(action, nonce, expires_after)
+    hash_bytes = _action_hash(action, vault_address, nonce, expires_after)
     phantom_agent = {"source": "a" if is_mainnet else "b", "connectionId": "0x" + hash_bytes.hex()}
     data = _l1_payload(phantom_agent)
     structured_data = encode_typed_data(full_message=data)
