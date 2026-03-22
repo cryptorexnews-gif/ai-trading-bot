@@ -1,6 +1,6 @@
 import logging
 import time
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from exchange.signing import sign_l1_action_exact, sign_l1_action_exact_legacy
 
@@ -52,12 +52,49 @@ class SignedActionService:
             is_mainnet=True,
         )
 
-    def post_signed_action_once(
+    @staticmethod
+    def _with_recovery_v(signature: Dict[str, Any]) -> Dict[str, Any]:
+        s = dict(signature)
+        raw_v = int(s.get("v", 27))
+        if raw_v >= 27:
+            s["v"] = raw_v - 27
+        return s
+
+    def _payload_variants(
         self,
         action: Dict[str, Any],
-        timeout: Optional[int] = None,
-        vault_address_override: Optional[str] = None,
-        signature_mode: str = "padded",
+        nonce: int,
+        signature: Dict[str, Any],
+        vault_address_override: Optional[str],
+    ) -> List[Dict[str, Any]]:
+        base = {
+            "action": action,
+            "nonce": nonce,
+            "signature": signature,
+        }
+
+        payloads: List[Dict[str, Any]] = []
+
+        # Variant A: omit vaultAddress when None
+        if vault_address_override is None:
+            payloads.append(dict(base))
+            payload_with_null = dict(base)
+            payload_with_null["vaultAddress"] = None
+            payloads.append(payload_with_null)
+        else:
+            payload_with_vault = dict(base)
+            payload_with_vault["vaultAddress"] = vault_address_override
+            payloads.append(payload_with_vault)
+
+        return payloads
+
+    def _post_with_signature_strategy(
+        self,
+        action: Dict[str, Any],
+        timeout: Optional[int],
+        vault_address_override: Optional[str],
+        signature_mode: str,
+        use_recovery_v: bool,
     ) -> Optional[Dict[str, Any]]:
         nonce = self.next_nonce()
         signature = self._build_signature(
@@ -66,13 +103,40 @@ class SignedActionService:
             nonce=nonce,
             signature_mode=signature_mode,
         )
-        payload = {
-            "action": action,
-            "nonce": nonce,
-            "signature": signature,
-            "vaultAddress": vault_address_override,
-        }
-        return self._post_exchange(payload, timeout)
+
+        if use_recovery_v:
+            signature = self._with_recovery_v(signature)
+
+        payloads = self._payload_variants(
+            action=action,
+            nonce=nonce,
+            signature=signature,
+            vault_address_override=vault_address_override,
+        )
+
+        last_result: Optional[Dict[str, Any]] = None
+        for payload in payloads:
+            last_result = self._post_exchange(payload, timeout)
+            if last_result is None:
+                continue
+            if not self._is_auth_error(last_result):
+                return last_result
+        return last_result
+
+    def post_signed_action_once(
+        self,
+        action: Dict[str, Any],
+        timeout: Optional[int] = None,
+        vault_address_override: Optional[str] = None,
+        signature_mode: str = "padded",
+    ) -> Optional[Dict[str, Any]]:
+        return self._post_with_signature_strategy(
+            action=action,
+            timeout=timeout,
+            vault_address_override=vault_address_override,
+            signature_mode=signature_mode,
+            use_recovery_v=False,
+        )
 
     def post_signed_action_with_auth_guard(
         self,
@@ -84,25 +148,33 @@ class SignedActionService:
         if now < self._auth_block_until:
             return {"status": "err", "response": "auth_cooldown_active"}
 
-        result = self.post_signed_action_once(
-            action=action,
-            timeout=timeout,
-            vault_address_override=vault_address_override,
-            signature_mode="padded",
-        )
+        # Strategy matrix in descending preference
+        attempts = [
+            ("padded", False),
+            ("legacy", False),
+            ("padded", True),
+            ("legacy", True),
+        ]
 
-        if self._is_auth_error(result):
-            logger.warning("Signed action auth-style rejection: retrying once with legacy signature format")
-            legacy_result = self.post_signed_action_once(
+        result: Optional[Dict[str, Any]] = None
+        for idx, (mode, recovery_v) in enumerate(attempts, start=1):
+            if idx > 1:
+                logger.warning(
+                    f"Signed action auth-style rejection: retrying with signature mode={mode}, "
+                    f"recovery_v={recovery_v}"
+                )
+
+            result = self._post_with_signature_strategy(
                 action=action,
                 timeout=timeout,
                 vault_address_override=vault_address_override,
-                signature_mode="legacy",
+                signature_mode=mode,
+                use_recovery_v=recovery_v,
             )
-            if legacy_result is not None and not self._is_auth_error(legacy_result):
+
+            if result is not None and not self._is_auth_error(result):
                 self._auth_error_count = 0
-                return legacy_result
-            result = legacy_result if legacy_result is not None else result
+                return result
 
         if self._is_auth_error(result):
             self._auth_error_count += 1
