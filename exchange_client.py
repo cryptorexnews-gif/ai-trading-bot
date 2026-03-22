@@ -184,12 +184,27 @@ class HyperliquidExchangeClient:
             if self._is_ok_result(retry_result):
                 logger.warning("Retry without vault succeeded. Disabling vault mode for subsequent requests.")
                 self.vault_address = None
-                return retry_result
-            return retry_result
+                result = retry_result
+            else:
+                result = retry_result
+
+        max_wallet_error_retries = 3
+        attempt = 0
+        while is_user_or_api_wallet_not_found_error(result) and attempt < max_wallet_error_retries:
+            attempt += 1
+            backoff_sec = 0.25 * attempt
+            logger.warning(
+                f"Exchange reported wallet/API wallet not found (attempt {attempt}/{max_wallet_error_retries}). "
+                f"Retrying with fresh nonce in {backoff_sec:.2f}s."
+            )
+            time.sleep(backoff_sec)
+            result = self._post_signed_action_once(action, self.vault_address, timeout=timeout)
 
         if is_user_or_api_wallet_not_found_error(result):
-            logger.warning("Exchange reported wallet/API wallet not found. Retrying once with fresh nonce.")
-            return self._post_signed_action_once(action, self.vault_address, timeout=timeout)
+            logger.error(
+                "Persistent wallet/API wallet not found after retries. "
+                f"Signer={self.get_wallet_address_masked()} vault={self.get_vault_address_masked()}"
+            )
 
         return result
 
