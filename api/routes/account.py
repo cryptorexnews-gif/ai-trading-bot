@@ -28,6 +28,7 @@ from api.services.account_route_service import (
     build_positions_response,
 )
 from api.services.account_status_service import build_account_status_response
+from api.services.wallet_service import get_wallet_address
 from runtime_config_store import RuntimeConfigStore
 from state_store import StateStore
 
@@ -53,7 +54,7 @@ def bot_status():
         return rate_limit_resp
 
     try:
-        wallet = os.getenv("HYPERLIQUID_WALLET_ADDRESS", "").strip()
+        wallet = get_wallet_address()
         return jsonify(build_account_status_response(_state_store, LIVE_STATUS_PATH, wallet))
     except Exception:
         logger.error("Account status endpoint failed", exc_info=True)
@@ -68,7 +69,7 @@ def portfolio():
         return rate_limit_resp
 
     try:
-        wallet = os.getenv("HYPERLIQUID_WALLET_ADDRESS", "").strip()
+        wallet = get_wallet_address()
         return jsonify(build_portfolio_response(wallet))
     except Exception:
         logger.error("Account portfolio endpoint failed", exc_info=True)
@@ -83,7 +84,7 @@ def positions():
         return rate_limit_resp
 
     try:
-        wallet = os.getenv("HYPERLIQUID_WALLET_ADDRESS", "").strip()
+        wallet = get_wallet_address()
         return jsonify(build_positions_response(wallet))
     except Exception:
         logger.error("Account positions endpoint failed", exc_info=True)
@@ -98,7 +99,7 @@ def managed_positions():
         return rate_limit_resp
 
     try:
-        wallet = os.getenv("HYPERLIQUID_WALLET_ADDRESS", "").strip()
+        wallet = get_wallet_address()
         return jsonify(build_managed_positions_response(wallet, MANAGED_POSITIONS_PATH))
     except Exception:
         logger.error("Account managed-positions endpoint failed", exc_info=True)

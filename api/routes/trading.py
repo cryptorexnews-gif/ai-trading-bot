@@ -8,8 +8,8 @@ from api.services.trade_history_service import (
     build_export_csv_for_wallet,
     build_performance_response_payload,
     build_trades_response_payload,
-    wallet_address,
 )
+from api.services.wallet_service import get_wallet_address
 
 logger = logging.getLogger(__name__)
 
@@ -28,7 +28,7 @@ def trades():
     if limit is None or limit < 1 or limit > 500:
         return jsonify({"error": "invalid_request"}), 400
 
-    wallet = wallet_address()
+    wallet = get_wallet_address()
     if not wallet:
         return jsonify({"error": "wallet_not_configured"}), 500
 
@@ -46,7 +46,7 @@ def export_trades():
     if rate_limit_resp:
         return rate_limit_resp
 
-    wallet = wallet_address()
+    wallet = get_wallet_address()
     if not wallet:
         return jsonify({"error": "wallet_not_configured"}), 500
 
@@ -69,7 +69,7 @@ def performance():
     if rate_limit_resp:
         return rate_limit_resp
 
-    wallet = wallet_address()
+    wallet = get_wallet_address()
     if not wallet:
         return jsonify({"error": "wallet_not_configured"}), 500
 
