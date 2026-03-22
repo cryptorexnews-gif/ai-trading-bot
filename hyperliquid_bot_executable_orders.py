@@ -16,7 +16,7 @@ import os
 import signal
 import time
 from decimal import Decimal
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from dotenv import load_dotenv
 
@@ -37,7 +37,6 @@ from position_manager import PositionManager
 from risk_manager import RiskManager
 from runtime_config_store import RuntimeConfigStore
 from state_store import StateStore
-from technical_analyzer_simple import technical_fetcher
 from utils.health import HealthMonitor, HealthStatus, HealthCheckResult, check_disk_space, check_file_writable
 from utils.logging_config import setup_logging
 from utils.metrics import MetricsCollector
@@ -62,6 +61,7 @@ class HyperliquidBot:
         self._last_portfolio: Optional[PortfolioState] = None
         self._active_strategy_mode = self.cfg.default_strategy_mode
         self._active_runtime_pairs: List[str] = list(self.cfg.trading_pairs)
+        self._active_runtime_params: Dict[str, str] = {}
 
         self._base_profile = {
             "default_cycle_sec": self.cfg.default_cycle_sec,
@@ -86,7 +86,6 @@ class HyperliquidBot:
             "volume_confirmation_threshold": self.cfg.volume_confirmation_threshold,
         }
 
-        # Build components
         private_key = os.getenv("HYPERLIQUID_PRIVATE_KEY", "")
         self.exchange_client = HyperliquidExchangeClient(
             base_url=self.cfg.base_url,
@@ -188,6 +187,20 @@ class HyperliquidBot:
         logging.info(f"Received {signal.Signals(signum).name}, requesting graceful shutdown...")
         self._shutdown_requested = True
 
+    @staticmethod
+    def _dec(value: str, default: Decimal) -> Decimal:
+        try:
+            return Decimal(str(value))
+        except Exception:
+            return default
+
+    @staticmethod
+    def _int(value: str, default: int) -> int:
+        try:
+            return int(str(value))
+        except Exception:
+            return default
+
     def _validate_trading_pairs(self, pairs: Optional[List[str]] = None) -> List[str]:
         meta = self.exchange_client.get_meta(force_refresh=True)
         source_pairs = pairs if pairs is not None else list(self.cfg.trading_pairs)
@@ -269,6 +282,88 @@ class HyperliquidBot:
 
         self._next_cycle_sec = self.cfg.default_cycle_sec
 
+    def _apply_runtime_param_overrides(self, params: Dict[str, str]) -> None:
+        if not isinstance(params, dict):
+            return
+
+        self.cfg.default_cycle_sec = self._int(params.get("cycle_sec", self.cfg.default_cycle_sec), self.cfg.default_cycle_sec)
+        self.cfg.min_cycle_sec = self._int(params.get("min_cycle_sec", self.cfg.min_cycle_sec), self.cfg.min_cycle_sec)
+        self.cfg.max_cycle_sec = self._int(params.get("max_cycle_sec", self.cfg.max_cycle_sec), self.cfg.max_cycle_sec)
+        self.cfg.max_trades_per_cycle = self._int(
+            params.get("max_trades_per_cycle", self.cfg.max_trades_per_cycle),
+            self.cfg.max_trades_per_cycle
+        )
+
+        self.cfg.hard_max_leverage = self._dec(params.get("hard_max_leverage", self.cfg.hard_max_leverage), self.cfg.hard_max_leverage)
+        self.cfg.min_confidence_open = self._dec(params.get("min_confidence_open", self.cfg.min_confidence_open), self.cfg.min_confidence_open)
+        self.cfg.min_confidence_manage = self._dec(params.get("min_confidence_manage", self.cfg.min_confidence_manage), self.cfg.min_confidence_manage)
+        self.cfg.max_order_margin_pct = self._dec(params.get("max_order_margin_pct", self.cfg.max_order_margin_pct), self.cfg.max_order_margin_pct)
+        self.cfg.trade_cooldown_sec = self._int(params.get("trade_cooldown_sec", self.cfg.trade_cooldown_sec), self.cfg.trade_cooldown_sec)
+        self.cfg.daily_notional_limit_usd = self._dec(
+            params.get("daily_notional_limit_usd", self.cfg.daily_notional_limit_usd),
+            self.cfg.daily_notional_limit_usd
+        )
+        self.cfg.max_drawdown_pct = self._dec(params.get("max_drawdown_pct", self.cfg.max_drawdown_pct), self.cfg.max_drawdown_pct)
+        self.cfg.max_single_asset_pct = self._dec(
+            params.get("max_single_asset_pct", self.cfg.max_single_asset_pct),
+            self.cfg.max_single_asset_pct
+        )
+        self.cfg.emergency_margin_threshold = self._dec(
+            params.get("emergency_margin_threshold", self.cfg.emergency_margin_threshold),
+            self.cfg.emergency_margin_threshold
+        )
+
+        self.cfg.trend_position_size_pct = self._dec(
+            params.get("position_size_pct", self.cfg.trend_position_size_pct),
+            self.cfg.trend_position_size_pct
+        )
+        self.cfg.volume_confirmation_threshold = self._dec(
+            params.get("volume_confirmation_threshold", self.cfg.volume_confirmation_threshold),
+            self.cfg.volume_confirmation_threshold
+        )
+        self.cfg.trend_sl_pct = self._dec(params.get("sl_pct", self.cfg.trend_sl_pct), self.cfg.trend_sl_pct)
+        self.cfg.trend_tp_pct = self._dec(params.get("tp_pct", self.cfg.trend_tp_pct), self.cfg.trend_tp_pct)
+        self.cfg.trend_break_even_activation_pct = self._dec(
+            params.get("break_even_activation_pct", self.cfg.trend_break_even_activation_pct),
+            self.cfg.trend_break_even_activation_pct
+        )
+        self.cfg.trend_trailing_activation_pct = self._dec(
+            params.get("trailing_activation_pct", self.cfg.trend_trailing_activation_pct),
+            self.cfg.trend_trailing_activation_pct
+        )
+        self.cfg.trend_trailing_callback = self._dec(
+            params.get("trailing_callback", self.cfg.trend_trailing_callback),
+            self.cfg.trend_trailing_callback
+        )
+
+        if self.cfg.min_cycle_sec > self.cfg.max_cycle_sec:
+            self.cfg.max_cycle_sec = self.cfg.min_cycle_sec
+        if self.cfg.default_cycle_sec < self.cfg.min_cycle_sec:
+            self.cfg.default_cycle_sec = self.cfg.min_cycle_sec
+        if self.cfg.default_cycle_sec > self.cfg.max_cycle_sec:
+            self.cfg.default_cycle_sec = self.cfg.max_cycle_sec
+
+        rm = self.orchestrator.risk_manager
+        pm = self.orchestrator.position_manager
+
+        rm.hard_max_leverage = self.cfg.hard_max_leverage
+        rm.min_confidence_open = self.cfg.min_confidence_open
+        rm.min_confidence_manage = self.cfg.min_confidence_manage
+        rm.max_order_margin_pct = self.cfg.max_order_margin_pct
+        rm.trade_cooldown_sec = self.cfg.trade_cooldown_sec
+        rm.daily_notional_limit_usd = self.cfg.daily_notional_limit_usd
+        rm.max_drawdown_pct = self.cfg.max_drawdown_pct
+        rm.max_single_asset_pct = self.cfg.max_single_asset_pct
+        rm.emergency_margin_threshold = self.cfg.emergency_margin_threshold
+
+        pm.default_sl_pct = self.cfg.trend_sl_pct
+        pm.default_tp_pct = self.cfg.trend_tp_pct
+        pm.default_trailing_callback = self.cfg.trend_trailing_callback
+        pm.trailing_activation_pct = self.cfg.trend_trailing_activation_pct
+        pm.break_even_activation_pct = self.cfg.trend_break_even_activation_pct
+
+        self._next_cycle_sec = self.cfg.default_cycle_sec
+
     def _apply_runtime_config(self, force: bool = False) -> None:
         runtime = self.runtime_config_store.load()
         runtime_mode = str(runtime.get("strategy_mode", self.cfg.default_strategy_mode)).strip().lower()
@@ -279,10 +374,15 @@ class HyperliquidBot:
         if not runtime_pairs:
             runtime_pairs = list(self.cfg.trading_pairs)
 
+        runtime_params = runtime.get("strategy_params", {})
+        if not isinstance(runtime_params, dict):
+            runtime_params = {}
+
         mode_changed = runtime_mode != self._active_strategy_mode
         pairs_changed_raw = runtime_pairs != self._active_runtime_pairs
+        params_changed = runtime_params != self._active_runtime_params
 
-        if not force and not mode_changed and not pairs_changed_raw:
+        if not force and not mode_changed and not pairs_changed_raw and not params_changed:
             return
 
         validated_pairs = self._validate_trading_pairs(runtime_pairs)
@@ -290,15 +390,19 @@ class HyperliquidBot:
             validated_pairs = self._validate_trading_pairs(list(self.cfg.trading_pairs))
 
         self._apply_strategy_profile(runtime_mode)
+        self._apply_runtime_param_overrides(runtime_params)
+
         self.orchestrator.trading_pairs = validated_pairs
         self.cfg.trading_pairs = list(validated_pairs)
         self._active_strategy_mode = runtime_mode
         self._active_runtime_pairs = list(validated_pairs)
+        self._active_runtime_params = dict(runtime_params)
 
         logging.info(
             f"Runtime config applied: strategy_mode={runtime_mode}, "
             f"pairs={validated_pairs}, cycle={self.cfg.default_cycle_sec}s, "
-            f"max_trades_per_cycle={self.cfg.max_trades_per_cycle}"
+            f"max_trades_per_cycle={self.cfg.max_trades_per_cycle}, "
+            f"runtime_params={len(runtime_params)}"
         )
 
     def _format_cycle_label(self, cycle_seconds: int) -> str:
@@ -312,9 +416,6 @@ class HyperliquidBot:
     def _calculate_adaptive_cycle(self) -> int:
         if not self.cfg.enable_adaptive_cycle:
             return self.cfg.default_cycle_sec
-
-        # Per trend trading 4H/1D, manteniamo ciclo fisso a 30 minuti
-        # per timing ottimale su timeframe 1H
         return self.cfg.default_cycle_sec
 
     def _run_trading_cycle(self) -> bool:
@@ -345,7 +446,6 @@ class HyperliquidBot:
 
             state = self.state_store.load_state()
 
-            # Equity snapshot
             self.state_store.add_equity_snapshot(
                 state, balance=portfolio.total_balance,
                 unrealized_pnl=portfolio.get_total_unrealized_pnl(),
@@ -357,23 +457,19 @@ class HyperliquidBot:
             peak = Decimal(str(state.get("peak_portfolio_value", "0")))
             consecutive_losses = state.get("consecutive_losses", 0)
 
-            # SL/TP/Trailing
             triggered = self.orchestrator._process_risk_triggers(portfolio)
             if triggered > 0:
                 logging.info(f"SL/TP/Trailing/BE triggered {triggered} closes, refreshing portfolio")
                 portfolio = self.orchestrator._fetch_portfolio()
                 self._last_portfolio = portfolio
 
-            # Emergency de-risk (returns updated portfolio)
             portfolio = self.orchestrator._handle_emergency_derisk(portfolio)
             self._last_portfolio = portfolio
 
-            # Analyze & trade — returns (trades_executed, notional_added_this_cycle)
             trades_executed, notional_added = self.orchestrator._analyze_and_trade(
                 portfolio, state, daily_notional_used, peak, consecutive_losses, self._shutdown_requested
             )
 
-            # Persist state — add only the delta notional from this cycle
             if notional_added > 0:
                 state["daily_notional_by_day"] = self.state_store.add_daily_notional(
                     state.get("daily_notional_by_day", {}), time.time(), notional_added
@@ -384,7 +480,6 @@ class HyperliquidBot:
             state["consecutive_failed_cycles"] = 0
             self.state_store.save_state(state)
 
-            # Metrics
             cycle_duration = time.time() - cycle_start
             self._last_cycle_duration = cycle_duration
             self.metrics.record_histogram("cycle_duration_seconds", cycle_duration)
@@ -445,11 +540,10 @@ class HyperliquidBot:
         logging.info(f"LLM model: {self.cfg.llm_model}")
         logging.info(f"Trading pairs ({len(self.cfg.trading_pairs)}): {self.cfg.trading_pairs}")
         logging.info(
-            f"Strategy: Trend 4H/1D Ultra-Conservativo\n"
+            f"Strategy: Trend/Scalping runtime\n"
             f"  • Ciclo base: {self._format_cycle_label(self.cfg.default_cycle_sec)}\n"
-            f"  • SL Trend: {float(self.cfg.trend_sl_pct)*100}% / TP Trend: {float(self.cfg.trend_tp_pct)*100}% (R:R 1:2)\n"
-            f"  • Position Size: {float(self.cfg.trend_position_size_pct)*100}% del portfolio\n"
-            f"  • Max Trend Positions: {self.cfg.max_trend_positions}\n"
+            f"  • SL: {float(self.cfg.trend_sl_pct)*100}% / TP: {float(self.cfg.trend_tp_pct)*100}%\n"
+            f"  • Position Size: {float(self.cfg.trend_position_size_pct)*100}%\n"
             f"  • Max Leverage: {self.cfg.hard_max_leverage}x\n"
             f"  • Max Drawdown: {float(self.cfg.max_drawdown_pct)*100}%\n"
             f"  • Daily Limit: ${self.cfg.daily_notional_limit_usd}"
@@ -513,7 +607,7 @@ class HyperliquidBot:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Hyperliquid Trading Bot — DeepSeek v3.2 - Trend 4H/1D Ultra-Conservativo")
+    parser = argparse.ArgumentParser(description="Hyperliquid Trading Bot — DeepSeek v3.2 - runtime strategy params")
     parser.add_argument("--single-cycle", action="store_true", help="Run single cycle and exit")
     args = parser.parse_args()
     bot = HyperliquidBot()

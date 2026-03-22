@@ -1,9 +1,32 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { getApiBase, getHeaders } from './useApi'
 
 const DEFAULT_PAIRS = [
   'BTC', 'ETH', 'SOL', 'BNB', 'XRP', 'ADA', 'DOGE', 'AVAX', 'LINK', 'SUI',
   'ARB', 'OP', 'NEAR', 'WIF', 'PEPE', 'INJ', 'TIA', 'SEI', 'RENDER', 'FET',
+]
+
+const PARAM_KEYS = [
+  'cycle_sec',
+  'min_cycle_sec',
+  'max_cycle_sec',
+  'max_trades_per_cycle',
+  'hard_max_leverage',
+  'min_confidence_open',
+  'min_confidence_manage',
+  'max_order_margin_pct',
+  'trade_cooldown_sec',
+  'daily_notional_limit_usd',
+  'max_drawdown_pct',
+  'max_single_asset_pct',
+  'emergency_margin_threshold',
+  'position_size_pct',
+  'volume_confirmation_threshold',
+  'sl_pct',
+  'tp_pct',
+  'break_even_activation_pct',
+  'trailing_activation_pct',
+  'trailing_callback',
 ]
 
 function normalizeCoinList(list) {
@@ -22,6 +45,17 @@ function normalizeCoinList(list) {
   return normalized
 }
 
+function normalizeStrategyParams(raw) {
+  if (!raw || typeof raw !== 'object') return {}
+  const result = {}
+  for (const key of PARAM_KEYS) {
+    const value = raw[key]
+    if (value == null || value === '') continue
+    result[key] = String(value)
+  }
+  return result
+}
+
 export default function useRuntimeConfig() {
   const apiBase = getApiBase()
   const [loading, setLoading] = useState(true)
@@ -30,6 +64,8 @@ export default function useRuntimeConfig() {
   const [availablePairs, setAvailablePairs] = useState(DEFAULT_PAIRS)
   const [strategyMode, setStrategyMode] = useState('trend')
   const [selectedPairs, setSelectedPairs] = useState(['BTC', 'ETH'])
+  const [strategyParams, setStrategyParams] = useState({})
+  const [defaultParams, setDefaultParams] = useState({})
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -52,9 +88,15 @@ export default function useRuntimeConfig() {
       const selected = normalizeCoinList(runtime.trading_pairs)
       const mode = String(runtime.strategy_mode || 'trend').toLowerCase()
 
+      const defaults = normalizeStrategyParams(json.default_strategy_params || {})
+      const runtimeParams = normalizeStrategyParams(runtime.strategy_params || {})
+      const mergedParams = { ...defaults, ...runtimeParams }
+
       setAvailablePairs(available.length ? available : DEFAULT_PAIRS)
       setSelectedPairs(selected.length ? selected : ['BTC', 'ETH'])
       setStrategyMode(mode === 'scalping' ? 'scalping' : 'trend')
+      setDefaultParams(defaults)
+      setStrategyParams(mergedParams)
       setLoading(false)
       return
     } catch (runtimeErr) {
@@ -74,6 +116,8 @@ export default function useRuntimeConfig() {
         setAvailablePairs(configPairs.length ? configPairs : DEFAULT_PAIRS)
         setSelectedPairs(configPairs.slice(0, 5).length ? configPairs.slice(0, 5) : ['BTC', 'ETH'])
         setStrategyMode('trend')
+        setDefaultParams({})
+        setStrategyParams({})
         setLoadError('Runtime config non disponibile: fallback attivo su config base.')
         setLoading(false)
         return
@@ -81,6 +125,8 @@ export default function useRuntimeConfig() {
         setAvailablePairs(DEFAULT_PAIRS)
         setSelectedPairs(['BTC', 'ETH'])
         setStrategyMode('trend')
+        setDefaultParams({})
+        setStrategyParams({})
         setLoadError(`Caricamento runtime fallito: ${runtimeErr.message}`)
         setLoading(false)
       }
@@ -104,10 +150,30 @@ export default function useRuntimeConfig() {
     })
   }, [])
 
+  const setStrategyParam = useCallback((key, value) => {
+    if (!PARAM_KEYS.includes(key)) return
+    setStrategyParams((prev) => ({ ...prev, [key]: value }))
+  }, [])
+
+  const resetStrategyParams = useCallback(() => {
+    setStrategyParams((prev) => ({ ...defaultParams, ...prev }))
+  }, [defaultParams])
+
   const save = useCallback(async () => {
     const normalizedSelected = normalizeCoinList(selectedPairs)
     if (!normalizedSelected.length) {
       throw new Error('Seleziona almeno una moneta')
+    }
+
+    const normalizedParams = {}
+    for (const key of PARAM_KEYS) {
+      const raw = strategyParams[key]
+      if (raw == null || String(raw).trim() === '') continue
+      const numeric = Number(String(raw).trim())
+      if (!Number.isFinite(numeric)) {
+        throw new Error(`Parametro non numerico: ${key}`)
+      }
+      normalizedParams[key] = numeric
     }
 
     setSaving(true)
@@ -118,6 +184,7 @@ export default function useRuntimeConfig() {
       body: JSON.stringify({
         strategy_mode: strategyMode,
         trading_pairs: normalizedSelected,
+        strategy_params: normalizedParams,
       }),
     })
 
@@ -132,12 +199,16 @@ export default function useRuntimeConfig() {
     const runtime = json.runtime_config || {}
     const runtimeSelected = normalizeCoinList(runtime.trading_pairs)
     const runtimeMode = String(runtime.strategy_mode || strategyMode).toLowerCase()
+    const runtimeParams = normalizeStrategyParams(runtime.strategy_params || {})
 
     setStrategyMode(runtimeMode === 'scalping' ? 'scalping' : 'trend')
     setSelectedPairs(runtimeSelected.length ? runtimeSelected : normalizedSelected)
+    setStrategyParams((prev) => ({ ...prev, ...runtimeParams }))
     setLoadError('')
     return json
-  }, [apiBase, selectedPairs, strategyMode])
+  }, [apiBase, selectedPairs, strategyMode, strategyParams])
+
+  const mergedPreviewParams = useMemo(() => ({ ...defaultParams, ...strategyParams }), [defaultParams, strategyParams])
 
   return {
     loading,
@@ -148,6 +219,9 @@ export default function useRuntimeConfig() {
     setStrategyMode,
     selectedPairs,
     toggleCoin,
+    strategyParams: mergedPreviewParams,
+    setStrategyParam,
+    resetStrategyParams,
     save,
     reload: load,
   }

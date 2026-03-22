@@ -1,6 +1,7 @@
 import React, { useMemo, useState } from 'react'
 import { Settings2, Cpu, Coins, Plus, AlertTriangle } from 'lucide-react'
 import useRuntimeConfig from '../hooks/useRuntimeConfig'
+import RuntimeStrategyParams from './RuntimeStrategyParams'
 import Toast from './Toast'
 
 export default function RuntimeControls() {
@@ -13,6 +14,8 @@ export default function RuntimeControls() {
     setStrategyMode,
     selectedPairs,
     toggleCoin,
+    strategyParams,
+    setStrategyParam,
     save,
   } = useRuntimeConfig()
 
@@ -52,7 +55,7 @@ export default function RuntimeControls() {
   const onSave = async () => {
     try {
       await save()
-      setToast({ type: 'success', message: 'Impostazioni salvate: il bot applicherà strategia e monete nel prossimo ciclo.' })
+      setToast({ type: 'success', message: 'Impostazioni runtime salvate e persistite lato backend.' })
     } catch (err) {
       setToast({ type: 'error', message: `Salvataggio fallito: ${err.message}` })
     }
@@ -114,10 +117,16 @@ export default function RuntimeControls() {
           </div>
           <p className="text-[11px] text-gray-500 mt-2">
             {strategyMode === 'scalping'
-              ? 'Profilo più rapido e aggressivo, con risk guardrail automatici.'
-              : 'Profilo conservativo multi-timeframe 1H/4H/1D.'}
+              ? 'Profilo rapido/aggressivo, parametrizzabile da UI.'
+              : 'Profilo trend multi-timeframe, parametrizzabile da UI.'}
           </p>
         </div>
+
+        <RuntimeStrategyParams
+          strategyMode={strategyMode}
+          strategyParams={strategyParams}
+          onChange={setStrategyParam}
+        />
 
         <div>
           <p className="text-xs text-gray-400 mb-2 flex items-center gap-2">

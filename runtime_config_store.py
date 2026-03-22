@@ -17,6 +17,7 @@ class RuntimeConfigStore:
         return {
             "strategy_mode": self.default_strategy_mode,
             "trading_pairs": self.default_trading_pairs or ["BTC", "ETH"],
+            "strategy_params": {},
             "updated_at": time.time(),
         }
 
@@ -36,15 +37,20 @@ class RuntimeConfigStore:
             str(p).strip().upper() for p in data.get("trading_pairs", []) if str(p).strip()
         ] or defaults["trading_pairs"]
 
+        strategy_params = data.get("strategy_params", {})
+        data["strategy_params"] = strategy_params if isinstance(strategy_params, dict) else {}
+
         return data
 
     def save(self, config: Dict[str, Any]) -> Dict[str, Any]:
         mode = str(config.get("strategy_mode", self.default_strategy_mode)).strip().lower()
+        strategy_params = config.get("strategy_params", {})
         payload = {
             "strategy_mode": mode if mode in {"trend", "scalping"} else self.default_strategy_mode,
             "trading_pairs": [
                 str(p).strip().upper() for p in config.get("trading_pairs", []) if str(p).strip()
             ] or self._default()["trading_pairs"],
+            "strategy_params": strategy_params if isinstance(strategy_params, dict) else {},
             "updated_at": time.time(),
         }
         atomic_write_json(self.path, payload)
