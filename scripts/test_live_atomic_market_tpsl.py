@@ -35,6 +35,7 @@ Parametri test (opzionali):
 - TEST_TRIGGER_CONFIRM_SLEEP_SEC=1
 """
 
+import json
 import logging
 import os
 import sys
@@ -51,6 +52,7 @@ if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
 from exchange.market_rules import normalize_size_for_decimals
+from exchange.order_builder import build_trigger_order_action
 from exchange_client import HyperliquidExchangeClient
 from utils.hyperliquid_state import get_open_positions
 
@@ -202,6 +204,23 @@ def place_single_protective_order_with_confirmation(
     confirm_attempts: int,
     confirm_sleep_sec: float,
 ) -> int:
+    asset_id = client.get_asset_id(coin)
+    if asset_id is not None:
+        preview_action = build_trigger_order_action(
+            asset_id=asset_id,
+            is_buy=(close_side == "buy"),
+            trigger_price=trigger_price,
+            size=close_size,
+            tpsl=tpsl,
+            reduce_only=True,
+            is_market=True,
+            grouping="positionTpsl",
+        )
+        logger.info(
+            f"Trigger payload preview ({tpsl.upper()}): "
+            f"{json.dumps(preview_action, ensure_ascii=False)}"
+        )
+
     result = client.place_trigger_order(
         coin=coin,
         side=close_side,
@@ -312,6 +331,7 @@ def main() -> None:
         f"Parametri test: coin={coin}, side={side}, margin={margin_usd}, "
         f"leverage={leverage}, sl_pct={sl_pct}, tp_pct={tp_pct}, min_notional={min_notional_usd}"
     )
+    logger.info("Trigger grouping target per posizione aperta: positionTpsl")
 
     client = HyperliquidExchangeClient(
         base_url=base_url,
