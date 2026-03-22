@@ -225,14 +225,18 @@ class CoinCycleProcessor:
                         sl_pct=sl_pct if isinstance(sl_pct, Decimal) else None,
                         tp_pct=tp_pct if isinstance(tp_pct, Decimal) else None,
                     )
-                    self.sync_exchange_protective_orders(coin)
+                    synced = self.sync_exchange_protective_orders(coin)
+                    if not synced:
+                        logger.error(f"{coin} TP/SL sync failed right after execution; will retry in next cycle")
 
                 elif decision["action"] == "close_position":
                     self.cancel_exchange_protective_orders(coin)
                     self.position_manager.remove_position(coin)
 
                 elif decision["action"] == "reduce_position":
-                    self.sync_exchange_protective_orders(coin)
+                    synced = self.sync_exchange_protective_orders(coin)
+                    if not synced:
+                        logger.error(f"{coin} TP/SL resync failed after reduce; will retry in next cycle")
 
                 self.notifier.notify_trade(trade_record)
                 logger.info(f"{coin} executed: reason={result['reason']}, notional=${notional}")

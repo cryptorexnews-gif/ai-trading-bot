@@ -180,6 +180,30 @@ class CycleOrchestrator:
 
         return False
 
+    def _ensure_protective_orders_for_open_positions(self, portfolio: PortfolioState) -> None:
+        """
+        Ensure every managed open position has TP/SL order ids.
+        If one is missing, force a sync/recreate on exchange.
+        """
+        if not self._live_orders_enabled():
+            return
+
+        for coin, pos in portfolio.positions.items():
+            size = Decimal(str(pos.get("size", 0)))
+            if size == 0:
+                continue
+
+            managed = self.position_manager.get_position(coin)
+            if not managed:
+                continue
+
+            sl_id, tp_id = self.position_manager.get_protective_order_ids(coin)
+            if sl_id is None or tp_id is None:
+                logger.warning(f"{coin} missing protective orders (sl_id={sl_id}, tp_id={tp_id}), recreating")
+                synced = self._sync_exchange_protective_orders(coin)
+                if not synced:
+                    logger.error(f"{coin} failed to recreate protective TP/SL in this cycle")
+
     def _update_protection_without_trade(self, coin: str, decision: Dict[str, Any]) -> bool:
         sl_pct = decision.get("stop_loss_pct")
         tp_pct = decision.get("take_profit_pct")
@@ -235,6 +259,8 @@ class CycleOrchestrator:
     def _process_risk_triggers(self, portfolio: PortfolioState) -> int:
         """Check and execute SL/TP/trailing/break-even triggers."""
         self.position_manager.sync_with_exchange(portfolio.positions)
+        self._ensure_protective_orders_for_open_positions(portfolio)
+
         mids = technical_fetcher.get_all_mids()
         if not mids:
             return 0
