@@ -170,8 +170,9 @@ class CycleOrchestrator:
     def _verify_protective_orders_present(self, coin: str, sl_id: Optional[int], tp_id: Optional[int]) -> bool:
         if sl_id is None or tp_id is None:
             return False
+        trading_user = self.exchange_client.get_trading_user_address()
         return self.exchange_client.are_order_ids_open(
-            user=self.cfg.wallet_address,
+            user=trading_user,
             coin=coin,
             order_ids=[sl_id, tp_id],
         )

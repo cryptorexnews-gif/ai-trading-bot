@@ -121,11 +121,14 @@ class ExecutionEngine:
             close_size = abs(pos_size)
             desired_price = self._market_desired_price(side, market_data.last_price)
             result = self.exchange_client.place_order(coin, side, close_size, desired_price, reduce_only=True)
+            executed_size = safe_decimal(result.get("executed_size", close_size))
+            if executed_size <= 0:
+                executed_size = close_size
             return {
                 "success": bool(result.get("success", False)),
                 "notional": safe_decimal(result.get("notional", "0")),
                 "filled_price": safe_decimal(result.get("filled_price", desired_price)),
-                "executed_size": close_size,
+                "executed_size": executed_size,
                 "reason": "close_position"
             }
 
@@ -138,11 +141,14 @@ class ExecutionEngine:
             side = "sell" if pos_size > 0 else "buy"
             desired_price = self._market_desired_price(side, market_data.last_price)
             result = self.exchange_client.place_order(coin, side, reduce_size, desired_price, reduce_only=True)
+            executed_size = safe_decimal(result.get("executed_size", reduce_size))
+            if executed_size <= 0:
+                executed_size = reduce_size
             return {
                 "success": bool(result.get("success", False)),
                 "notional": safe_decimal(result.get("notional", "0")),
                 "filled_price": safe_decimal(result.get("filled_price", desired_price)),
-                "executed_size": reduce_size,
+                "executed_size": executed_size,
                 "reason": "reduce_position"
             }
 
@@ -157,11 +163,14 @@ class ExecutionEngine:
             adjusted_size = self._adjust_open_size_for_exchange_minimum(coin, size, market_data.last_price)
             desired_price = self._market_desired_price(side, market_data.last_price)
             result = self.exchange_client.place_order(coin, side, adjusted_size, desired_price)
+            executed_size = safe_decimal(result.get("executed_size", adjusted_size))
+            if executed_size <= 0:
+                executed_size = adjusted_size
             return {
                 "success": bool(result.get("success", False)),
                 "notional": safe_decimal(result.get("notional", "0")),
                 "filled_price": safe_decimal(result.get("filled_price", desired_price)),
-                "executed_size": adjusted_size,
+                "executed_size": executed_size,
                 "reason": "increase_position"
             }
 
@@ -173,11 +182,14 @@ class ExecutionEngine:
             adjusted_size = self._adjust_open_size_for_exchange_minimum(coin, size, market_data.last_price)
             desired_price = self._market_desired_price(side, market_data.last_price)
             result = self.exchange_client.place_order(coin, side, adjusted_size, desired_price)
+            executed_size = safe_decimal(result.get("executed_size", adjusted_size))
+            if executed_size <= 0:
+                executed_size = adjusted_size
             return {
                 "success": bool(result.get("success", False)),
                 "notional": safe_decimal(result.get("notional", "0")),
                 "filled_price": safe_decimal(result.get("filled_price", desired_price)),
-                "executed_size": adjusted_size,
+                "executed_size": executed_size,
                 "reason": "open_position"
             }
 

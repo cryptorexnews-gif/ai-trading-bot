@@ -23,7 +23,8 @@ def _action_hash(
         data += b"\x01"
         data += _address_to_bytes(vault_address)
     if expires_after is not None:
-        data += b"\x00"
+        # Presence marker for expires_after
+        data += b"\x01"
         data += expires_after.to_bytes(8, "big")
     return keccak.new(data=data, digest_bits=256).digest()
 

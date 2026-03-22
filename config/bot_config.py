@@ -86,7 +86,7 @@ class BotConfig:
         self.max_trades_per_cycle = _env_int("MAX_TRADES_PER_CYCLE", 2)
 
         self.info_timeout = _env_int("HYPERLIQUID_INFO_TIMEOUT", 15)
-        self.exchange_timeout = _env_int("HYPERLIQUID_EXCHANGE_TIMEOUT", 30)
+        self.exchange_timeout = _env_int("HYPERLIQUID_EXCHANGE_TIMEOUT", 90)
         self.paper_slippage_bps = _env_decimal("PAPER_SLIPPAGE_BPS", "5")
 
         self.log_level = _env("LOG_LEVEL", "INFO")

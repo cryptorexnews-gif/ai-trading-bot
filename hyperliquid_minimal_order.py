@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """
-ORDINE MINIMALE PER HYPERLIQUID
+[DEBUG UTILITY ONLY] ORDINE MINIMALE PER HYPERLIQUID
 Script che piazza UN ordine minimo con firma EIP-712 corretta.
 Usa configurazione da .env file.
 
+Not intended for production execution flow (the main bot handles risk/logging/position sync).
 Security: Private key is derived into Account immediately and never stored as a raw string.
 """
 
@@ -30,7 +31,7 @@ ENABLE_MAINNET_TRADING = os.getenv("ENABLE_MAINNET_TRADING", "false").lower() ==
 AUTO_CONFIRM_MINIMAL_ORDER = os.getenv("AUTO_CONFIRM_MINIMAL_ORDER", "false").lower() == "true"
 BASE_URL = os.getenv("HYPERLIQUID_BASE_URL", "https://api.hyperliquid.xyz")
 INFO_TIMEOUT = int(os.getenv("HYPERLIQUID_INFO_TIMEOUT", "15"))
-EXCHANGE_TIMEOUT = int(os.getenv("HYPERLIQUID_EXCHANGE_TIMEOUT", "30"))
+EXCHANGE_TIMEOUT = int(os.getenv("HYPERLIQUID_EXCHANGE_TIMEOUT", "90"))
 
 
 def mask_wallet(wallet: str) -> str:

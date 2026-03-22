@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """
-Script to close SOL position on Hyperliquid.
+[DEBUG UTILITY ONLY] Script to close SOL position on Hyperliquid.
 Uses configuration from .env file.
 
+Not intended for production execution flow (the main bot handles risk/logging/position sync).
 Security: Private key is derived into Account immediately and never stored as a raw string.
 """
 
@@ -28,7 +29,7 @@ WALLET_ADDRESS = os.getenv("HYPERLIQUID_WALLET_ADDRESS")
 ENABLE_MAINNET_TRADING = os.getenv("ENABLE_MAINNET_TRADING", "false").lower() == "true"
 BASE_URL = os.getenv("HYPERLIQUID_BASE_URL", "https://api.hyperliquid.xyz")
 INFO_TIMEOUT = int(os.getenv("HYPERLIQUID_INFO_TIMEOUT", "15"))
-EXCHANGE_TIMEOUT = int(os.getenv("HYPERLIQUID_EXCHANGE_TIMEOUT", "30"))
+EXCHANGE_TIMEOUT = int(os.getenv("HYPERLIQUID_EXCHANGE_TIMEOUT", "90"))
 
 
 def mask_wallet(wallet: str) -> str:
