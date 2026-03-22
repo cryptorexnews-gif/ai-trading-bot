@@ -168,6 +168,65 @@ class LLMEngine:
 
         return "\n".join(lines) if lines else "  No recent trades."
 
+    def _format_managed_position(self, managed_position: Optional[Dict[str, Any]]) -> str:
+        mp = self._safe_dict(managed_position)
+        if not mp:
+            return "  No managed position context for this coin."
+
+        side = "LONG" if bool(mp.get("is_long", False)) else "SHORT"
+        lines = [
+            f"  Side: {side}",
+            f"  Size: {mp.get('size', '0')}",
+            f"  Entry: ${mp.get('entry_price', '0')}",
+            f"  Managed SL: {mp.get('stop_loss_pct', 'n/a')} (price ${mp.get('stop_loss_price', '0')})",
+            f"  Managed TP: {mp.get('take_profit_pct', 'n/a')} (price ${mp.get('take_profit_price', '0')})",
+            f"  Break-even active: {bool(mp.get('break_even_activated', False))}",
+            f"  Managed SL Order ID: {mp.get('stop_loss_order_id')}",
+            f"  Managed TP Order ID: {mp.get('take_profit_order_id')}",
+        ]
+        return "\n".join(lines)
+
+    def _format_protective_orders(self, protective_orders: Optional[List[Dict[str, Any]]]) -> str:
+        orders = self._safe_list(protective_orders)
+        if not orders:
+            return "  No protective TP/SL open orders found on exchange for this coin."
+
+        lines: List[str] = []
+        for order in orders:
+            if not isinstance(order, dict):
+                continue
+            lines.append(
+                f"  - oid={order.get('oid')} type={str(order.get('tpsl', '')).upper()} "
+                f"trigger=${order.get('trigger_px', '0')} side={order.get('side', '')} "
+                f"reduce_only={order.get('reduce_only', False)}"
+            )
+
+        return "\n".join(lines) if lines else "  No protective TP/SL open orders found on exchange for this coin."
+
+    def _build_protection_consistency(
+        self,
+        managed_position: Optional[Dict[str, Any]],
+        protective_orders: Optional[List[Dict[str, Any]]]
+    ) -> str:
+        mp = self._safe_dict(managed_position)
+        orders = [o for o in self._safe_list(protective_orders) if isinstance(o, dict)]
+
+        sl_ids = [o.get("oid") for o in orders if str(o.get("tpsl", "")).lower() == "sl"]
+        tp_ids = [o.get("oid") for o in orders if str(o.get("tpsl", "")).lower() == "tp"]
+
+        managed_sl_id = mp.get("stop_loss_order_id")
+        managed_tp_id = mp.get("take_profit_order_id")
+
+        managed_sl_on_exchange = managed_sl_id is not None and managed_sl_id in sl_ids
+        managed_tp_on_exchange = managed_tp_id is not None and managed_tp_id in tp_ids
+
+        return (
+            f"  managed_sl_id_present_on_exchange: {managed_sl_on_exchange}\n"
+            f"  managed_tp_id_present_on_exchange: {managed_tp_on_exchange}\n"
+            f"  sl_open_orders_count: {len(sl_ids)}\n"
+            f"  tp_open_orders_count: {len(tp_ids)}"
+        )
+
     def _build_prompt(
         self,
         market_data: MarketData,
@@ -177,7 +236,9 @@ class LLMEngine:
         funding_data: Optional[Dict[str, Any]] = None,
         recent_trades: Optional[List[Dict[str, Any]]] = None,
         peak_portfolio_value: Decimal = Decimal("0"),
-        consecutive_losses: int = 0
+        consecutive_losses: int = 0,
+        managed_position: Optional[Dict[str, Any]] = None,
+        protective_orders: Optional[List[Dict[str, Any]]] = None,
     ) -> str:
 
         mids = self._safe_dict(all_mids)
@@ -232,6 +293,18 @@ RECENT TRADE HISTORY (last 5):
         else:
             trend_analysis = "🚫 NO TIMEFRAME ALIGNMENT — Avoid new positions, only manage existing ones."
 
+        protective_section = f"""
+PROTECTIVE ORDERS STATUS (for target coin):
+Managed position risk config:
+{self._format_managed_position(managed_position)}
+
+Exchange open protective orders:
+{self._format_protective_orders(protective_orders)}
+
+Consistency checks:
+{self._build_protection_consistency(managed_position, protective_orders)}
+"""
+
         prompt = f"""You are an elite cryptocurrency trend trader on Hyperliquid exchange, specialized in 4HOUR and 1DAY trend following.
 ALL data below comes directly from the Hyperliquid API. Make your decision based ONLY on this data.
 
@@ -260,6 +333,7 @@ PORTFOLIO STATE:
 
 CURRENT POSITIONS:
 {self._format_positions(portfolio_state.positions)}
+{protective_section}
 {recent_trades_section}
 
 === TREND TRADING STRATEGY RULES (4H/1D FOCUS) ===
@@ -285,6 +359,7 @@ STOP-LOSS / TAKE-PROFIT DECISION:
 - In high volatility, use wider SL/TP; in low volatility, tighter levels.
 - Prefer minimum risk/reward around 1:1.5 unless setup quality is very low.
 - For HOLD actions, set stop_loss_pct and take_profit_pct to null.
+- If protective TP/SL orders are missing or inconsistent, prefer actions that restore proper protection.
 
 CRITICAL RULES FOR TREND TRADING:
 - DO NOT counter-trend trade (no buying in downtrend, no selling in uptrend)
@@ -500,13 +575,16 @@ Respond with ONLY this JSON (no markdown, no extra text):
         funding_data: Optional[Dict[str, Any]] = None,
         recent_trades: Optional[List[Dict[str, Any]]] = None,
         peak_portfolio_value: Decimal = Decimal("0"),
-        consecutive_losses: int = 0
+        consecutive_losses: int = 0,
+        managed_position: Optional[Dict[str, Any]] = None,
+        protective_orders: Optional[List[Dict[str, Any]]] = None,
     ) -> Optional[Dict[str, Any]]:
         prompt = self._build_prompt(
             market_data=market_data, portfolio_state=portfolio_state,
             technical_data=technical_data, all_mids=all_mids,
             funding_data=funding_data, recent_trades=recent_trades,
-            peak_portfolio_value=peak_portfolio_value, consecutive_losses=consecutive_losses
+            peak_portfolio_value=peak_portfolio_value, consecutive_losses=consecutive_losses,
+            managed_position=managed_position, protective_orders=protective_orders,
         )
 
         logger.info(f"Requesting LLM decision for {market_data.coin} (prompt ~{len(prompt)} chars)")
