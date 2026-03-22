@@ -20,12 +20,22 @@ from api.config import (
     COIN_PATTERN,
     KNOWN_TRADING_PAIRS,
 )
-from api.helpers import post_hyperliquid_info, read_json_file
+from api.helpers import read_json_file
+from api.rate_limit_utils import build_rate_limiter, rate_limited_response
+from api.services.account_snapshot_service import (
+    fetch_hyperliquid_universe,
+    get_hyperliquid_account_snapshot,
+)
+from api.services.managed_positions_service import build_managed_positions_payload
+from api.services.runtime_config_service import (
+    default_strategy_params,
+    normalize_strategy_params,
+    strategy_presets,
+)
 from runtime_config_store import RuntimeConfigStore
 from state_store import StateStore
 from utils.circuit_breaker import get_all_circuit_states
-from utils.hyperliquid_state import get_account_balances, get_open_positions
-from utils.rate_limiter import get_all_rate_limiter_stats, get_rate_limiter
+from utils.rate_limiter import get_all_rate_limiter_stats
 
 logger = logging.getLogger(__name__)
 
@@ -37,260 +47,12 @@ _runtime_store = RuntimeConfigStore(
     [p.strip().upper() for p in os.getenv("TRADING_PAIRS", "BTC,ETH,SOL").split(",") if p.strip()],
     default_strategy_mode=os.getenv("DEFAULT_STRATEGY_MODE", "trend"),
 )
-_bot_rl = get_rate_limiter("api_bot_endpoints", max_tokens=100, tokens_per_second=3.0)
-_config_rl = get_rate_limiter("api_bot_config_endpoint", max_tokens=300, tokens_per_second=20.0)
+_bot_rl = build_rate_limiter("api_bot_endpoints", max_tokens=100, tokens_per_second=3.0)
+_config_rl = build_rate_limiter("api_bot_config_endpoint", max_tokens=300, tokens_per_second=20.0)
 
 _universe_cache = []
 _universe_cache_at = 0.0
 _UNIVERSE_CACHE_TTL_SEC = 300.0
-
-
-def _rate_limited():
-    if not _bot_rl.try_acquire(1):
-        return jsonify({"error": "rate_limited"}), 429
-    return None
-
-
-def _config_rate_limited():
-    if not _config_rl.try_acquire(1):
-        return jsonify({"error": "rate_limited"}), 429
-    return None
-
-
-def _mask_wallet(wallet: str) -> str:
-    if not wallet or len(wallet) < 12:
-        return "invalid_wallet"
-    return f"{wallet[:6]}...{wallet[-4:]}"
-
-
-def _strategy_presets() -> dict:
-    # Preset ottimizzati, indipendenti dal .env
-    return {
-        "trend": {
-            "cycle_sec": "1800",
-            "min_cycle_sec": "900",
-            "max_cycle_sec": "3600",
-            "max_trades_per_cycle": "2",
-            "hard_max_leverage": "6",
-            "min_confidence_open": "0.72",
-            "min_confidence_manage": "0.50",
-            "max_order_margin_pct": "0.08",
-            "trade_cooldown_sec": "600",
-            "daily_notional_limit_usd": "1500",
-            "max_drawdown_pct": "0.12",
-            "max_single_asset_pct": "0.30",
-            "emergency_margin_threshold": "0.85",
-            "position_size_pct": "0.02",
-            "volume_confirmation_threshold": "1.6",
-            "sl_pct": "0.04",
-            "tp_pct": "0.10",
-            "break_even_activation_pct": "0.02",
-            "trailing_activation_pct": "0.03",
-            "trailing_callback": "0.015",
-        },
-        "scalping": {
-            "cycle_sec": "300",
-            "min_cycle_sec": "120",
-            "max_cycle_sec": "900",
-            "max_trades_per_cycle": "3",
-            "hard_max_leverage": "3",
-            "min_confidence_open": "0.68",
-            "min_confidence_manage": "0.50",
-            "max_order_margin_pct": "0.04",
-            "trade_cooldown_sec": "90",
-            "daily_notional_limit_usd": "500",
-            "max_drawdown_pct": "0.07",
-            "max_single_asset_pct": "0.20",
-            "emergency_margin_threshold": "0.78",
-            "position_size_pct": "0.01",
-            "volume_confirmation_threshold": "1.3",
-            "sl_pct": "0.015",
-            "tp_pct": "0.03",
-            "break_even_activation_pct": "0.008",
-            "trailing_activation_pct": "0.012",
-            "trailing_callback": "0.008",
-        },
-    }
-
-
-def _default_strategy_params(strategy_mode: str) -> dict:
-    mode = str(strategy_mode or "trend").strip().lower()
-    presets = _strategy_presets()
-    return presets["scalping"] if mode == "scalping" else presets["trend"]
-
-
-def _normalize_strategy_params(raw_params: dict) -> tuple[dict, str]:
-    if not isinstance(raw_params, dict):
-        return {}, "invalid_strategy_params"
-
-    int_keys = {
-        "cycle_sec": (1, 86400),
-        "min_cycle_sec": (1, 86400),
-        "max_cycle_sec": (1, 86400),
-        "max_trades_per_cycle": (1, 50),
-        "trade_cooldown_sec": (0, 86400),
-    }
-
-    decimal_keys = {
-        "hard_max_leverage": (Decimal("1"), Decimal("100")),
-        "min_confidence_open": (Decimal("0"), Decimal("1")),
-        "min_confidence_manage": (Decimal("0"), Decimal("1")),
-        "max_order_margin_pct": (Decimal("0"), Decimal("1")),
-        "daily_notional_limit_usd": (Decimal("0"), None),
-        "max_drawdown_pct": (Decimal("0"), Decimal("1")),
-        "max_single_asset_pct": (Decimal("0"), Decimal("1")),
-        "emergency_margin_threshold": (Decimal("0"), Decimal("1")),
-        "position_size_pct": (Decimal("0"), Decimal("1")),
-        "volume_confirmation_threshold": (Decimal("0"), Decimal("20")),
-        "sl_pct": (Decimal("0"), Decimal("1")),
-        "tp_pct": (Decimal("0"), Decimal("2")),
-        "break_even_activation_pct": (Decimal("0"), Decimal("1")),
-        "trailing_activation_pct": (Decimal("0"), Decimal("1")),
-        "trailing_callback": (Decimal("0"), Decimal("1")),
-    }
-
-    percent_keys = {
-        "min_confidence_open",
-        "min_confidence_manage",
-        "max_order_margin_pct",
-        "max_drawdown_pct",
-        "max_single_asset_pct",
-        "emergency_margin_threshold",
-        "position_size_pct",
-        "sl_pct",
-        "tp_pct",
-        "break_even_activation_pct",
-        "trailing_activation_pct",
-        "trailing_callback",
-    }
-
-    normalized = {}
-
-    for key, value in raw_params.items():
-        if key in int_keys:
-            try:
-                parsed = int(str(value))
-            except Exception:
-                return {}, f"invalid_param_{key}"
-            min_val, max_val = int_keys[key]
-            if parsed < min_val or parsed > max_val:
-                return {}, f"out_of_range_{key}"
-            normalized[key] = parsed
-            continue
-
-        if key in decimal_keys:
-            try:
-                parsed = Decimal(str(value))
-            except Exception:
-                return {}, f"invalid_param_{key}"
-
-            if key in percent_keys and parsed > Decimal("1"):
-                parsed = parsed / Decimal("100")
-
-            min_val, max_val = decimal_keys[key]
-            if parsed < min_val:
-                return {}, f"out_of_range_{key}"
-            if max_val is not None and parsed > max_val:
-                return {}, f"out_of_range_{key}"
-
-            normalized[key] = str(parsed)
-            continue
-
-    return normalized, ""
-
-
-def _get_hyperliquid_account_snapshot():
-    wallet = os.getenv("HYPERLIQUID_WALLET_ADDRESS", "").strip()
-    if not wallet:
-        return {
-            "wallet": "",
-            "wallet_masked": "not_configured",
-            "portfolio": {
-                "total_balance": Decimal("0"),
-                "available_balance": Decimal("0"),
-                "margin_usage": Decimal("0"),
-                "positions": {},
-                "position_count": 0,
-                "total_unrealized_pnl": Decimal("0"),
-                "total_exposure": Decimal("0"),
-                "open_orders_count": 0,
-            },
-            "margin_summary": {},
-            "withdrawable": "0",
-            "updated_at": time.time(),
-        }
-
-    try:
-        user_state = post_hyperliquid_info({"type": "clearinghouseState", "user": wallet}, timeout=20)
-        if not isinstance(user_state, dict):
-            raise ValueError("Invalid user_state response")
-
-        balances = get_account_balances(user_state)
-        positions = get_open_positions(user_state)
-
-        total_unrealized_pnl = Decimal("0")
-        total_exposure = Decimal("0")
-        for pos in positions.values():
-            size = Decimal(str(pos.get("size", 0)))
-            entry = Decimal(str(pos.get("entry_price", 0)))
-            pnl = Decimal(str(pos.get("unrealized_pnl", 0)))
-            total_unrealized_pnl += pnl
-            total_exposure += abs(size * entry)
-
-        open_orders = post_hyperliquid_info({"type": "openOrders", "user": wallet}, timeout=15)
-        open_orders_count = len(open_orders) if isinstance(open_orders, list) else 0
-
-        return {
-            "wallet": wallet,
-            "wallet_masked": _mask_wallet(wallet),
-            "portfolio": {
-                "total_balance": balances["total_balance"],
-                "available_balance": balances["available_balance"],
-                "margin_usage": balances["margin_usage"],
-                "positions": positions,
-                "position_count": len(positions),
-                "total_unrealized_pnl": total_unrealized_pnl,
-                "total_exposure": total_exposure,
-                "open_orders_count": open_orders_count,
-            },
-            "margin_summary": user_state.get("marginSummary", {}),
-            "withdrawable": user_state.get("withdrawable", "0"),
-            "updated_at": time.time(),
-        }
-    except Exception as e:
-        logger.error(f"Failed to get Hyperliquid account snapshot: {e}")
-        return {
-            "wallet": wallet,
-            "wallet_masked": _mask_wallet(wallet),
-            "portfolio": {
-                "total_balance": Decimal("0"),
-                "available_balance": Decimal("0"),
-                "margin_usage": Decimal("0"),
-                "positions": {},
-                "position_count": 0,
-                "total_unrealized_pnl": Decimal("0"),
-                "total_exposure": Decimal("0"),
-                "open_orders_count": 0,
-            },
-            "margin_summary": {},
-            "withdrawable": "0",
-            "updated_at": time.time(),
-        }
-
-
-def _fetch_hyperliquid_universe():
-    data = post_hyperliquid_info({"type": "meta"}, timeout=20)
-    if not isinstance(data, dict):
-        return []
-
-    universe = data.get("universe", [])
-    parsed = []
-    for asset in universe:
-        coin = str(asset.get("name", "")).strip().upper()
-        if coin and COIN_PATTERN.match(coin):
-            parsed.append(coin)
-
-    return sorted(set(parsed))
 
 
 def _get_hyperliquid_available_pairs():
@@ -300,7 +62,7 @@ def _get_hyperliquid_available_pairs():
     if _universe_cache and (now - _universe_cache_at) < _UNIVERSE_CACHE_TTL_SEC:
         return list(_universe_cache)
 
-    fresh = _fetch_hyperliquid_universe()
+    fresh = [coin for coin in fetch_hyperliquid_universe() if COIN_PATTERN.match(coin)]
     if fresh:
         _universe_cache = fresh
         _universe_cache_at = now
@@ -315,7 +77,7 @@ def _get_hyperliquid_available_pairs():
 @bot_bp.route("/api/status", methods=["GET"])
 @require_api_key
 def bot_status():
-    rate_limit_resp = _rate_limited()
+    rate_limit_resp = rate_limited_response(_bot_rl)
     if rate_limit_resp:
         return rate_limit_resp
 
@@ -323,7 +85,8 @@ def bot_status():
         live_status = read_json_file(LIVE_STATUS_PATH)
         state = _state_store.load_state()
         metrics = _state_store.load_metrics()
-        account_snapshot = _get_hyperliquid_account_snapshot()
+        wallet = os.getenv("HYPERLIQUID_WALLET_ADDRESS", "").strip()
+        account_snapshot = get_hyperliquid_account_snapshot(wallet)
 
         return jsonify({
             "bot": live_status,
@@ -347,12 +110,13 @@ def bot_status():
 @bot_bp.route("/api/portfolio", methods=["GET"])
 @require_api_key
 def portfolio():
-    rate_limit_resp = _rate_limited()
+    rate_limit_resp = rate_limited_response(_bot_rl)
     if rate_limit_resp:
         return rate_limit_resp
 
     try:
-        account_snapshot = _get_hyperliquid_account_snapshot()
+        wallet = os.getenv("HYPERLIQUID_WALLET_ADDRESS", "").strip()
+        account_snapshot = get_hyperliquid_account_snapshot(wallet)
         return jsonify({
             "portfolio": account_snapshot.get("portfolio", {}),
             "source": "hyperliquid_account",
@@ -366,12 +130,13 @@ def portfolio():
 @bot_bp.route("/api/positions", methods=["GET"])
 @require_api_key
 def positions():
-    rate_limit_resp = _rate_limited()
+    rate_limit_resp = rate_limited_response(_bot_rl)
     if rate_limit_resp:
         return rate_limit_resp
 
     try:
-        account_snapshot = _get_hyperliquid_account_snapshot()
+        wallet = os.getenv("HYPERLIQUID_WALLET_ADDRESS", "").strip()
+        account_snapshot = get_hyperliquid_account_snapshot(wallet)
         return jsonify({
             "positions": account_snapshot.get("portfolio", {}).get("positions", {}),
             "source": "hyperliquid_account",
@@ -385,12 +150,13 @@ def positions():
 @bot_bp.route("/api/managed-positions", methods=["GET"])
 @require_api_key
 def managed_positions():
-    rate_limit_resp = _rate_limited()
+    rate_limit_resp = rate_limited_response(_bot_rl)
     if rate_limit_resp:
         return rate_limit_resp
 
     try:
-        account_snapshot = _get_hyperliquid_account_snapshot()
+        wallet = os.getenv("HYPERLIQUID_WALLET_ADDRESS", "").strip()
+        account_snapshot = get_hyperliquid_account_snapshot(wallet)
         exchange_positions = account_snapshot.get("portfolio", {}).get("positions", {}) or {}
         managed_data = read_json_file(MANAGED_POSITIONS_PATH) or {}
 
@@ -399,74 +165,14 @@ def managed_positions():
         default_be_activation_pct = Decimal(str(os.getenv("TREND_BREAK_EVEN_ACTIVATION_PCT", "0.02")))
         default_trailing_callback = Decimal(str(os.getenv("TREND_TRAILING_CALLBACK", "0.02")))
 
-        positions_list = []
-
-        for coin, ex_pos in exchange_positions.items():
-            size = Decimal(str(ex_pos.get("size", "0")))
-            if size == 0:
-                continue
-
-            is_long = size > 0
-            abs_size = abs(size)
-            entry_price = Decimal(str(ex_pos.get("entry_price", "0")))
-
-            managed_raw = managed_data.get(coin, {})
-            sl = managed_raw.get("stop_loss", {})
-            tp = managed_raw.get("take_profit", {})
-            ts = managed_raw.get("trailing_stop", {})
-            be = managed_raw.get("break_even", {})
-
-            sl_pct = Decimal(str(sl.get("percentage", default_sl_pct)))
-            tp_pct = Decimal(str(tp.get("percentage", default_tp_pct)))
-
-            sl_price_abs = sl.get("price")
-            tp_price_abs = tp.get("price")
-
-            break_even_activated = bool(be.get("activated", False))
-            break_even_activation_pct = Decimal(str(be.get("activation_pct", default_be_activation_pct)))
-
-            if break_even_activated and sl_price_abs is not None:
-                sl_price = Decimal(str(sl_price_abs))
-            elif sl_price_abs is not None:
-                sl_price = Decimal(str(sl_price_abs))
-            elif entry_price > 0:
-                if is_long:
-                    sl_price = entry_price * (Decimal("1") - sl_pct)
-                else:
-                    sl_price = entry_price * (Decimal("1") + sl_pct)
-            else:
-                sl_price = Decimal("0")
-
-            if tp_price_abs is not None:
-                tp_price = Decimal(str(tp_price_abs))
-            elif entry_price > 0:
-                if is_long:
-                    tp_price = entry_price * (Decimal("1") + tp_pct)
-                else:
-                    tp_price = entry_price * (Decimal("1") - tp_pct)
-            else:
-                tp_price = Decimal("0")
-
-            positions_list.append({
-                "coin": coin,
-                "side": "LONG" if is_long else "SHORT",
-                "size": str(abs_size),
-                "entry_price": str(entry_price),
-                "stop_loss_price": str(sl_price),
-                "stop_loss_pct": str(sl_pct),
-                "take_profit_price": str(tp_price),
-                "take_profit_pct": str(tp_pct),
-                "trailing_enabled": bool(ts.get("enabled", False)),
-                "trailing_callback": str(ts.get("callback_rate", default_trailing_callback)),
-                "highest_tracked": ts.get("highest_price"),
-                "lowest_tracked": ts.get("lowest_price"),
-                "break_even_activated": break_even_activated,
-                "break_even_activation_pct": str(break_even_activation_pct),
-                "opened_at": managed_raw.get("opened_at", 0),
-                "source": "managed" if coin in managed_data else "exchange_only",
-            })
-
-        positions_list.sort(key=lambda p: p["coin"])
+        positions_list = build_managed_positions_payload(
+            exchange_positions=exchange_positions,
+            managed_data=managed_data,
+            default_sl_pct=default_sl_pct,
+            default_tp_pct=default_tp_pct,
+            default_be_activation_pct=default_be_activation_pct,
+            default_trailing_callback=default_trailing_callback,
+        )
 
         return jsonify({
             "managed_positions": positions_list,
@@ -481,7 +187,7 @@ def managed_positions():
 @bot_bp.route("/api/config", methods=["GET"])
 @require_api_key
 def config():
-    rate_limit_resp = _config_rate_limited()
+    rate_limit_resp = rate_limited_response(_config_rl)
     if rate_limit_resp:
         return rate_limit_resp
 
@@ -526,17 +232,17 @@ def config():
 @bot_bp.route("/api/runtime-config", methods=["GET"])
 @require_api_key
 def runtime_config():
-    rate_limit_resp = _rate_limited()
+    rate_limit_resp = rate_limited_response(_bot_rl)
     if rate_limit_resp:
         return rate_limit_resp
 
     runtime = _runtime_store.load()
     mode = str(runtime.get("strategy_mode", "trend")).strip().lower()
-    presets = _strategy_presets()
+    presets = strategy_presets()
 
     return jsonify({
         "runtime_config": runtime,
-        "default_strategy_params": _default_strategy_params(mode),
+        "default_strategy_params": default_strategy_params(mode),
         "strategy_presets": presets,
         "available_pairs": _get_hyperliquid_available_pairs(),
         "timestamp": time.time()
@@ -546,7 +252,7 @@ def runtime_config():
 @bot_bp.route("/api/runtime-config", methods=["POST"])
 @require_api_key
 def update_runtime_config():
-    rate_limit_resp = _rate_limited()
+    rate_limit_resp = rate_limited_response(_bot_rl)
     if rate_limit_resp:
         return rate_limit_resp
 
@@ -559,7 +265,7 @@ def update_runtime_config():
     if not isinstance(raw_pairs, list):
         return jsonify({"error": "invalid_trading_pairs"}), 400
 
-    live_allowed = set(_fetch_hyperliquid_universe())
+    live_allowed = set(fetch_hyperliquid_universe())
 
     normalized_pairs = []
     for coin in raw_pairs:
@@ -580,7 +286,7 @@ def update_runtime_config():
     if len(normalized_pairs) > 20:
         return jsonify({"error": "too_many_coins_max_20"}), 400
 
-    preset_params = _default_strategy_params(strategy_mode)
+    preset_params = default_strategy_params(strategy_mode)
     provided_params = payload.get("strategy_params", None)
 
     if provided_params is None:
@@ -590,7 +296,7 @@ def update_runtime_config():
     else:
         return jsonify({"error": "invalid_strategy_params"}), 400
 
-    normalized_params, params_error = _normalize_strategy_params(merged_params)
+    normalized_params, params_error = normalize_strategy_params(merged_params)
     if params_error:
         return jsonify({"error": params_error}), 400
 
@@ -610,7 +316,7 @@ def update_runtime_config():
 @bot_bp.route("/api/bot-control/status", methods=["GET"])
 @require_api_key
 def bot_control_status():
-    rate_limit_resp = _rate_limited()
+    rate_limit_resp = rate_limited_response(_bot_rl)
     if rate_limit_resp:
         return rate_limit_resp
     return jsonify({"controller": bot_process_manager.status(), "timestamp": time.time()})
@@ -619,7 +325,7 @@ def bot_control_status():
 @bot_bp.route("/api/bot-control/start", methods=["POST"])
 @require_api_key
 def bot_control_start():
-    rate_limit_resp = _rate_limited()
+    rate_limit_resp = rate_limited_response(_bot_rl)
     if rate_limit_resp:
         return rate_limit_resp
 
@@ -634,7 +340,7 @@ def bot_control_start():
 @bot_bp.route("/api/bot-control/stop", methods=["POST"])
 @require_api_key
 def bot_control_stop():
-    rate_limit_resp = _rate_limited()
+    rate_limit_resp = rate_limited_response(_bot_rl)
     if rate_limit_resp:
         return rate_limit_resp
 
