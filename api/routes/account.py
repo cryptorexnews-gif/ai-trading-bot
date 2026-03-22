@@ -9,8 +9,6 @@ Account and bot data endpoints:
 
 import logging
 import os
-import time
-from decimal import Decimal
 
 from flask import Blueprint, jsonify
 
@@ -23,9 +21,13 @@ from api.config import (
     RUNTIME_CONFIG_PATH,
 )
 from api.rate_limit_utils import build_rate_limiter, rate_limited_response
+from api.services.account_route_service import (
+    build_managed_positions_response,
+    build_portfolio_response,
+    build_positions_response,
+)
 from api.services.account_snapshot_service import get_hyperliquid_account_snapshot
 from api.services.bot_payload_service import build_config_payload, build_status_payload
-from api.services.managed_positions_service import build_managed_positions_payload
 from api.services.status_snapshot_service import load_status_snapshot
 from runtime_config_store import RuntimeConfigStore
 from state_store import StateStore
@@ -79,12 +81,7 @@ def portfolio():
 
     try:
         wallet = os.getenv("HYPERLIQUID_WALLET_ADDRESS", "").strip()
-        account_snapshot = get_hyperliquid_account_snapshot(wallet)
-        return jsonify({
-            "portfolio": account_snapshot.get("portfolio", {}),
-            "source": "hyperliquid_account",
-            "timestamp": time.time()
-        })
+        return jsonify(build_portfolio_response(wallet))
     except Exception:
         logger.error("Account portfolio endpoint failed", exc_info=True)
         return jsonify({"error": "internal_error"}), 500
@@ -99,12 +96,7 @@ def positions():
 
     try:
         wallet = os.getenv("HYPERLIQUID_WALLET_ADDRESS", "").strip()
-        account_snapshot = get_hyperliquid_account_snapshot(wallet)
-        return jsonify({
-            "positions": account_snapshot.get("portfolio", {}).get("positions", {}),
-            "source": "hyperliquid_account",
-            "timestamp": time.time()
-        })
+        return jsonify(build_positions_response(wallet))
     except Exception:
         logger.error("Account positions endpoint failed", exc_info=True)
         return jsonify({"error": "internal_error"}), 500
@@ -119,30 +111,7 @@ def managed_positions():
 
     try:
         wallet = os.getenv("HYPERLIQUID_WALLET_ADDRESS", "").strip()
-        account_snapshot = get_hyperliquid_account_snapshot(wallet)
-        exchange_positions = account_snapshot.get("portfolio", {}).get("positions", {}) or {}
-        from api.helpers import read_json_file
-        managed_data = read_json_file(MANAGED_POSITIONS_PATH) or {}
-
-        default_sl_pct = Decimal(str(os.getenv("TREND_SL_PCT", "0.04")))
-        default_tp_pct = Decimal(str(os.getenv("TREND_TP_PCT", "0.08")))
-        default_be_activation_pct = Decimal(str(os.getenv("TREND_BREAK_EVEN_ACTIVATION_PCT", "0.02")))
-        default_trailing_callback = Decimal(str(os.getenv("TREND_TRAILING_CALLBACK", "0.02")))
-
-        positions_list = build_managed_positions_payload(
-            exchange_positions=exchange_positions,
-            managed_data=managed_data,
-            default_sl_pct=default_sl_pct,
-            default_tp_pct=default_tp_pct,
-            default_be_activation_pct=default_be_activation_pct,
-            default_trailing_callback=default_trailing_callback,
-        )
-
-        return jsonify({
-            "managed_positions": positions_list,
-            "source": "hyperliquid_account_with_managed_overlays",
-            "timestamp": time.time()
-        })
+        return jsonify(build_managed_positions_response(wallet, MANAGED_POSITIONS_PATH))
     except Exception:
         logger.error("Account managed-positions endpoint failed", exc_info=True)
         return jsonify({"error": "internal_error"}), 500
