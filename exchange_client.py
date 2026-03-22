@@ -290,6 +290,16 @@ class HyperliquidExchangeClient:
             endpoint_label=f"/info type={payload.get('type', 'unknown')}",
         )
 
+    def get_batch_info(self, requests_payload: List[Dict[str, Any]], timeout: Optional[int] = None) -> List[Any]:
+        """
+        Batch /info helper.
+        Returns an empty list on failure to keep call sites simple and safe.
+        """
+        if not requests_payload:
+            return []
+        result = self._post_info({"type": "batch", "requests": requests_payload}, timeout=timeout)
+        return result if isinstance(result, list) else []
+
     def _post_exchange(self, payload: Dict[str, Any], timeout: Optional[int] = None) -> Optional[Any]:
         timeout = timeout or self.exchange_timeout
         return post_exchange_with_circuit_breaker(
@@ -300,6 +310,20 @@ class HyperliquidExchangeClient:
             circuit_breaker=self._exchange_cb,
             endpoint_label="/exchange",
         )
+
+    def _is_valid_eth_address(self, value: Optional[str]) -> bool:
+        if not value:
+            return False
+        raw = str(value).strip()
+        return raw.startswith("0x") and len(raw) == 42
+
+    def _get_effective_vault_address(self) -> Optional[str]:
+        """
+        Returns vault address only if it is configured and structurally valid.
+        """
+        if self._is_valid_eth_address(self.vault_address):
+            return self.vault_address
+        return None
 
     def _post_signed_action_once(
         self,
@@ -335,12 +359,12 @@ class HyperliquidExchangeClient:
 
         signer = (self.account.address or "").lower()
         master = (self.master_wallet_address or "").lower()
-        preferred_vault = self.vault_address
+        effective_vault = self._get_effective_vault_address()
 
         attempts: List[Optional[str]] = []
 
-        if preferred_vault:
-            attempts.append(preferred_vault)
+        if effective_vault:
+            attempts.append(effective_vault)
         else:
             attempts.append(None)
 
