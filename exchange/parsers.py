@@ -1,3 +1,4 @@
+import re
 from typing import Any, Dict, List, Optional
 
 
@@ -12,51 +13,92 @@ def extract_statuses(exchange_result: Dict[str, Any]) -> List[Dict[str, Any]]:
     return [status for status in statuses if isinstance(status, dict)]
 
 
-def _extract_oid_from_status(status: Dict[str, Any]) -> Optional[int]:
-    if not isinstance(status, dict):
+def _extract_oid_from_string(value: str) -> Optional[int]:
+    if not isinstance(value, str):
         return None
 
-    # Common Hyperliquid shape: {"resting": {"oid": ...}}
-    resting = status.get("resting", {})
-    if isinstance(resting, dict):
-        oid = resting.get("oid")
-        if oid is not None:
+    # Examples:
+    # "oid: 123456"
+    # "order oid=123456 accepted"
+    # "123456"
+    patterns = [
+        r"(?i)\boid\s*[:=]\s*(\d+)\b",
+        r"(?<!\d)(\d{3,})(?!\d)",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, value)
+        if match:
             try:
-                return int(oid)
+                return int(match.group(1))
+            except (TypeError, ValueError):
+                continue
+    return None
+
+
+def _extract_oid_recursive(obj: Any, depth: int = 0) -> Optional[int]:
+    if depth > 4:
+        return None
+
+    if isinstance(obj, int):
+        return obj
+
+    if isinstance(obj, str):
+        return _extract_oid_from_string(obj)
+
+    if isinstance(obj, dict):
+        direct = obj.get("oid")
+        if direct is not None:
+            try:
+                return int(direct)
             except (TypeError, ValueError):
                 pass
 
-    # Another possible shape: {"filled": {"oid": ...}}
-    filled = status.get("filled", {})
-    if isinstance(filled, dict):
-        oid = filled.get("oid")
-        if oid is not None:
-            try:
-                return int(oid)
-            except (TypeError, ValueError):
-                pass
+        # Common Hyperliquid nested shapes
+        for key in ("resting", "filled", "order", "data", "response"):
+            if key in obj:
+                nested_oid = _extract_oid_recursive(obj.get(key), depth + 1)
+                if nested_oid is not None:
+                    return nested_oid
 
-    # Fallback direct field
-    direct_oid = status.get("oid")
-    if direct_oid is not None:
-        try:
-            return int(direct_oid)
-        except (TypeError, ValueError):
-            pass
+        # Fallback: scan all dict values
+        for value in obj.values():
+            nested_oid = _extract_oid_recursive(value, depth + 1)
+            if nested_oid is not None:
+                return nested_oid
+
+    if isinstance(obj, list):
+        for item in obj:
+            nested_oid = _extract_oid_recursive(item, depth + 1)
+            if nested_oid is not None:
+                return nested_oid
 
     return None
 
 
 def extract_order_ids(exchange_result: Dict[str, Any]) -> List[int]:
     ids: List[int] = []
-    statuses = extract_statuses(exchange_result)
+    statuses_raw = []
 
-    for status in statuses:
-        oid = _extract_oid_from_status(status)
+    if isinstance(exchange_result, dict):
+        statuses_raw = exchange_result.get("response", {}).get("data", {}).get("statuses", [])
+
+    if not isinstance(statuses_raw, list):
+        return ids
+
+    for status in statuses_raw:
+        oid = _extract_oid_recursive(status)
         if oid is not None:
             ids.append(oid)
 
-    return ids
+    # De-duplicate preserving order
+    deduped: List[int] = []
+    seen = set()
+    for oid in ids:
+        if oid in seen:
+            continue
+        seen.add(oid)
+        deduped.append(oid)
+    return deduped
 
 
 def get_first_status_error(statuses: List[Dict[str, Any]]) -> Optional[str]:
