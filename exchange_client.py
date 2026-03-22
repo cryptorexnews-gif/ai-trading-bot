@@ -31,6 +31,8 @@ class HyperliquidExchangeClient:
     - EIP-712 signing via exchange.signing
     - response parsing via exchange.parsers
     - size/tick normalization via exchange.market_rules
+
+    Note: paper trading è disabilitato. Se non live/mainnet -> fail-closed.
     """
 
     def __init__(
@@ -38,7 +40,7 @@ class HyperliquidExchangeClient:
         base_url: str,
         private_key: str,
         enable_mainnet_trading: bool = False,
-        execution_mode: str = "paper",
+        execution_mode: str = "live",
         meta_cache_ttl_sec: int = 120,
         paper_slippage_bps: Decimal = Decimal("5"),
         info_timeout: int = 15,
@@ -47,7 +49,7 @@ class HyperliquidExchangeClient:
     ):
         self.base_url = base_url
         self.enable_mainnet_trading = enable_mainnet_trading
-        self.execution_mode = execution_mode
+        self.execution_mode = "live" if execution_mode != "live" else execution_mode
         self.meta_cache_ttl_sec = meta_cache_ttl_sec
         self.paper_slippage_bps = paper_slippage_bps
         self.info_timeout = info_timeout
@@ -92,6 +94,9 @@ class HyperliquidExchangeClient:
         if not address or len(address) < 12:
             return "none"
         return f"{address[:6]}...{address[-4:]}"
+
+    def _live_orders_enabled(self) -> bool:
+        return self.execution_mode == "live" and self.enable_mainnet_trading
 
     def get_derived_address(self) -> str:
         return self.account.address
@@ -300,14 +305,14 @@ class HyperliquidExchangeClient:
         return default_tick_size_for_asset(asset_id)
 
     def set_leverage(self, coin: str, leverage: int) -> bool:
+        if not self._live_orders_enabled():
+            logger.error("Live leverage blocked: EXECUTION_MODE must be live and ENABLE_MAINNET_TRADING=true")
+            return False
+
         leverage = max(1, leverage)
         max_leverage = self.get_max_leverage(coin)
         if leverage > max_leverage:
             leverage = max_leverage
-
-        if self.execution_mode != "live" or not self.enable_mainnet_trading:
-            logger.info(f"PAPER leverage set {coin} -> {leverage}x")
-            return True
 
         asset_id = self.get_asset_id(coin)
         if asset_id is None:
@@ -325,16 +330,12 @@ class HyperliquidExchangeClient:
         return False
 
     def place_order(self, coin: str, side: str, size: Decimal, desired_price: Decimal, reduce_only: bool = False) -> Dict[str, Any]:
+        if not self._live_orders_enabled():
+            return {"success": False, "mode": "live", "reason": "live_disabled_fail_closed", "notional": "0"}
+
         normalized_size = self._normalize_size_for_coin(coin, abs(size))
         if normalized_size <= 0:
             return {"success": False, "mode": "live", "reason": "invalid_size_after_normalization", "notional": "0"}
-
-        if self.execution_mode != "live" or not self.enable_mainnet_trading:
-            slip = self.paper_slippage_bps / Decimal("10000")
-            fill_price = desired_price * (Decimal("1") + slip) if side.lower() == "buy" else desired_price * (Decimal("1") - slip)
-            notional = abs(normalized_size * fill_price)
-            logger.info(f"PAPER order {coin} {side.upper()} size={normalized_size} fill={fill_price} reduce_only={reduce_only}")
-            return {"success": True, "mode": "paper", "filled_price": str(fill_price), "notional": str(notional)}
 
         asset_id = self.get_asset_id(coin)
         if asset_id is None:
@@ -397,16 +398,15 @@ class HyperliquidExchangeClient:
         reduce_only: bool = True,
         is_market: bool = True,
     ) -> Dict[str, Any]:
+        if not self._live_orders_enabled():
+            return {"success": False, "reason": "live_disabled_fail_closed"}
+
         if tpsl not in {"tp", "sl"}:
             return {"success": False, "reason": "invalid_tpsl"}
 
         normalized_size = self._normalize_size_for_coin(coin, abs(size))
         if normalized_size <= 0:
             return {"success": False, "reason": "invalid_size_after_normalization"}
-
-        if self.execution_mode != "live" or not self.enable_mainnet_trading:
-            logger.info(f"PAPER trigger order {coin} {tpsl.upper()} {side.upper()} size={normalized_size} trigger={trigger_price}")
-            return {"success": True, "mode": "paper", "order_id": None}
 
         asset_id = self.get_asset_id(coin)
         if asset_id is None:
@@ -449,9 +449,9 @@ class HyperliquidExchangeClient:
         return {"success": True, "order_id": order_id}
 
     def cancel_order(self, coin: str, order_id: int) -> bool:
-        if self.execution_mode != "live" or not self.enable_mainnet_trading:
-            logger.info(f"PAPER cancel order {coin} oid={order_id}")
-            return True
+        if not self._live_orders_enabled():
+            logger.error("Live cancel blocked: EXECUTION_MODE must be live and ENABLE_MAINNET_TRADING=true")
+            return False
 
         asset_id = self.get_asset_id(coin)
         if asset_id is None:
@@ -479,8 +479,8 @@ class HyperliquidExchangeClient:
         current_stop_order_id: Optional[int] = None,
         current_take_profit_order_id: Optional[int] = None,
     ) -> Dict[str, Any]:
-        if self.execution_mode != "live" or not self.enable_mainnet_trading:
-            return {"success": True, "stop_loss_order_id": None, "take_profit_order_id": None}
+        if not self._live_orders_enabled():
+            return {"success": False, "reason": "live_disabled_fail_closed"}
 
         close_side = "sell" if is_long else "buy"
         close_size = abs(position_size)

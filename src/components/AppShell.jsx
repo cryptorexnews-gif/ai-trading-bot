@@ -10,7 +10,7 @@ export default function AppShell() {
   const { data: configData } = useApi('/config', 5000)
 
   const bot = statusData?.bot || {}
-  const mode = bot.execution_mode || configData?.execution_mode || 'paper'
+  const mode = bot.execution_mode || configData?.execution_mode || 'live'
   const isRunning = bot.is_running || false
   const tradingPairsCount = configData?.trading_pairs_count || (configData?.trading_pairs || []).length || 0
 

@@ -23,11 +23,9 @@ def _is_loopback_ip(value: str) -> bool:
 
     candidate = value.strip()
 
-    # Handle IPv6-mapped IPv4
     if candidate.startswith("::ffff:"):
         candidate = candidate.replace("::ffff:", "", 1)
 
-    # Handle simple host:port for IPv4 forms
     if candidate.count(":") == 1 and "." in candidate:
         candidate = candidate.split(":", 1)[0]
 
@@ -43,8 +41,6 @@ def _is_server_loopback_bound() -> bool:
 
 
 def _is_local_socket_request() -> bool:
-    # Security: trust ONLY the real socket peer address.
-    # Do not trust X-Forwarded-For / X-Real-IP / Host for auth decisions.
     remote_addr = (request.remote_addr or "").strip()
     return _is_loopback_ip(remote_addr)
 
@@ -52,15 +48,9 @@ def _is_local_socket_request() -> bool:
 def require_api_key(f):
     @wraps(f)
     def decorated(*args, **kwargs):
-        execution_mode = os.getenv("EXECUTION_MODE", "paper").strip().lower()
         allow_localhost_bypass = _env_bool("ALLOW_LOCALHOST_BYPASS", True)
 
-        if (
-            execution_mode != "live"
-            and allow_localhost_bypass
-            and _is_server_loopback_bound()
-            and _is_local_socket_request()
-        ):
+        if allow_localhost_bypass and _is_server_loopback_bound() and _is_local_socket_request():
             return f(*args, **kwargs)
 
         if not API_AUTH_KEY:

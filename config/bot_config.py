@@ -41,7 +41,8 @@ class BotConfig:
 
     def __init__(self):
         self.wallet_address = _env("HYPERLIQUID_WALLET_ADDRESS", "")
-        self.execution_mode = _env("EXECUTION_MODE", "paper").lower()
+        env_mode = _env("EXECUTION_MODE", "live").lower()
+        self.execution_mode = "live" if env_mode != "live" else env_mode
         self.enable_mainnet_trading = _env_bool("ENABLE_MAINNET_TRADING", False)
         self.base_url = _env("HYPERLIQUID_BASE_URL", "https://api.hyperliquid.xyz")
 
@@ -115,8 +116,6 @@ class BotConfig:
         self.break_even_offset_pct = _env_decimal("BREAK_EVEN_OFFSET_PCT", "0.001")
         self.correlation_threshold = _env_decimal("CORRELATION_THRESHOLD", "0.7")
 
-        # Manteniamo l'attributo solo per compatibilità con il costruttore client,
-        # ma senza leggere alcuna variabile vault da env.
         self.vault_address = ""
 
         self._normalize_runtime_values()
@@ -126,7 +125,6 @@ class BotConfig:
         if self.min_trend_duration_hours < 24:
             self.min_trend_duration_hours = 24
 
-        # If cap is set extremely low, disable it to avoid constant false rejections.
         if self.max_order_notional_usd > 0 and self.max_order_notional_usd < Decimal("10"):
             self.max_order_notional_usd = Decimal("0")
 
@@ -169,10 +167,11 @@ class BotConfig:
             )
             self.llm_model = self.REQUIRED_LLM_MODEL
 
-        if self.execution_mode == "live" and not self.enable_mainnet_trading:
-            warnings.append("EXECUTION_MODE=live but ENABLE_MAINNET_TRADING=false — orders will be paper")
-        if self.execution_mode not in ("paper", "live"):
-            warnings.append(f"Unknown EXECUTION_MODE '{self.execution_mode}', defaulting to paper behavior")
+        if os.getenv("EXECUTION_MODE", "live").lower() != "live":
+            warnings.append("EXECUTION_MODE forzato a live: paper trading disabilitato.")
+
+        if not self.enable_mainnet_trading:
+            warnings.append("ENABLE_MAINNET_TRADING=false: ordini live bloccati (fail-closed).")
 
         if self.min_trend_duration_hours < 24:
             warnings.append(f"MIN_TREND_DURATION_HOURS={self.min_trend_duration_hours} is low for 4H/1D strategy")

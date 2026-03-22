@@ -9,6 +9,8 @@ export default function StatusBadge({ isRunning, mode, lastUpdated }) {
     return `${Math.floor(seconds / 60)}m ago`
   }
 
+  const effectiveMode = (mode || 'live').toLowerCase()
+
   return (
     <div className="flex items-center gap-3">
       <div className={`w-3 h-3 rounded-full ${isRunning ? 'bg-green-500 animate-pulse' : 'bg-red-500'}`} />
@@ -16,9 +18,9 @@ export default function StatusBadge({ isRunning, mode, lastUpdated }) {
         {isRunning ? 'Running' : 'Stopped'}
       </span>
       <span className={`px-2 py-0.5 rounded text-xs font-bold uppercase ${
-        mode === 'live' ? 'bg-red-600 text-white' : 'bg-yellow-600 text-black'
+        effectiveMode === 'live' ? 'bg-red-600 text-white' : 'bg-gray-700 text-white'
       }`}>
-        {mode || 'paper'}
+        {effectiveMode}
       </span>
       {lastUpdated && (
         <span className="text-xs text-gray-500">

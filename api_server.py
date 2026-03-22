@@ -42,12 +42,12 @@ def main() -> None:
     host = os.getenv("API_HOST", "127.0.0.1")
     port = int(os.getenv("API_PORT", "5000"))
     debug = os.getenv("API_DEBUG", "false").lower() == "true"
-    execution_mode = os.getenv("EXECUTION_MODE", "paper").lower()
     allow_localhost_bypass = _env_bool("ALLOW_LOCALHOST_BYPASS", True)
     loopback_bound = _is_loopback_host(host)
 
-    api_key_status = "SET ✓" if API_AUTH_KEY else "EMPTY ✗"
-    logger.info(f"DASHBOARD_API_KEY status: {api_key_status} (length={len(API_AUTH_KEY) if API_AUTH_KEY else 0})")
+    env_mode = os.getenv("EXECUTION_MODE", "live").lower()
+    if env_mode != "live":
+        logger.warning("EXECUTION_MODE is not 'live'. Runtime is now live-only; forcing live behavior.")
 
     if host == "0.0.0.0":
         logger.warning(
@@ -55,21 +55,19 @@ def main() -> None:
             "for production deployments."
         )
 
-    if execution_mode == "live" and debug:
-        logger.warning("Forcing debug=False because EXECUTION_MODE=live")
-        debug = False
+    api_key_status = "SET ✓" if API_AUTH_KEY else "EMPTY ✗"
+    logger.info(f"DASHBOARD_API_KEY status: {api_key_status} (length={len(API_AUTH_KEY) if API_AUTH_KEY else 0})")
 
-    if allow_localhost_bypass and loopback_bound and execution_mode != "live":
+    auth_mode = "API key required"
+    if allow_localhost_bypass and loopback_bound:
         auth_mode = "localhost loopback bypass enabled; remote requires API key"
-    else:
-        auth_mode = "API key required"
 
     logger.info(
         f"🚀 Starting API server on http://{host}:{port} "
-        f"(mode={execution_mode}, debug={debug}, auth={auth_mode}, CORS: {CORS_ORIGINS})"
+        f"(mode=live, debug={debug}, auth={auth_mode}, CORS: {CORS_ORIGINS})"
     )
     logger.info(f"API Server ready: http://{host}:{port}")
-    if allow_localhost_bypass and loopback_bound and execution_mode != "live":
+    if allow_localhost_bypass and loopback_bound:
         logger.info("Local loopback requests: ALLOWED without API key")
         logger.info("Non-loopback requests: API key required")
     else:
