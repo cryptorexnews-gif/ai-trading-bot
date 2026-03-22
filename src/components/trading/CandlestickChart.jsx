@@ -442,22 +442,53 @@ export default function CandlestickChart({ candles, height = 500, selectedCoin, 
       <div ref={chartContainerRef} className="w-full h-full" />
 
       {hoverData && (
-        <div className="absolute top-2 left-2 right-2 pointer-events-none z-20">
-          <div className="bg-gray-900/95 border border-gray-700/80 backdrop-blur-md rounded-xl p-3 shadow-2xl max-w-md mx-auto">
-            <div className="grid grid-cols-2 gap-3 text-xs font-mono">
-              <div><div className="text-gray-400 mb-1">Open</div><div className="font-bold text-white">{fmtPrice(hoverData.o)}</div></div>
-              <div><div className="text-gray-400 mb-1">High</div><div className="font-bold text-green-400">{fmtPrice(hoverData.h)}</div></div>
-              <div><div className="text-gray-400 mb-1">Low</div><div className="font-bold text-red-400">{fmtPrice(hoverData.l)}</div></div>
-              <div><div className="text-gray-400 mb-1">Close</div><div className={`font-bold ${isPositive ? 'text-green-400' : 'text-red-400'}`}>{fmtPrice(hoverData.c)}</div></div>
-              <div className="col-span-2">
-                <div className="text-gray-400 mb-1">Change</div>
-                <div className={`font-bold text-sm ${isPositive ? 'text-green-400' : 'text-red-400'}`}>{isPositive ? '+' : ''}{fmtPct(change)}</div>
+        <div className="absolute top-2 right-2 pointer-events-none z-20 w-56">
+          <div className="bg-gray-900/85 border border-gray-700/70 backdrop-blur-sm rounded-lg p-2 shadow-xl">
+            <div className="grid grid-cols-2 gap-x-2 gap-y-1 text-[10px] leading-tight font-mono">
+              <div>
+                <div className="text-gray-400">O</div>
+                <div className="font-semibold text-white">{fmtPrice(hoverData.o)}</div>
               </div>
-              <div><div className="text-gray-400 mb-1">RSI</div><div className="font-bold text-blue-400">{fmtPrice(hoverData.rsi)}</div></div>
-              <div><div className="text-gray-400 mb-1">MACD</div><div className="font-bold text-blue-400">{fmtPrice(hoverData.macd)}</div></div>
-              <div><div className="text-gray-400 mb-1">EMA9</div><div className="font-bold text-green-400">{fmtPrice(hoverData.ema9)}</div></div>
-              <div><div className="text-gray-400 mb-1">EMA21</div><div className="font-bold text-orange-400">{fmtPrice(hoverData.ema21)}</div></div>
-              <div className="col-span-2"><div className="text-gray-400 mb-1">VWAP</div><div className="font-bold text-yellow-400">{fmtPrice(hoverData.vwap)}</div></div>
+              <div>
+                <div className="text-gray-400">H</div>
+                <div className="font-semibold text-green-400">{fmtPrice(hoverData.h)}</div>
+              </div>
+              <div>
+                <div className="text-gray-400">L</div>
+                <div className="font-semibold text-red-400">{fmtPrice(hoverData.l)}</div>
+              </div>
+              <div>
+                <div className="text-gray-400">C</div>
+                <div className={`font-semibold ${isPositive ? 'text-green-400' : 'text-red-400'}`}>
+                  {fmtPrice(hoverData.c)}
+                </div>
+              </div>
+              <div>
+                <div className="text-gray-400">Δ</div>
+                <div className={`font-semibold ${isPositive ? 'text-green-400' : 'text-red-400'}`}>
+                  {isPositive ? '+' : ''}{fmtPct(change)}
+                </div>
+              </div>
+              <div>
+                <div className="text-gray-400">RSI</div>
+                <div className="font-semibold text-blue-400">{fmtPrice(hoverData.rsi)}</div>
+              </div>
+              <div>
+                <div className="text-gray-400">MACD</div>
+                <div className="font-semibold text-blue-400">{fmtPrice(hoverData.macd)}</div>
+              </div>
+              <div>
+                <div className="text-gray-400">VWAP</div>
+                <div className="font-semibold text-yellow-400">{fmtPrice(hoverData.vwap)}</div>
+              </div>
+              <div>
+                <div className="text-gray-400">EMA9</div>
+                <div className="font-semibold text-green-400">{fmtPrice(hoverData.ema9)}</div>
+              </div>
+              <div>
+                <div className="text-gray-400">EMA21</div>
+                <div className="font-semibold text-orange-400">{fmtPrice(hoverData.ema21)}</div>
+              </div>
             </div>
           </div>
         </div>
