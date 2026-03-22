@@ -103,6 +103,73 @@ class HyperliquidExchangeClient:
             return "none"
         return f"{address[:6]}...{address[-4:]}"
 
+    @staticmethod
+    def _normalize_side(side_value: Any) -> str:
+        raw = str(side_value).strip().lower()
+        if raw in {"b", "buy", "bid", "long", "true"}:
+            return "buy"
+        if raw in {"a", "s", "sell", "ask", "short", "false"}:
+            return "sell"
+        return ""
+
+    @staticmethod
+    def _extract_trigger_px(order: Dict[str, Any]) -> Decimal:
+        if not isinstance(order, dict):
+            return Decimal("0")
+
+        direct = order.get("triggerPx")
+        if direct is not None:
+            return safe_decimal(direct, Decimal("0"))
+
+        trigger_obj = order.get("trigger", {})
+        if isinstance(trigger_obj, dict):
+            nested = trigger_obj.get("triggerPx")
+            if nested is not None:
+                return safe_decimal(nested, Decimal("0"))
+
+        order_type = order.get("orderType", {})
+        if isinstance(order_type, dict):
+            trigger_obj_2 = order_type.get("trigger", {})
+            if isinstance(trigger_obj_2, dict):
+                nested2 = trigger_obj_2.get("triggerPx")
+                if nested2 is not None:
+                    return safe_decimal(nested2, Decimal("0"))
+
+        return Decimal("0")
+
+    @staticmethod
+    def _extract_tpsl(order: Dict[str, Any]) -> str:
+        if not isinstance(order, dict):
+            return ""
+
+        direct = str(order.get("tpsl", "")).strip().lower()
+        if direct in {"tp", "sl"}:
+            return direct
+
+        trigger_obj = order.get("trigger", {})
+        if isinstance(trigger_obj, dict):
+            nested = str(trigger_obj.get("tpsl", "")).strip().lower()
+            if nested in {"tp", "sl"}:
+                return nested
+
+        order_type = order.get("orderType", {})
+        if isinstance(order_type, dict):
+            trigger_obj_2 = order_type.get("trigger", {})
+            if isinstance(trigger_obj_2, dict):
+                nested2 = str(trigger_obj_2.get("tpsl", "")).strip().lower()
+                if nested2 in {"tp", "sl"}:
+                    return nested2
+
+        return ""
+
+    @staticmethod
+    def _is_close_enough(a: Decimal, b: Decimal, rel_tol: Decimal = Decimal("0.02"), abs_tol: Decimal = Decimal("0.00000001")) -> bool:
+        if a == b:
+            return True
+        diff = abs(a - b)
+        scale = max(abs(a), abs(b), Decimal("1"))
+        return diff <= max(abs_tol, scale * rel_tol)
+
     def _next_nonce(self) -> int:
         current_ms = int(time.time() * 1000)
         if current_ms <= self._last_nonce:
@@ -208,6 +275,59 @@ class HyperliquidExchangeClient:
         if sz_decimals is None:
             return size if size > 0 else Decimal("0")
         return normalize_size_for_decimals(size, sz_decimals)
+
+    def _find_trigger_order_id(
+        self,
+        user: str,
+        coin: str,
+        side: str,
+        size: Decimal,
+        trigger_price: Decimal,
+        tpsl: str,
+    ) -> Optional[int]:
+        open_orders = self.get_open_orders(user)
+        wanted_coin = coin.upper()
+        wanted_side = side.lower()
+        wanted_tpsl = tpsl.lower()
+        wanted_size = abs(size)
+
+        for order in open_orders:
+            if not isinstance(order, dict):
+                continue
+
+            order_coin = str(order.get("coin", "")).strip().upper()
+            if order_coin != wanted_coin:
+                continue
+
+            order_side = self._normalize_side(order.get("side"))
+            if not order_side:
+                order_side = self._normalize_side(order.get("dir"))
+            if order_side != wanted_side:
+                continue
+
+            order_tpsl = self._extract_tpsl(order)
+            if order_tpsl != wanted_tpsl:
+                continue
+
+            order_size = abs(safe_decimal(order.get("sz", order.get("s", "0")), Decimal("0")))
+            if not self._is_close_enough(order_size, wanted_size, rel_tol=Decimal("0.03")):
+                continue
+
+            order_trigger_px = self._extract_trigger_px(order)
+            if order_trigger_px <= 0:
+                continue
+            if not self._is_close_enough(order_trigger_px, trigger_price, rel_tol=Decimal("0.01")):
+                continue
+
+            oid_raw = order.get("oid")
+            if oid_raw is None:
+                continue
+            try:
+                return int(oid_raw)
+            except (TypeError, ValueError):
+                continue
+
+        return None
 
     def get_derived_address(self) -> str:
         return self.account.address
@@ -442,6 +562,17 @@ class HyperliquidExchangeClient:
 
         order_ids = extract_order_ids(result)
         order_id = order_ids[0] if order_ids else None
+
+        if order_id is None:
+            order_id = self._find_trigger_order_id(
+                user=self.account.address,
+                coin=coin,
+                side=side,
+                size=normalized_size,
+                trigger_price=rounded_trigger,
+                tpsl=tpsl,
+            )
+
         logger.info(
             f"LIVE trigger order placed {coin} {tpsl.upper()} {side.upper()} "
             f"size={normalized_size} trigger={rounded_trigger} oid={order_id}"
@@ -487,6 +618,36 @@ class HyperliquidExchangeClient:
         if close_size <= 0:
             return {"success": False, "reason": "invalid_size"}
 
+        existing_sl_id = current_stop_order_id
+        existing_tp_id = current_take_profit_order_id
+
+        if existing_sl_id is None:
+            existing_sl_id = self._find_trigger_order_id(
+                user=self.account.address,
+                coin=coin,
+                side=close_side,
+                size=close_size,
+                trigger_price=stop_loss_price,
+                tpsl="sl",
+            )
+
+        if existing_tp_id is None:
+            existing_tp_id = self._find_trigger_order_id(
+                user=self.account.address,
+                coin=coin,
+                side=close_side,
+                size=close_size,
+                trigger_price=take_profit_price,
+                tpsl="tp",
+            )
+
+        if existing_sl_id is not None and existing_tp_id is not None:
+            return {
+                "success": True,
+                "stop_loss_order_id": existing_sl_id,
+                "take_profit_order_id": existing_tp_id,
+            }
+
         if current_stop_order_id is not None:
             self.cancel_order(coin, current_stop_order_id)
         if current_take_profit_order_id is not None:
@@ -519,8 +680,14 @@ class HyperliquidExchangeClient:
                 self.cancel_order(coin, sl_oid)
             return {"success": False, "reason": f"take_profit_place_failed:{tp_res.get('reason', 'unknown')}"}
 
+        sl_id = sl_res.get("order_id")
+        tp_id = tp_res.get("order_id")
+
+        if sl_id is None or tp_id is None:
+            return {"success": False, "reason": "missing_trigger_order_id"}
+
         return {
             "success": True,
-            "stop_loss_order_id": sl_res.get("order_id"),
-            "take_profit_order_id": tp_res.get("order_id"),
+            "stop_loss_order_id": sl_id,
+            "take_profit_order_id": tp_id,
         }
