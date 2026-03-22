@@ -409,13 +409,13 @@ class HyperliquidExchangeClient:
                 continue
 
             order_size = abs(self._extract_order_size(order))
-            if not self._is_close_enough(order_size, wanted_size, rel_tol=Decimal("0.06")):
+            if not self._is_close_enough(order_size, wanted_size, rel_tol=Decimal("0.08")):
                 continue
 
             order_trigger_px = self._extract_trigger_px(order)
             if order_trigger_px <= 0:
                 continue
-            if not self._is_close_enough(order_trigger_px, trigger_price, rel_tol=Decimal("0.02")):
+            if not self._is_close_enough(order_trigger_px, trigger_price, rel_tol=Decimal("0.03")):
                 continue
 
             order_tpsl = self._extract_tpsl(order)
@@ -465,6 +465,48 @@ class HyperliquidExchangeClient:
             strict_tpsl=strict_tpsl,
         )
         return self._select_best_match_oid(matches, trigger_price)
+
+    def _find_latest_protective_order_id(
+        self,
+        user: str,
+        coin: str,
+        side: str,
+        tpsl: str,
+    ) -> Optional[int]:
+        open_orders = self.get_open_orders(user)
+        candidates: List[int] = []
+
+        for order in open_orders:
+            if not isinstance(order, dict):
+                continue
+
+            order_coin = str(order.get("coin", order.get("symbol", ""))).strip().upper()
+            if not order_coin and isinstance(order.get("order"), dict):
+                order_coin = str(order["order"].get("coin", order["order"].get("symbol", ""))).strip().upper()
+            if order_coin != coin.upper():
+                continue
+
+            order_side = self._extract_order_side(order)
+            if order_side != side.lower():
+                continue
+
+            if not self._extract_reduce_only(order):
+                continue
+
+            order_tpsl = self._extract_tpsl(order)
+            if order_tpsl and order_tpsl != tpsl.lower():
+                continue
+
+            oid = self._extract_order_oid(order)
+            if oid is None:
+                continue
+
+            candidates.append(int(oid))
+
+        if not candidates:
+            return None
+
+        return max(candidates)
 
     def _wait_for_trigger_order_id(
         self,
@@ -533,10 +575,6 @@ class HyperliquidExchangeClient:
             logger.warning(f"Cancelled duplicate {tpsl.upper()} order for {coin}, oid={oid}, keep_oid={keep_oid}")
 
     def _cancel_existing_coin_protective_orders(self, coin: str, close_side: str) -> int:
-        """
-        Cancella trigger reduce-only esistenti per coin+side (tipicamente TP/SL stale),
-        usato prima di una ricreazione pulita delle protezioni.
-        """
         open_orders = self.get_open_orders(self.account.address)
         to_cancel: List[int] = []
 
@@ -726,7 +764,7 @@ class HyperliquidExchangeClient:
         if reference_price <= 0:
             return self._round_price_to_tick(asset_id, Decimal("0"))
 
-        execution_buffer = Decimal("0.0025")  # 25 bps per miglior fill reliability
+        execution_buffer = Decimal("0.0025")
         if side.lower() == "buy":
             aggressive = reference_price * (Decimal("1") + execution_buffer)
             target = max(desired_price, aggressive) if desired_price > 0 else aggressive
@@ -897,6 +935,15 @@ class HyperliquidExchangeClient:
             logger.error(f"Trigger order not acknowledged by Hyperliquid statuses for {coin}: {statuses}")
             return {"success": False, "reason": "not_acknowledged"}
 
+        immediate_oids = extract_order_ids(result)
+        if immediate_oids:
+            order_id = int(immediate_oids[0])
+            logger.info(
+                f"Trigger order acknowledged with immediate oid for {coin} {tpsl.upper()} "
+                f"{normalized_side.upper()} oid={order_id}"
+            )
+            return {"success": True, "order_id": order_id}
+
         order_id = self._wait_for_trigger_order_id(
             user=self.account.address,
             coin=coin,
@@ -904,32 +951,44 @@ class HyperliquidExchangeClient:
             size=normalized_size,
             trigger_price=rounded_trigger,
             tpsl=tpsl,
-            attempts=10,
-            delay_sec=0.6,
+            attempts=16,
+            delay_sec=0.75,
         )
 
-        if order_id is None:
-            logger.warning(
-                f"Trigger order accepted but oid unresolved for {coin} {tpsl.upper()} {normalized_side.upper()} "
-                f"size={normalized_size} trigger={rounded_trigger}"
+        if order_id is not None:
+            self._cancel_duplicate_trigger_orders(
+                user=self.account.address,
+                coin=coin,
+                side=normalized_side,
+                size=normalized_size,
+                trigger_price=rounded_trigger,
+                tpsl=tpsl,
+                keep_oid=order_id,
             )
-            return {"success": False, "reason": "missing_trigger_order_id"}
+            logger.info(
+                f"LIVE trigger order placed {coin} {tpsl.upper()} {normalized_side.upper()} "
+                f"size={normalized_size} trigger={rounded_trigger} oid={order_id}"
+            )
+            return {"success": True, "order_id": order_id}
 
-        self._cancel_duplicate_trigger_orders(
+        fallback_oid = self._find_latest_protective_order_id(
             user=self.account.address,
             coin=coin,
             side=normalized_side,
-            size=normalized_size,
-            trigger_price=rounded_trigger,
             tpsl=tpsl,
-            keep_oid=order_id,
         )
+        if fallback_oid is not None:
+            logger.warning(
+                f"Trigger order accepted and mapped via fallback for {coin} {tpsl.upper()} "
+                f"{normalized_side.upper()} oid={fallback_oid}"
+            )
+            return {"success": True, "order_id": fallback_oid}
 
-        logger.info(
-            f"LIVE trigger order placed {coin} {tpsl.upper()} {normalized_side.upper()} "
-            f"size={normalized_size} trigger={rounded_trigger} oid={order_id}"
+        logger.warning(
+            f"Trigger order accepted but oid unresolved for {coin} {tpsl.upper()} "
+            f"{normalized_side.upper()} size={normalized_size} trigger={rounded_trigger}"
         )
-        return {"success": True, "order_id": order_id}
+        return {"success": False, "reason": "missing_trigger_order_id"}
 
     def cancel_order(self, coin: str, order_id: int) -> bool:
         if not self._live_orders_enabled():
