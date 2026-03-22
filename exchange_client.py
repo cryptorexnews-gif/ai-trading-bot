@@ -1,4 +1,5 @@
 import logging
+import os
 import time
 from decimal import Decimal
 from typing import Any, Dict, List, Optional, Tuple
@@ -36,6 +37,7 @@ class HyperliquidExchangeClient:
         paper_slippage_bps: Decimal = Decimal("5"),
         info_timeout: int = 15,
         exchange_timeout: int = 30,
+        vault_address: Optional[str] = None,
     ):
         self.base_url = base_url
         self.enable_mainnet_trading = enable_mainnet_trading
@@ -44,6 +46,10 @@ class HyperliquidExchangeClient:
         self.paper_slippage_bps = paper_slippage_bps
         self.info_timeout = info_timeout
         self.exchange_timeout = exchange_timeout
+
+        env_vault = os.getenv("HYPERLIQUID_VAULT_ADDRESS", "").strip()
+        normalized_vault = (vault_address or env_vault or "").strip()
+        self.vault_address: Optional[str] = normalized_vault if normalized_vault else None
 
         self.session = create_robust_session()
 
@@ -65,26 +71,34 @@ class HyperliquidExchangeClient:
         logger.info(
             f"Exchange client initialized: base_url={self.base_url}, "
             f"mode={self.execution_mode}, mainnet={self.enable_mainnet_trading}, "
-            f"wallet={self.get_wallet_address_masked()}"
+            f"signer={self.get_wallet_address_masked()}, "
+            f"vault={self.get_vault_address_masked()}"
         )
 
     def __repr__(self) -> str:
         return (
             f"<HyperliquidExchangeClient base_url={self.base_url} "
-            f"mode={self.execution_mode} wallet={self.get_wallet_address_masked()}>"
+            f"mode={self.execution_mode} signer={self.get_wallet_address_masked()} "
+            f"vault={self.get_vault_address_masked()}>"
         )
 
     def __str__(self) -> str:
         return self.__repr__()
 
+    @staticmethod
+    def _mask_address(address: Optional[str]) -> str:
+        if not address or len(address) < 12:
+            return "none"
+        return f"{address[:6]}...{address[-4:]}"
+
     def get_derived_address(self) -> str:
         return self.account.address
 
     def get_wallet_address_masked(self) -> str:
-        addr = self.account.address
-        if not addr or len(addr) < 12:
-            return "invalid"
-        return f"{addr[:6]}...{addr[-4:]}"
+        return self._mask_address(self.account.address)
+
+    def get_vault_address_masked(self) -> str:
+        return self._mask_address(self.vault_address)
 
     @staticmethod
     def validate_wallet_address(private_key: str, expected_address: str) -> bool:
@@ -311,8 +325,8 @@ class HyperliquidExchangeClient:
 
         action = {"type": "updateLeverage", "asset": asset_id, "isCross": True, "leverage": leverage}
         nonce = int(time.time() * 1000)
-        signature = self.sign_l1_action_exact(action, None, nonce, None, True)
-        payload = {"action": action, "nonce": nonce, "signature": signature, "vaultAddress": None}
+        signature = self.sign_l1_action_exact(action, self.vault_address, nonce, None, True)
+        payload = {"action": action, "nonce": nonce, "signature": signature, "vaultAddress": self.vault_address}
 
         result = self._post_exchange(payload)
         if result is None:
@@ -365,8 +379,8 @@ class HyperliquidExchangeClient:
         }
         action = {"type": "order", "orders": [order_wire], "grouping": "na"}
         nonce = int(time.time() * 1000)
-        signature = self.sign_l1_action_exact(action, None, nonce, None, True)
-        payload = {"action": action, "nonce": nonce, "signature": signature, "vaultAddress": None}
+        signature = self.sign_l1_action_exact(action, self.vault_address, nonce, None, True)
+        payload = {"action": action, "nonce": nonce, "signature": signature, "vaultAddress": self.vault_address}
 
         result = self._post_exchange(payload)
         if result is None:
@@ -436,8 +450,8 @@ class HyperliquidExchangeClient:
 
         action = {"type": "order", "orders": [order_wire], "grouping": "positionTpsl"}
         nonce = int(time.time() * 1000)
-        signature = self.sign_l1_action_exact(action, None, nonce, None, True)
-        payload = {"action": action, "nonce": nonce, "signature": signature, "vaultAddress": None}
+        signature = self.sign_l1_action_exact(action, self.vault_address, nonce, None, True)
+        payload = {"action": action, "nonce": nonce, "signature": signature, "vaultAddress": self.vault_address}
 
         result = self._post_exchange(payload)
         if result is None:
@@ -474,8 +488,8 @@ class HyperliquidExchangeClient:
 
         action = {"type": "cancel", "cancels": [{"a": asset_id, "o": int(order_id)}]}
         nonce = int(time.time() * 1000)
-        signature = self.sign_l1_action_exact(action, None, nonce, None, True)
-        payload = {"action": action, "nonce": nonce, "signature": signature, "vaultAddress": None}
+        signature = self.sign_l1_action_exact(action, self.vault_address, nonce, None, True)
+        payload = {"action": action, "nonce": nonce, "signature": signature, "vaultAddress": self.vault_address}
 
         result = self._post_exchange(payload)
         if result is None:

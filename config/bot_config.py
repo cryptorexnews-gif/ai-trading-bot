@@ -30,11 +30,16 @@ def _env_decimal(key: str, default: str = "0") -> Decimal:
         return Decimal(default)
 
 
+def _is_valid_eth_address(value: str) -> bool:
+    return bool(value) and value.startswith("0x") and len(value) == 42
+
+
 class BotConfig:
     """Configuration for the Hyperliquid Trading Bot."""
 
     def __init__(self):
         self.wallet_address = _env("HYPERLIQUID_WALLET_ADDRESS", "")
+        self.vault_address = _env("HYPERLIQUID_VAULT_ADDRESS", "").strip()
         self.execution_mode = _env("EXECUTION_MODE", "paper").lower()
         self.enable_mainnet_trading = _env_bool("ENABLE_MAINNET_TRADING", False)
         self.base_url = _env("HYPERLIQUID_BASE_URL", "https://api.hyperliquid.xyz")
@@ -134,21 +139,43 @@ class BotConfig:
         if not private_key:
             raise SystemExit("CRITICAL: HYPERLIQUID_PRIVATE_KEY not set")
 
-        if not self.wallet_address.startswith("0x") or len(self.wallet_address) != 42:
+        if not _is_valid_eth_address(self.wallet_address):
             raise SystemExit(
                 f"CRITICAL: HYPERLIQUID_WALLET_ADDRESS has invalid format. "
                 f"Expected 0x-prefixed 42-character hex string, got: {self.wallet_address[:10]}..."
             )
 
-        from exchange_client import HyperliquidExchangeClient
-        if not HyperliquidExchangeClient.validate_wallet_address(private_key, self.wallet_address):
-            from eth_account import Account
-            derived = Account.from_key(private_key).address
+        if self.vault_address and not _is_valid_eth_address(self.vault_address):
             raise SystemExit(
-                f"CRITICAL: HYPERLIQUID_WALLET_ADDRESS ({self.wallet_address}) does not match "
-                f"the address derived from HYPERLIQUID_PRIVATE_KEY ({derived[:6]}...{derived[-4:]}). "
-                f"Fix your .env configuration."
+                f"CRITICAL: HYPERLIQUID_VAULT_ADDRESS has invalid format. "
+                f"Expected 0x-prefixed 42-character hex string, got: {self.vault_address[:10]}..."
             )
+
+        from exchange_client import HyperliquidExchangeClient
+        from eth_account import Account
+
+        signer_address = Account.from_key(private_key).address
+
+        if self.vault_address:
+            # API wallet mode: signer wallet can differ from trading wallet.
+            if signer_address.lower() == self.wallet_address.lower():
+                warnings.append(
+                    "HYPERLIQUID_VAULT_ADDRESS is set, but signer key matches HYPERLIQUID_WALLET_ADDRESS. "
+                    "Vault mode may be unnecessary."
+                )
+            warnings.append(
+                f"Vault mode enabled: signer={self.mask_wallet(signer_address)} "
+                f"acting for vault={self.mask_wallet(self.vault_address)}"
+            )
+        else:
+            # Standard mode: signer must match wallet address.
+            if not HyperliquidExchangeClient.validate_wallet_address(private_key, self.wallet_address):
+                derived = signer_address
+                raise SystemExit(
+                    f"CRITICAL: HYPERLIQUID_WALLET_ADDRESS ({self.wallet_address}) does not match "
+                    f"the address derived from HYPERLIQUID_PRIVATE_KEY ({derived[:6]}...{derived[-4:]}). "
+                    f"Fix your .env configuration."
+                )
 
         if self.execution_mode == "live" and not self.enable_mainnet_trading:
             warnings.append("EXECUTION_MODE=live but ENABLE_MAINNET_TRADING=false — orders will be paper")
