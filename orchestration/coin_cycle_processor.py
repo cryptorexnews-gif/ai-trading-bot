@@ -11,6 +11,10 @@ from models import MarketData, PortfolioState
 from notifier import Notifier
 from orchestration.coin_processing_utils import late_confirm_fill, log_coin_indicators, resolve_min_size
 from orchestration.decision_service import get_decision_for_coin
+from orchestration.execution_result_service import (
+    build_trade_record,
+    normalize_executed_price_and_size,
+)
 from order_verifier import OrderVerifier
 from portfolio_service import PortfolioService
 from position_manager import PositionManager
@@ -154,13 +158,11 @@ class CoinCycleProcessor:
 
         result = self.execution_engine.execute(coin, decision, market_data, portfolio.positions)
 
-        executed_price = Decimal(str(result.get("filled_price", market_data.last_price)))
-        if executed_price <= 0:
-            executed_price = market_data.last_price
-
-        executed_size = Decimal(str(result.get("executed_size", decision["size"])))
-        if executed_size <= 0:
-            executed_size = Decimal(str(decision["size"]))
+        executed_price, executed_size = normalize_executed_price_and_size(
+            result=result,
+            market_price=market_data.last_price,
+            requested_size=Decimal(str(decision["size"])),
+        )
 
         fill_status = "unknown"
         if snapshot and result["success"] and decision["action"] in ["buy", "sell", "increase_position"]:
@@ -188,21 +190,15 @@ class CoinCycleProcessor:
                     result["success"] = False
                     result["reason"] = "order_not_filled"
 
-        trade_record = {
-            "timestamp": time.time(),
-            "coin": coin,
-            "action": decision["action"],
-            "size": str(executed_size),
-            "price": str(executed_price),
-            "notional": str(result.get("notional", "0")),
-            "leverage": decision["leverage"],
-            "confidence": decision["confidence"],
-            "reasoning": decision.get("reasoning", ""),
-            "success": result["success"],
-            "mode": self.cfg.execution_mode,
-            "trigger": "ai",
-            "order_status": fill_status,
-        }
+        trade_record = build_trade_record(
+            coin=coin,
+            decision=decision,
+            executed_size=executed_size,
+            executed_price=executed_price,
+            result=result,
+            fill_status=fill_status,
+            execution_mode=self.cfg.execution_mode,
+        )
         self.state_store.add_trade_record(state, trade_record)
 
         if result["success"]:
