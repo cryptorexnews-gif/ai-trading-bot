@@ -128,6 +128,7 @@ class CoinCycleProcessor:
         if tech_data.get("intraday_atr", Decimal("0")) > 0 and market_data.last_price > 0:
             volatility = tech_data["intraday_atr"] / market_data.last_price
 
+        # RISK CHECK (soft/bypass mode): non blocchiamo più i segnali LLM.
         risk_ok, risk_reason = self.risk_manager.check_order(
             coin,
             decision,
@@ -140,9 +141,7 @@ class CoinCycleProcessor:
             peak,
         )
         if not risk_ok:
-            logger.info(f"{coin} risk rejected: {risk_reason}")
-            self.metrics.increment("risk_rejections_total")
-            return None
+            logger.warning(f"{coin} risk manager rejection bypassed: {risk_reason}")
 
         if decision["action"] == "hold" and coin in portfolio.positions:
             updated = self.update_protection_without_trade(coin, decision)
