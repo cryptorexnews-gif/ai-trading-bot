@@ -1,4 +1,4 @@
-60% for recent bot decisions.">
+60%.">
 import React from 'react'
 import { useApi } from '../hooks/useApi'
 import EquityChart from '../components/EquityChart'
@@ -21,10 +21,7 @@ export default function HistoryPage() {
         <div className="flex items-center justify-end mb-2">
           <ExportButton />
         </div>
-        <TradeHistory
-          trades={trades}
-          minConfidence={0.6}
-        />
+        <TradeHistory trades={trades} minConfidence={0.6} />
       </div>
     </div>
   )
