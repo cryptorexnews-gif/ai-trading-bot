@@ -37,6 +37,8 @@ def _is_valid_eth_address(value: str) -> bool:
 class BotConfig:
     """Configuration for the Hyperliquid Trading Bot."""
 
+    REQUIRED_LLM_MODEL = "anthropic/claude-opus-4.6"
+
     def __init__(self):
         self.wallet_address = _env("HYPERLIQUID_WALLET_ADDRESS", "")
         self.vault_address = _env("HYPERLIQUID_VAULT_ADDRESS", "").strip()
@@ -45,7 +47,7 @@ class BotConfig:
         self.base_url = _env("HYPERLIQUID_BASE_URL", "https://api.hyperliquid.xyz")
 
         self.openrouter_api_key = _env("OPENROUTER_API_KEY", "")
-        self.llm_model = _env("LLM_MODEL", "anthropic/claude-opus-4.6")
+        self.llm_model = _env("LLM_MODEL", self.REQUIRED_LLM_MODEL)
         self.llm_max_tokens = _env_int("LLM_MAX_TOKENS", 8192)
         self.llm_temperature = _env_decimal("LLM_TEMPERATURE", "0.2")
 
@@ -160,14 +162,16 @@ class BotConfig:
             # API wallet mode: signer wallet can differ from trading wallet.
             if signer_address.lower() == self.wallet_address.lower():
                 warnings.append(
-                    "HYPERLIQUID_VAULT_ADDRESS is set, but signer key matches HYPERLIQUID_WALLET_ADDRESS. "
-                    "Vault mode may be unnecessary."
+                    "HYPERLIQUID_VAULT_ADDRESS coincide col signer wallet: disabilito automaticamente vault mode."
                 )
-            warnings.append(
-                f"Vault mode enabled: signer={self.mask_wallet(signer_address)} "
-                f"acting for vault={self.mask_wallet(self.vault_address)}"
-            )
-        else:
+                self.vault_address = ""
+            else:
+                warnings.append(
+                    f"Vault mode enabled: signer={self.mask_wallet(signer_address)} "
+                    f"acting for vault={self.mask_wallet(self.vault_address)}"
+                )
+
+        if not self.vault_address:
             # Standard mode: signer must match wallet address.
             if not HyperliquidExchangeClient.validate_wallet_address(private_key, self.wallet_address):
                 derived = signer_address
@@ -176,6 +180,12 @@ class BotConfig:
                     f"the address derived from HYPERLIQUID_PRIVATE_KEY ({derived[:6]}...{derived[-4:]}). "
                     f"Fix your .env configuration."
                 )
+
+        if self.llm_model != self.REQUIRED_LLM_MODEL:
+            warnings.append(
+                f"LLM_MODEL '{self.llm_model}' non conforme: forzo '{self.REQUIRED_LLM_MODEL}'."
+            )
+            self.llm_model = self.REQUIRED_LLM_MODEL
 
         if self.execution_mode == "live" and not self.enable_mainnet_trading:
             warnings.append("EXECUTION_MODE=live but ENABLE_MAINNET_TRADING=false — orders will be paper")

@@ -89,12 +89,15 @@ class HyperliquidBot:
         # Build components
         private_key = os.getenv("HYPERLIQUID_PRIVATE_KEY", "")
         self.exchange_client = HyperliquidExchangeClient(
-            base_url=self.cfg.base_url, private_key=private_key,
+            base_url=self.cfg.base_url,
+            private_key=private_key,
             enable_mainnet_trading=self.cfg.enable_mainnet_trading,
             execution_mode=self.cfg.execution_mode,
             meta_cache_ttl_sec=self.cfg.meta_cache_ttl_sec,
             paper_slippage_bps=self.cfg.paper_slippage_bps,
-            info_timeout=self.cfg.info_timeout, exchange_timeout=self.cfg.exchange_timeout,
+            info_timeout=self.cfg.info_timeout,
+            exchange_timeout=self.cfg.exchange_timeout,
+            vault_address=self.cfg.vault_address,
         )
 
         self.state_store = StateStore(self.cfg.state_path, self.cfg.metrics_path)
@@ -284,6 +287,7 @@ class HyperliquidBot:
 
         self._apply_strategy_profile(runtime_mode)
         self.orchestrator.trading_pairs = validated_pairs
+        self.cfg.trading_pairs = list(validated_pairs)
         self._active_strategy_mode = runtime_mode
         self._active_runtime_pairs = list(validated_pairs)
 
