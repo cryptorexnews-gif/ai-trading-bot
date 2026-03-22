@@ -26,6 +26,7 @@ except ModuleNotFoundError:
 from api.config import API_AUTH_KEY, LIVE_STATUS_PATH, METRICS_PATH, STATE_PATH
 from api.helpers import post_hyperliquid_info, read_json_file
 from api.security_utils import env_bool, is_loopback_ip
+from api.services.websocket_service import build_market_ws_payload, build_status_ws_payload
 from state_store import StateStore
 from utils.circuit_breaker import get_all_circuit_states
 from utils.rate_limiter import get_all_rate_limiter_stats
@@ -68,19 +69,13 @@ def _build_status_payload() -> Dict[str, Any]:
     state = _state_store.load_state()
     metrics = _state_store.load_metrics()
 
-    return {
-        "type": "status",
-        "timestamp": time.time(),
-        "bot": live_status,
-        "state": {
-            "peak_portfolio_value": state.get("peak_portfolio_value", "0"),
-            "consecutive_failed_cycles": state.get("consecutive_failed_cycles", 0),
-            "consecutive_losses": state.get("consecutive_losses", 0),
-        },
-        "metrics": metrics,
-        "circuit_breakers": get_all_circuit_states(),
-        "rate_limiters": get_all_rate_limiter_stats(),
-    }
+    return build_status_ws_payload(
+        live_status=live_status,
+        state=state,
+        metrics=metrics,
+        circuit_breakers=get_all_circuit_states(),
+        rate_limiters=get_all_rate_limiter_stats(),
+    )
 
 
 @sock.route("/ws/status")
@@ -119,19 +114,7 @@ def ws_market(ws):
         if not isinstance(mids, dict):
             mids = {}
 
-        if coin:
-            payload = {
-                "type": "market",
-                "timestamp": time.time(),
-                "coin": coin,
-                "mid": mids.get(coin),
-            }
-        else:
-            payload = {
-                "type": "market",
-                "timestamp": time.time(),
-                "mids": mids,
-            }
+        payload = build_market_ws_payload(coin=coin, mids=mids)
 
         try:
             ws.send(json.dumps(payload, default=_json_default))
