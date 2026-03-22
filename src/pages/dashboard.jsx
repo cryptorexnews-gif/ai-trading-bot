@@ -33,9 +33,6 @@ export default function DashboardPage() {
   const positionCount = safeNum(portfolio.position_count)
   const maxDrawdown = parseFloat(configData?.max_drawdown_pct || '0.15')
 
-  const openOrders = safeNum(portfolio.open_orders_count)
-  const walletMasked = account?.wallet_masked || '—'
-
   return (
     <div className="space-y-5">
       <ConnectionStatus isConnected={!statusError} lastUpdated={lastUpdated} />
@@ -47,11 +44,6 @@ export default function DashboardPage() {
         <StatCard title="Trades" value={metrics.trades_executed_total || 0} subtitle={`${metrics.holds_total || 0} holds`} icon={Activity} color="purple" />
         <StatCard title="Win Rate" value={`${safeNum(perfSummary.win_rate).toFixed(1)}%`} subtitle={`${perfSummary.wins || 0}W / ${perfSummary.losses || 0}L`} icon={Zap} color={safeNum(perfSummary.win_rate) >= 50 ? 'green' : 'yellow'} />
         <StatCard title="Cycle" value={`#${bot.cycle_count || 0}`} subtitle={`${safeNum(bot.last_cycle_duration).toFixed(1)}s`} icon={Clock} color="cyan" />
-      </div>
-
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-        <StatCard title="Wallet" value={walletMasked} subtitle="Hyperliquid account source" color="blue" />
-        <StatCard title="Open Orders" value={openOrders} subtitle="Live from account snapshot" color="yellow" />
       </div>
 
       <DrawdownBar peakValue={stateInfo.peak_portfolio_value} currentBalance={balance} maxDrawdownPct={maxDrawdown} />
