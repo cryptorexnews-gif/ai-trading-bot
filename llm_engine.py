@@ -370,6 +370,7 @@ CRITICAL RULES FOR TREND TRADING:
 - Weekend rule: Reduce leverage by 30% before weekends (higher volatility)
 - News events: Avoid opening new positions 1 hour before/after major announcements
 - If no clear trend exists, ALWAYS hold — capital preservation is priority #1
+- If there is an open position and protective TP/SL orders are missing (sl_open_orders_count=0 or tp_open_orders_count=0), DO NOT open/increase risk. Prefer HOLD with valid stop_loss_pct and take_profit_pct to restore protection.
 
 CONFIDENCE SCORING FOR TREND TRADES:
 - 0.90-1.0: All 3 timeframes aligned + strong volume + clean pullback

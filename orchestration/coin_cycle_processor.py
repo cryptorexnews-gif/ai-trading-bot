@@ -263,6 +263,12 @@ class CoinCycleProcessor:
             managed_position = self._build_managed_position_context(coin)
             protective_orders = self._extract_protective_orders_for_coin(coin)
 
+            has_open_position = coin in portfolio.positions and Decimal(str(portfolio.positions[coin].get("size", 0))) != 0
+            if has_open_position and not self._has_both_tp_sl(protective_orders):
+                logger.warning(f"{coin} missing TP/SL protective orders before LLM call, forcing sync")
+                self.sync_exchange_protective_orders(coin)
+                protective_orders = self._extract_protective_orders_for_coin(coin)
+
             decision = self.llm_engine.get_trading_decision(
                 market_data=market_data,
                 portfolio_state=portfolio,
@@ -293,6 +299,12 @@ class CoinCycleProcessor:
             "take_profit_pct": None,
             "reasoning": "LLM unavailable — safe fallback to hold",
         }
+
+    @staticmethod
+    def _has_both_tp_sl(orders: List[Dict[str, Any]]) -> bool:
+        has_sl = any(str(o.get("tpsl", "")).lower() == "sl" for o in orders if isinstance(o, dict))
+        has_tp = any(str(o.get("tpsl", "")).lower() == "tp" for o in orders if isinstance(o, dict))
+        return has_sl and has_tp
 
     def _late_confirm_fill(
         self,
@@ -453,7 +465,10 @@ class CoinCycleProcessor:
         def d(v: Any) -> Decimal:
             if v is None:
                 return Decimal("0")
-            return Decimal(str(v))
+            try:
+                return Decimal(str(v))
+            except Exception:
+                return Decimal("0")
 
         candidates: List[Any] = [order.get("triggerPx"), order.get("tpTriggerPx"), order.get("slTriggerPx")]
 
