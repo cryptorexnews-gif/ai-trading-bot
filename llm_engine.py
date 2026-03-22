@@ -7,6 +7,7 @@ from typing import Any, Dict, List, Optional
 import requests
 
 from models import MarketData, PortfolioState, TradingAction
+from utils.decimals import to_decimal
 from utils.retry import retry_request, RETRYABLE_STATUS_CODES
 
 logger = logging.getLogger(__name__)
@@ -380,27 +381,29 @@ Respond with ONLY this JSON (no markdown, no extra text):
                 "reasoning": f"Original action '{action}' invalid, defaulting to hold."
             }
 
-        confidence = float(parsed.get("confidence", 0))
+        confidence = float(to_decimal(parsed.get("confidence"), Decimal("0")))
         if not (0.0 <= confidence <= 1.0):
             confidence = max(0.0, min(1.0, confidence))
 
-        leverage = int(parsed.get("leverage", 1))
+        leverage = int(to_decimal(parsed.get("leverage"), Decimal("1")))
         leverage = max(1, min(50, leverage))
 
-        size = Decimal(str(parsed.get("size", 0)))
+        size = to_decimal(parsed.get("size"), Decimal("0"))
         if size < 0:
             size = Decimal("0")
 
         stop_loss_pct = None
         take_profit_pct = None
 
-        if parsed.get("stop_loss_pct") is not None:
-            sl = Decimal(str(parsed.get("stop_loss_pct")))
+        raw_sl = parsed.get("stop_loss_pct")
+        if raw_sl is not None:
+            sl = to_decimal(raw_sl, Decimal("-1"))
             if Decimal("0") < sl <= Decimal("1"):
                 stop_loss_pct = sl
 
-        if parsed.get("take_profit_pct") is not None:
-            tp = Decimal(str(parsed.get("take_profit_pct")))
+        raw_tp = parsed.get("take_profit_pct")
+        if raw_tp is not None:
+            tp = to_decimal(raw_tp, Decimal("-1"))
             if Decimal("0") < tp <= Decimal("1"):
                 take_profit_pct = tp
 
