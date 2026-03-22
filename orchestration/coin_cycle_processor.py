@@ -9,12 +9,13 @@ from execution_engine import ExecutionEngine
 from llm_engine import LLMEngine
 from models import MarketData, PortfolioState
 from notifier import Notifier
-from orchestration.coin_processing_utils import late_confirm_fill, log_coin_indicators, resolve_min_size
+from orchestration.coin_processing_utils import late_confirm_fill, log_coin_indicators
 from orchestration.decision_service import get_decision_for_coin
 from orchestration.execution_result_service import (
     build_trade_record,
     normalize_executed_price_and_size,
 )
+from orchestration.risk_gate_service import evaluate_trade_gates
 from order_verifier import OrderVerifier
 from portfolio_service import PortfolioService
 from position_manager import PositionManager
@@ -116,34 +117,25 @@ class CoinCycleProcessor:
             f"sl_pct={decision.get('stop_loss_pct')}, tp_pct={decision.get('take_profit_pct')}"
         )
 
-        corr_ok, corr_reason = self.correlation_engine.check_correlation_risk(
-            coin, decision["action"], portfolio.positions, correlations
+        gates_ok, gates_reason = evaluate_trade_gates(
+            coin=coin,
+            decision=decision,
+            portfolio=portfolio,
+            correlations=correlations,
+            correlation_engine=self.correlation_engine,
+            risk_manager=self.risk_manager,
+            cfg=self.cfg,
+            dynamic_min_sizes=self._dynamic_min_sizes,
+            state=state,
+            daily_notional_used=daily_notional_used,
+            peak=peak,
+            metrics=self.metrics,
+            tech_data=tech_data,
+            market_price=market_data.last_price,
         )
-        if not corr_ok and decision["action"] in ["buy", "sell", "increase_position"]:
-            logger.info(f"{coin} blocked by correlation risk: {corr_reason}")
-            self.metrics.increment("risk_rejections_total")
+        if not gates_ok:
+            logger.info(f"{coin} blocked by gates: {gates_reason}")
             return None
-
-        min_size = resolve_min_size(coin, self.cfg, self._dynamic_min_sizes)
-        self.risk_manager.min_size_by_coin[coin] = min_size
-
-        volatility = Decimal("0")
-        if tech_data.get("intraday_atr", Decimal("0")) > 0 and market_data.last_price > 0:
-            volatility = tech_data["intraday_atr"] / market_data.last_price
-
-        risk_ok, risk_reason = self.risk_manager.check_order(
-            coin,
-            decision,
-            market_data.last_price,
-            portfolio,
-            state.get("last_trade_timestamps_by_coin", state.get("last_trade_timestamp_by_coin", {})),
-            daily_notional_used,
-            time.time(),
-            volatility,
-            peak,
-        )
-        if not risk_ok:
-            logger.warning(f"{coin} risk manager rejection bypassed: {risk_reason}")
 
         if decision["action"] == "hold" and coin in portfolio.positions:
             updated = self.update_protection_without_trade(coin, decision)
