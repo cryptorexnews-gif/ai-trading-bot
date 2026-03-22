@@ -22,12 +22,12 @@ from api.config import (
 )
 from api.rate_limit_utils import build_rate_limiter, rate_limited_response
 from api.services.account_route_service import (
+    build_account_config_response,
     build_managed_positions_response,
     build_portfolio_response,
     build_positions_response,
 )
 from api.services.account_status_service import build_account_status_response
-from api.services.bot_payload_service import build_config_payload
 from runtime_config_store import RuntimeConfigStore
 from state_store import StateStore
 
@@ -113,8 +113,7 @@ def config():
         return rate_limit_resp
 
     try:
-        runtime_cfg = _runtime_store.load()
-        return jsonify(build_config_payload(runtime_cfg))
+        return jsonify(build_account_config_response(_runtime_store))
     except Exception:
         logger.error("Account config endpoint failed", exc_info=True)
         return jsonify({"error": "internal_error"}), 500

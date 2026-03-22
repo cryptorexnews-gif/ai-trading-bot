@@ -5,6 +5,7 @@ from typing import Any, Dict
 
 from api.helpers import read_json_file
 from api.services.account_snapshot_service import get_hyperliquid_account_snapshot
+from api.services.bot_payload_service import build_config_payload
 from api.services.managed_positions_service import build_managed_positions_payload
 
 
@@ -50,3 +51,8 @@ def build_managed_positions_response(wallet: str, managed_positions_path: str) -
         "source": "hyperliquid_account_with_managed_overlays",
         "timestamp": time.time(),
     }
+
+
+def build_account_config_response(runtime_store) -> Dict[str, Any]:
+    runtime_cfg = runtime_store.load()
+    return build_config_payload(runtime_cfg)
