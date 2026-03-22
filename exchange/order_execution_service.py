@@ -5,6 +5,7 @@ from typing import Any, Dict, List, Optional
 from exchange.order_builder import (
     build_cancel_action,
     build_limit_order_action,
+    build_trigger_order_action,
     build_update_leverage_action,
 )
 from exchange.parsers import (
@@ -156,15 +157,15 @@ class OrderExecutionService:
         if existing_oid is not None:
             return {"success": True, "order_id": existing_oid}
 
-        order_wire = {
-            "a": asset_id,
-            "b": normalized_side == "buy",
-            "p": str(rounded_trigger),
-            "s": str(normalized_size.normalize()),
-            "r": bool(reduce_only),
-            "t": {"trigger": {"isMarket": bool(is_market), "triggerPx": str(rounded_trigger), "tpsl": tpsl}},
-        }
-        action = {"type": "order", "orders": [order_wire], "grouping": "normalTpsl"}
+        action = build_trigger_order_action(
+            asset_id=asset_id,
+            is_buy=(normalized_side == "buy"),
+            trigger_price=rounded_trigger,
+            size=normalized_size,
+            tpsl=tpsl,
+            reduce_only=reduce_only,
+            is_market=is_market,
+        )
 
         result = self.client._post_signed_action_with_master_retry(action)
         if result is None:
@@ -256,8 +257,8 @@ class OrderExecutionService:
                 rounded_trigger = self.client._round_price_to_tick(asset_id, trigger_px)
                 order_type = {
                     "trigger": {
-                        "isMarket": bool(trigger_obj.get("isMarket", True)),
                         "triggerPx": str(rounded_trigger),
+                        "isMarket": bool(trigger_obj.get("isMarket", True)),
                         "tpsl": str(trigger_obj.get("tpsl", "")).strip().lower(),
                     }
                 }

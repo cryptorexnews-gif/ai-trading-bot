@@ -51,7 +51,13 @@ def build_trigger_order_action(
         "p": trigger_str,
         "s": _decimal_to_wire_str(size),
         "r": bool(reduce_only),
-        "t": {"trigger": {"isMarket": bool(is_market), "triggerPx": trigger_str, "tpsl": tpsl}},
+        "t": {
+            "trigger": {
+                "triggerPx": trigger_str,
+                "isMarket": bool(is_market),
+                "tpsl": tpsl,
+            }
+        },
     }
     return {"type": "order", "orders": [order_wire], "grouping": "positionTpsl"}
 
