@@ -10,11 +10,7 @@ from llm_engine import LLMEngine
 from models import MarketData, PortfolioState
 from notifier import Notifier
 from orchestration.coin_processing_utils import late_confirm_fill, log_coin_indicators, resolve_min_size
-from orchestration.order_context_builder import (
-    build_managed_position_context,
-    extract_protective_orders_for_coin,
-    has_both_tp_sl,
-)
+from orchestration.decision_service import get_decision_for_coin
 from order_verifier import OrderVerifier
 from portfolio_service import PortfolioService
 from position_manager import PositionManager
@@ -262,46 +258,21 @@ class CoinCycleProcessor:
         peak: Decimal,
         consecutive_losses: int,
     ) -> Dict[str, Any]:
-        if self.llm_engine:
-            self.llm_rate_limiter.acquire(1)
-            self.metrics.increment("llm_calls_total")
-
-            managed_position = build_managed_position_context(self.position_manager, coin)
-            protective_orders = extract_protective_orders_for_coin(self.execution_engine.exchange_client, coin)
-
-            has_open_position = coin in portfolio.positions and Decimal(str(portfolio.positions[coin].get("size", 0))) != 0
-            if has_open_position and not has_both_tp_sl(protective_orders):
-                logger.warning(f"{coin} missing TP/SL protective orders before LLM call, forcing sync")
-                self.sync_exchange_protective_orders(coin)
-                protective_orders = extract_protective_orders_for_coin(self.execution_engine.exchange_client, coin)
-
-            decision = self.llm_engine.get_trading_decision(
-                market_data=market_data,
-                portfolio_state=portfolio,
-                technical_data=tech_data,
-                all_mids=all_mids,
-                funding_data=funding_data,
-                recent_trades=recent_trades,
-                peak_portfolio_value=peak,
-                consecutive_losses=consecutive_losses,
-                managed_position=managed_position,
-                protective_orders=protective_orders,
-            )
-            if not decision:
-                self.metrics.increment("llm_errors_total")
-                logger.warning(f"LLM failed for {coin}, using fallback")
-                return self._fallback_decision()
-            return decision
-        return self._fallback_decision()
-
-    @staticmethod
-    def _fallback_decision() -> Dict[str, Any]:
-        return {
-            "action": "hold",
-            "size": Decimal("0"),
-            "leverage": 1,
-            "confidence": 0.0,
-            "stop_loss_pct": None,
-            "take_profit_pct": None,
-            "reasoning": "LLM unavailable — safe fallback to hold",
-        }
+        return get_decision_for_coin(
+            coin=coin,
+            market_data=market_data,
+            portfolio=portfolio,
+            tech_data=tech_data,
+            all_mids=all_mids,
+            funding_data=funding_data,
+            recent_trades=recent_trades,
+            peak=peak,
+            consecutive_losses=consecutive_losses,
+            llm_engine=self.llm_engine,
+            llm_rate_limiter=self.llm_rate_limiter,
+            metrics=self.metrics,
+            position_manager=self.position_manager,
+            exchange_client=self.execution_engine.exchange_client,
+            sync_exchange_protective_orders=self.sync_exchange_protective_orders,
+            logger=logger,
+        )
