@@ -65,10 +65,9 @@ class ExecutionEngine:
         if coin in self._leverage_cache_by_coin:
             del self._leverage_cache_by_coin[coin]
 
-    def _set_leverage_with_vault_fallback(self, coin: str, leverage: int, force: bool = False) -> bool:
+    def _set_leverage(self, coin: str, leverage: int, force: bool = False) -> bool:
         """
-        Imposta leva con fallback automatico:
-        se fallisce e vault_address è presente, disabilita il vault runtime e ritenta una volta.
+        Imposta leva con identità fissa (nessun fallback vault/utente alternativo).
         Ottimizzazione: se già impostata di recente alla stessa leva, salta la chiamata.
         """
         if not force and self._is_leverage_cached(coin, leverage):
@@ -79,19 +78,6 @@ class ExecutionEngine:
         if ok:
             self._remember_leverage(coin, leverage)
             return True
-
-        vault = getattr(self.exchange_client, "vault_address", None)
-        if vault:
-            logger.warning(
-                f"Set leverage failed for {coin} with vault={vault}; "
-                "retrying once without vault mode"
-            )
-            self.exchange_client.vault_address = None
-            ok_retry = self.exchange_client.set_leverage(coin, leverage)
-            if ok_retry:
-                logger.info(f"Leverage fallback without vault succeeded for {coin}")
-                self._remember_leverage(coin, leverage)
-                return True
 
         self._invalidate_leverage_cache(coin)
         return False
@@ -124,7 +110,7 @@ class ExecutionEngine:
         if action == TradingAction.CHANGE_LEVERAGE.value:
             if coin not in positions:
                 return {"success": False, "notional": Decimal("0"), "reason": "no_position_for_leverage_change"}
-            ok = self._set_leverage_with_vault_fallback(coin, leverage, force=True)
+            ok = self._set_leverage(coin, leverage, force=True)
             return {"success": ok, "notional": Decimal("0"), "reason": "change_leverage"}
 
         if action == TradingAction.CLOSE_POSITION.value:
@@ -138,6 +124,8 @@ class ExecutionEngine:
             return {
                 "success": bool(result.get("success", False)),
                 "notional": safe_decimal(result.get("notional", "0")),
+                "filled_price": safe_decimal(result.get("filled_price", desired_price)),
+                "executed_size": close_size,
                 "reason": "close_position"
             }
 
@@ -153,6 +141,8 @@ class ExecutionEngine:
             return {
                 "success": bool(result.get("success", False)),
                 "notional": safe_decimal(result.get("notional", "0")),
+                "filled_price": safe_decimal(result.get("filled_price", desired_price)),
+                "executed_size": reduce_size,
                 "reason": "reduce_position"
             }
 
@@ -161,7 +151,7 @@ class ExecutionEngine:
                 return {"success": False, "notional": Decimal("0"), "reason": "no_position_to_increase"}
             pos_size = safe_decimal(positions[coin]["size"])
             side = "buy" if pos_size > 0 else "sell"
-            if not self._set_leverage_with_vault_fallback(coin, leverage):
+            if not self._set_leverage(coin, leverage):
                 return {"success": False, "notional": Decimal("0"), "reason": "set_leverage_failed"}
 
             adjusted_size = self._adjust_open_size_for_exchange_minimum(coin, size, market_data.last_price)
@@ -170,12 +160,14 @@ class ExecutionEngine:
             return {
                 "success": bool(result.get("success", False)),
                 "notional": safe_decimal(result.get("notional", "0")),
+                "filled_price": safe_decimal(result.get("filled_price", desired_price)),
+                "executed_size": adjusted_size,
                 "reason": "increase_position"
             }
 
         if action in [TradingAction.BUY.value, TradingAction.SELL.value]:
             side = "buy" if action == TradingAction.BUY.value else "sell"
-            if not self._set_leverage_with_vault_fallback(coin, leverage):
+            if not self._set_leverage(coin, leverage):
                 return {"success": False, "notional": Decimal("0"), "reason": "set_leverage_failed"}
 
             adjusted_size = self._adjust_open_size_for_exchange_minimum(coin, size, market_data.last_price)
@@ -184,6 +176,8 @@ class ExecutionEngine:
             return {
                 "success": bool(result.get("success", False)),
                 "notional": safe_decimal(result.get("notional", "0")),
+                "filled_price": safe_decimal(result.get("filled_price", desired_price)),
+                "executed_size": adjusted_size,
                 "reason": "open_position"
             }
 

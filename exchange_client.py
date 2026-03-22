@@ -35,8 +35,9 @@ class HyperliquidExchangeClient:
     """
     Hyperliquid client (live-only).
     Coerenza operativa:
-    - Usa UNA sola identità utente trading per TUTTE le operazioni (open/reduce/close/TP/SL/cancel/leverage).
-    - Usa UNA sola modalità firma (vaultAddress fisso se valido, altrimenti None).
+    - Usa UNA sola identità utente trading da .env (HYPERLIQUID_WALLET_ADDRESS).
+    - Nessun utente alternativo, nessun fallback signer/vault.
+    - Firma sempre senza vaultAddress.
     """
 
     def __init__(
@@ -62,11 +63,23 @@ class HyperliquidExchangeClient:
         self.session = create_robust_session()
         self.account = Account.from_key(private_key)
 
-        self.vault_address = (vault_address or "").strip() or None
-        self.master_wallet_address = (os.getenv("HYPERLIQUID_WALLET_ADDRESS", "") or "").strip() or None
+        env_wallet = (os.getenv("HYPERLIQUID_WALLET_ADDRESS", "") or "").strip()
+        if not self._is_valid_wallet_address_format(env_wallet):
+            raise ValueError(
+                "HYPERLIQUID_WALLET_ADDRESS invalido o mancante. "
+                "È richiesto un address 0x... lungo 42 caratteri da .env."
+            )
 
-        self._trading_user_address = self._resolve_trading_user_address()
-        self._fixed_vault_for_signing = self._resolve_fixed_vault_for_signing()
+        if self.account.address.lower() != env_wallet.lower():
+            raise ValueError(
+                "HYPERLIQUID_PRIVATE_KEY non corrisponde a HYPERLIQUID_WALLET_ADDRESS."
+            )
+
+        if vault_address:
+            logger.warning("vault_address fornito ma ignorato: runtime forzato senza vault fallback.")
+
+        self._trading_user_address = env_wallet
+        self._fixed_vault_for_signing = None
 
         self._last_nonce: int = 0
         self._meta_cache: Optional[Dict[str, Any]] = None
@@ -92,8 +105,7 @@ class HyperliquidExchangeClient:
         logger.info(
             f"Exchange client initialized: base_url={self.base_url}, mode={self.execution_mode}, "
             f"mainnet={self.enable_mainnet_trading}, signer={self.get_wallet_address_masked()} "
-            f"(master={self._mask_address(self.master_wallet_address)}, vault={self._mask_address(self.vault_address)}, "
-            f"trading_user={self._mask_address(self._trading_user_address)}, signing_vault={self._mask_address(self._fixed_vault_for_signing)})"
+            f"(trading_user={self._mask_address(self._trading_user_address)}, signing_vault=none)"
         )
 
     def _live_orders_enabled(self) -> bool:
@@ -281,6 +293,11 @@ class HyperliquidExchangeClient:
                 return True
         return False
 
+    @staticmethod
+    def _is_valid_wallet_address_format(value: str) -> bool:
+        raw = str(value or "").strip()
+        return raw.startswith("0x") and len(raw) == 42
+
     def _order_matches(
         self,
         order: Dict[str, Any],
@@ -398,25 +415,6 @@ class HyperliquidExchangeClient:
             endpoint_label="/exchange",
         )
 
-    def _is_valid_eth_address(self, value: Optional[str]) -> bool:
-        if not value:
-            return False
-        raw = str(value).strip()
-        return raw.startswith("0x") and len(raw) == 42
-
-    def _resolve_trading_user_address(self) -> str:
-        if self._is_valid_eth_address(self.master_wallet_address):
-            return str(self.master_wallet_address).strip()
-        return str(self.account.address).strip()
-
-    def _resolve_fixed_vault_for_signing(self) -> Optional[str]:
-        if self._is_valid_eth_address(self.vault_address):
-            return str(self.vault_address).strip()
-        return None
-
-    def get_trading_user_address(self) -> str:
-        return self._trading_user_address
-
     def _post_signed_action_once(
         self,
         action: Dict[str, Any],
@@ -424,11 +422,10 @@ class HyperliquidExchangeClient:
         vault_address_override: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
         nonce = self._next_nonce()
-        vault_for_sign = vault_address_override
         signature = sign_l1_action_exact(
             account=self.account,
             action=action,
-            vault_address=vault_for_sign,
+            vault_address=vault_address_override,
             nonce=nonce,
             expires_after=None,
             is_mainnet=True,
@@ -437,16 +434,14 @@ class HyperliquidExchangeClient:
             "action": action,
             "nonce": nonce,
             "signature": signature,
-            "vaultAddress": vault_for_sign,
+            "vaultAddress": vault_address_override,
         }
         return self._post_exchange(payload, timeout=timeout)
 
     def _post_signed_action_with_master_retry(self, action: Dict[str, Any], timeout: Optional[int] = None) -> Optional[Dict[str, Any]]:
         """
-        Manteniamo il nome per compatibilità interna, ma il comportamento ora è coerente e fisso:
-        - stessa identità firma
-        - stesso vault mode
-        - nessun cambio contesto dinamico tra operazioni
+        Nome mantenuto per compatibilità interna.
+        Comportamento attuale: identità fissa da .env, nessun retry con utente/vault alternativi.
         """
         now = time.time()
         if now < self._auth_block_until:
@@ -465,8 +460,7 @@ class HyperliquidExchangeClient:
             self._auth_error_count += 1
             logger.warning(
                 f"Auth failed with fixed trading identity "
-                f"(trading_user={self._mask_address(self._trading_user_address)}, signer={self.get_wallet_address_masked()}, "
-                f"vault={self._mask_address(self._fixed_vault_for_signing)}): {result}"
+                f"(trading_user={self._mask_address(self._trading_user_address)}, signer={self.get_wallet_address_masked()}): {result}"
             )
             if self._auth_error_count >= 2:
                 self._auth_block_until = time.time() + self._auth_cooldown_sec
@@ -747,7 +741,7 @@ class HyperliquidExchangeClient:
         if not wanted:
             return False
 
-        effective_user = str(user or "").strip() or self._trading_user_address
+        effective_user = self._trading_user_address
         open_orders = self.get_open_orders(effective_user, force_refresh=True)
         found = set()
 
@@ -939,7 +933,13 @@ class HyperliquidExchangeClient:
             f"LIVE order success {coin} {normalized_side.upper()} size={normalized_size} "
             f"limit={limit_price} reduce_only={reduce_only} oids={order_ids}"
         )
-        return {"success": True, "mode": "live", "filled_price": str(limit_price), "notional": str(notional)}
+        return {
+            "success": True,
+            "mode": "live",
+            "filled_price": str(limit_price),
+            "executed_size": str(normalized_size),
+            "notional": str(notional),
+        }
 
     def place_trigger_order(
         self,
@@ -1327,3 +1327,6 @@ class HyperliquidExchangeClient:
             "stop_loss_order_id": sl_id,
             "take_profit_order_id": tp_id,
         }
+
+    def get_trading_user_address(self) -> str:
+        return self._trading_user_address

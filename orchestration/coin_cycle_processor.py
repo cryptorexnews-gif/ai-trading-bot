@@ -131,7 +131,7 @@ class CoinCycleProcessor:
             decision,
             market_data.last_price,
             portfolio,
-            state.get("last_trade_timestamp_by_coin", {}),
+            state.get("last_trade_timestamps_by_coin", state.get("last_trade_timestamp_by_coin", {})),
             daily_notional_used,
             time.time(),
             volatility,
@@ -153,10 +153,18 @@ class CoinCycleProcessor:
 
         result = self.execution_engine.execute(coin, decision, market_data, portfolio.positions)
 
+        executed_price = Decimal(str(result.get("filled_price", market_data.last_price)))
+        if executed_price <= 0:
+            executed_price = market_data.last_price
+
+        executed_size = Decimal(str(result.get("executed_size", decision["size"])))
+        if executed_size <= 0:
+            executed_size = Decimal(str(decision["size"]))
+
         fill_status = "unknown"
         if snapshot and result["success"] and decision["action"] in ["buy", "sell", "increase_position"]:
             expected_side = "buy" if decision["action"] in ["buy", "increase_position"] else "sell"
-            expected_size = Decimal(str(decision["size"]))
+            expected_size = Decimal(str(executed_size))
 
             verification = self.order_verifier.verify_fill(
                 self.cfg.wallet_address, coin, expected_side, expected_size, snapshot
@@ -182,8 +190,8 @@ class CoinCycleProcessor:
             "timestamp": time.time(),
             "coin": coin,
             "action": decision["action"],
-            "size": str(decision["size"]),
-            "price": str(market_data.last_price),
+            "size": str(executed_size),
+            "price": str(executed_price),
             "notional": str(result.get("notional", "0")),
             "leverage": decision["leverage"],
             "confidence": decision["confidence"],
@@ -208,8 +216,8 @@ class CoinCycleProcessor:
 
                     self.position_manager.register_position(
                         coin=coin,
-                        size=Decimal(str(decision["size"])),
-                        entry_price=market_data.last_price,
+                        size=executed_size,
+                        entry_price=executed_price,
                         is_long=is_long,
                         leverage=decision["leverage"],
                         sl_pct=sl_pct if isinstance(sl_pct, Decimal) else None,
