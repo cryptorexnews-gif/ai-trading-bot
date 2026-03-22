@@ -1,199 +1,167 @@
-# 🤖 Hyperliquid AI Trading Bot
+# Hyperliquid AI Trading Bot — Guida Completa (Setup, Avvio, Gestione)
 
-Bot di trading automatico per Hyperliquid con dashboard React in tempo reale, analisi multi-timeframe e gestione rischio integrata.
-
-## ✅ Cosa fa questo progetto
-
-- Trading AI con modello `anthropic/claude-opus-4.6` via OpenRouter
-- Dati di mercato **solo da Hyperliquid** (nessuna fonte esterna)
-- Strategia trend multi-timeframe (1H/4H/1D)
-- Risk management automatico (SL/TP, trailing, break-even, drawdown, correlazione)
-- Dashboard live con:
-  - stato bot
-  - posizioni
-  - trade history
-  - equity/performance
-  - chart candele + indicatori
-  - logs + circuit breaker + metriche
+Bot di trading per Hyperliquid con dashboard web in tempo reale, controllo runtime, gestione posizioni (SL/TP/trailing), log live e metriche.
 
 ---
 
-## 📦 Requisiti
+## 1) Cosa fa il progetto
+
+- Esegue cicli di analisi su coin selezionate
+- Usa un LLM per decidere azioni di trading
+- Applica gestione posizione (stop loss, take profit, trailing stop, break-even)
+- Espone API Flask per dashboard e controllo bot
+- Mostra dashboard React con stato, performance, posizioni e log
+
+---
+
+## 2) Prerequisiti
+
+Assicurati di avere:
 
 - Python 3.10+
-- Node.js 18+
-- npm
+- Node.js (LTS consigliato)
+- Un wallet Hyperliquid con chiave privata
+- Chiave API OpenRouter (se vuoi decisioni LLM)
 
 ---
 
-## ⚙️ Setup rapido
+## 3) Configurazione iniziale
 
-### 1) Installa dipendenze
+### 3.1 File `.env`
 
-```bash
-pip install -r requirements.txt
-npm install
-```
+Crea (o aggiorna) il file `.env` nella root del progetto con almeno:
 
-### 2) Configura variabili ambiente
+- `HYPERLIQUID_WALLET_ADDRESS`
+- `HYPERLIQUID_PRIVATE_KEY`
+- `EXECUTION_MODE` (`paper` o `live`)
+- `ENABLE_MAINNET_TRADING` (`true` solo se vuoi ordini reali)
+- `OPENROUTER_API_KEY` (per usare il modello LLM)
+- `DASHBOARD_API_KEY` (protezione endpoint dashboard)
 
-Crea `.env` partendo dal template e imposta almeno queste chiavi:
+### 3.2 Nota importante su Vault
 
-```env
-HYPERLIQUID_WALLET_ADDRESS=0x...
-HYPERLIQUID_PRIVATE_KEY=0x...
-OPENROUTER_API_KEY=sk-or-...
-DASHBOARD_API_KEY=una-chiave-lunga-e-casuale
-```
-
-### 3) Verifica configurazione
-
-```bash
-python scripts/test_connection.py
-```
+Il bot è configurato per operare in modalità **wallet + private key**.  
+L’uso vault è disabilitato nella logica attuale, quindi non è richiesto configurare un vault address.
 
 ---
 
-## 🚀 Avvio locale (3 processi)
+## 4) Avvio applicazione (in questa UI)
 
-### Terminale 1 — Bot
+Usa i pulsanti azione sopra la chat:
 
-```bash
-python hyperliquid_bot_executable_orders.py
-```
-
-### Terminale 2 — API server
-
-```bash
-python api_server.py
-```
-
-### Terminale 3 — Dashboard frontend
-
-```bash
-npm run dev
-```
-
-Apri: **http://localhost:3000**
+1. **Rebuild**  
+   Da usare al primo avvio o dopo cambiamenti importanti.
+2. **Restart**  
+   Riavvia server/app dopo modifiche.
+3. **Refresh**  
+   Aggiorna la preview dashboard.
 
 ---
 
-## 🧪 Test sicuro prima della produzione
+## 5) Avvio bot e dashboard
 
-Esegui prima un ciclo singolo:
+Dalla dashboard:
 
-```bash
-python hyperliquid_bot_executable_orders.py --single-cycle
-```
+1. Vai in **Settings**
+2. Sezione **Bot Process Control**
+3. Premi **Start Bot**
 
----
-
-## 🔐 Sicurezza operativa (IMPORTANTISSIMO)
-
-- `EXECUTION_MODE=paper` = simulazione (consigliato per test)
-- `EXECUTION_MODE=live` + `ENABLE_MAINNET_TRADING=true` = ordini reali
-- In live:
-  - usa API key robuste
-  - non condividere mai `.env`
-  - limita esposizione e leverage
-  - verifica sempre dashboard e log
+Per fermarlo:
+- Premi **Stop Bot** nella stessa sezione.
 
 ---
 
-## 🧠 Strategia (sintesi)
+## 6) Configurazione runtime (senza riavvio codice)
 
-- Trend principale su 4H
-- Conferma su 1D
-- Timing entrata su 1H
-- Filtri su volume/RSI/struttura trend
-- Chiusure automatiche via SL/TP/trailing/break-even
-- Blocco trade in caso di rischio correlazione o violazione limiti
+In **Settings → Runtime Trading Controls** puoi:
 
----
+- Cambiare strategia (`trend` / `scalping`)
+- Selezionare le coin monitorate
+- Salvare le impostazioni runtime
 
-## 📊 Endpoint utili
-
-- `GET /api/health` → health check pubblico
-- `GET /api/status` → stato bot
-- `GET /api/portfolio` → portafoglio/posizioni
-- `GET /api/trades` → storico trade
-- `GET /api/performance` → metriche e curve
-- `GET /api/candles` → dati chart
-- `GET /metrics` → export Prometheus
-
-> Gli endpoint protetti richiedono `X-API-Key: DASHBOARD_API_KEY`.
+Le modifiche vengono applicate dal bot nel ciclo successivo.
 
 ---
 
-## 🛠️ Troubleshooting veloce
+## 7) Modalità operative
 
-### Dashboard vuota o dati mancanti
-- Verifica che `api_server.py` sia avviato
-- Verifica `DASHBOARD_API_KEY` in `.env`
-- Riavvia backend e frontend
+### Paper mode (consigliato per test)
+- `EXECUTION_MODE=paper`
+- Nessun ordine reale su exchange
 
-### Errori 401 Unauthorized
-- API key assente o errata
-- Controlla header e variabile `DASHBOARD_API_KEY`
-
-### Errori 429 rate_limited
-- Troppo polling concorrente dalla dashboard
-- Riduci frequenza refresh o apri meno tab contemporaneamente
-
-### Nessun trade eseguito
-- Potresti essere in `paper` o in fase `hold` per filtri rischio
-- Controlla se `ENABLE_MAINNET_TRADING=true` (solo se vuoi live)
-
-### Coin non riconosciuta in chart
-- La coin potrebbe non essere nella lista runtime o nelle pair abilitate
-- Salva la coin dalla sezione runtime controls
+### Live mode (soldi reali)
+- `EXECUTION_MODE=live`
+- `ENABLE_MAINNET_TRADING=true`
+- Verifica sempre wallet, size e leva prima di avviare
 
 ---
 
-## 🗂️ Struttura progetto (alto livello)
+## 8) Struttura dashboard
 
-- `hyperliquid_bot_executable_orders.py` → entrypoint bot
-- `cycle_orchestrator.py` → logica ciclo trading
-- `exchange_client.py` → client Hyperliquid + firma ordini
-- `llm_engine.py` → integrazione OpenRouter
-- `risk_manager.py` / `position_manager.py` → gestione rischio
-- `api/` → server Flask + endpoints dashboard
-- `src/` → frontend React + chart + pagine dashboard
-- `state/` → stato runtime persistito (json atomici)
+- **Overview**: saldo, PnL, drawdown, grafico principale
+- **Settings**: controllo processo bot + runtime config
+- **Positions**: posizioni aperte e gestione rischio
+- **History**: storico trade, equity curve, export CSV
+- **System**: circuit breaker, log live, diagnostica
 
 ---
 
-## 📁 File di stato runtime
+## 9) Gestione quotidiana consigliata
 
-Generati automaticamente sotto `state/`:
-
-- `bot_state.json`
-- `bot_metrics.json`
-- `bot_live_status.json`
-- `managed_positions.json`
-- `runtime_config.json`
-
----
-
-## 🧾 Note operative
-
-- I log sono strutturati JSON
-- Le scritture file stato sono atomiche
-- I calcoli finanziari usano `Decimal`
-- Circuit breaker/rate limiter sono attivi lato API e client
+1. Controlla che API e dashboard siano raggiungibili
+2. Verifica modalità (`paper` vs `live`)
+3. Avvia il bot da **Settings**
+4. Monitora:
+   - `margin_usage`
+   - posizioni aperte
+   - log error/warning in **System**
+5. Se cambi configurazioni importanti:
+   - salva runtime config
+   - eventualmente fai **Restart**
 
 ---
 
-## 📌 Best practice consigliate
+## 10) Troubleshooting rapido
 
-1. Parti sempre in `paper`
-2. Esegui `--single-cycle` dopo ogni modifica importante
-3. Passa a `live` solo dopo validazione completa
-4. Monitora dashboard + log nei primi cicli live
-5. Mantieni limiti rischio conservativi
+### Il bot non apre posizioni
+Controlla nei log se trovi:
+- rifiuti risk manager
+- ordini non filled
+- problemi di connessione LLM/API
+
+### Errori LLM/intermittenti
+- Riprova con **Restart**
+- Controlla che `OPENROUTER_API_KEY` sia presente
+- Verifica timeout/retry nei log
+
+### Dashboard non aggiornata
+- Usa **Refresh**
+- Se persiste, usa **Restart**
+
+### Processo bot bloccato
+- **Stop Bot** → **Start Bot**
+- Se necessario, **Rebuild** e poi nuovo avvio
 
 ---
 
-## 📄 Licenza
+## 11) Sicurezza
 
-MIT
+- Non condividere mai `.env`
+- Non esporre chiavi in log o screenshot
+- Tieni `DASHBOARD_API_KEY` attiva
+- In live, usa size prudenti e monitora sempre il rischio
+
+---
+
+## 12) Checklist prima di andare live
+
+- [ ] Wallet e private key corretti
+- [ ] `EXECUTION_MODE=live`
+- [ ] `ENABLE_MAINNET_TRADING=true`
+- [ ] Dashboard stabile (Overview/System senza errori critici)
+- [ ] Runtime coin list validata
+- [ ] Monitoraggio attivo durante i primi cicli
+
+---
+
+Per aggiornamenti futuri, mantieni questa guida allineata con la configurazione reale del bot (env, risk policy e flusso operativo).
