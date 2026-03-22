@@ -7,21 +7,21 @@ const FIELDS = [
   { key: 'max_cycle_sec', label: 'Max cycle sec', step: '1' },
   { key: 'max_trades_per_cycle', label: 'Max trades/cycle', step: '1' },
   { key: 'hard_max_leverage', label: 'Max leverage', step: '0.1' },
-  { key: 'min_confidence_open', label: 'Min conf open', step: '0.01' },
-  { key: 'min_confidence_manage', label: 'Min conf manage', step: '0.01' },
-  { key: 'max_order_margin_pct', label: 'Max order margin pct', step: '0.01' },
+  { key: 'min_confidence_open', label: 'Min confidence (%)', step: '0.1', percent: true },
+  { key: 'min_confidence_manage', label: 'Min manage confidence (%)', step: '0.1', percent: true },
+  { key: 'max_order_margin_pct', label: 'Max order margin (%)', step: '0.1', percent: true },
   { key: 'trade_cooldown_sec', label: 'Trade cooldown sec', step: '1' },
   { key: 'daily_notional_limit_usd', label: 'Daily notional USD', step: '0.1' },
-  { key: 'max_drawdown_pct', label: 'Max drawdown pct', step: '0.01' },
-  { key: 'max_single_asset_pct', label: 'Max single asset pct', step: '0.01' },
-  { key: 'emergency_margin_threshold', label: 'Emergency margin threshold', step: '0.01' },
-  { key: 'position_size_pct', label: 'Position size pct', step: '0.001' },
+  { key: 'max_drawdown_pct', label: 'Max drawdown (%)', step: '0.1', percent: true },
+  { key: 'max_single_asset_pct', label: 'Max single asset (%)', step: '0.1', percent: true },
+  { key: 'emergency_margin_threshold', label: 'Emergency margin threshold (%)', step: '0.1', percent: true },
+  { key: 'position_size_pct', label: 'Position size (%)', step: '0.1', percent: true },
   { key: 'volume_confirmation_threshold', label: 'Volume confirmation', step: '0.1' },
-  { key: 'sl_pct', label: 'Stop loss pct', step: '0.001' },
-  { key: 'tp_pct', label: 'Take profit pct', step: '0.001' },
-  { key: 'break_even_activation_pct', label: 'Break-even activation pct', step: '0.001' },
-  { key: 'trailing_activation_pct', label: 'Trailing activation pct', step: '0.001' },
-  { key: 'trailing_callback', label: 'Trailing callback pct', step: '0.001' },
+  { key: 'sl_pct', label: 'Stop loss (%)', step: '0.1', percent: true },
+  { key: 'tp_pct', label: 'Take profit (%)', step: '0.1', percent: true },
+  { key: 'break_even_activation_pct', label: 'Break-even activation (%)', step: '0.1', percent: true },
+  { key: 'trailing_activation_pct', label: 'Trailing activation (%)', step: '0.1', percent: true },
+  { key: 'trailing_callback', label: 'Trailing callback (%)', step: '0.1', percent: true },
 ]
 
 export default function RuntimeStrategyParams({ strategyMode, strategyParams, onChange }) {
@@ -42,13 +42,14 @@ export default function RuntimeStrategyParams({ strategyMode, strategyParams, on
               inputMode="decimal"
               type="number"
               step={field.step}
+              placeholder={field.percent ? 'es. 2 = 2%' : ''}
               className="bg-gray-900 border border-gray-700 rounded px-2 py-1.5 text-sm text-white focus:outline-none focus:border-cyan-500"
             />
           </label>
         ))}
       </div>
       <p className="text-[11px] text-gray-500 mt-2">
-        Questi valori vengono salvati in runtime config e applicati automaticamente dal bot nel ciclo successivo.
+        Per i campi in percentuale inserisci valori semplici: esempio <strong>2</strong> significa <strong>2%</strong>.
       </p>
     </div>
   )

@@ -29,6 +29,21 @@ const PARAM_KEYS = [
   'trailing_callback',
 ]
 
+const PERCENT_PARAM_KEYS = new Set([
+  'min_confidence_open',
+  'min_confidence_manage',
+  'max_order_margin_pct',
+  'max_drawdown_pct',
+  'max_single_asset_pct',
+  'emergency_margin_threshold',
+  'position_size_pct',
+  'sl_pct',
+  'tp_pct',
+  'break_even_activation_pct',
+  'trailing_activation_pct',
+  'trailing_callback',
+])
+
 function normalizeCoinList(list) {
   if (!Array.isArray(list)) return []
   const normalized = []
@@ -45,13 +60,31 @@ function normalizeCoinList(list) {
   return normalized
 }
 
+function decimalToDisplayPercent(value) {
+  const n = Number(value)
+  if (!Number.isFinite(n)) return ''
+  const pct = n * 100
+  return String(Number(pct.toFixed(4)))
+}
+
+function displayPercentToDecimal(value) {
+  const n = Number(value)
+  if (!Number.isFinite(n)) return NaN
+  return Number((n / 100).toFixed(8))
+}
+
 function normalizeStrategyParams(raw) {
   if (!raw || typeof raw !== 'object') return {}
   const result = {}
   for (const key of PARAM_KEYS) {
     const value = raw[key]
     if (value == null || value === '') continue
-    result[key] = String(value)
+
+    if (PERCENT_PARAM_KEYS.has(key)) {
+      result[key] = decimalToDisplayPercent(value)
+    } else {
+      result[key] = String(value)
+    }
   }
   return result
 }
@@ -169,11 +202,21 @@ export default function useRuntimeConfig() {
     for (const key of PARAM_KEYS) {
       const raw = strategyParams[key]
       if (raw == null || String(raw).trim() === '') continue
+
       const numeric = Number(String(raw).trim())
       if (!Number.isFinite(numeric)) {
         throw new Error(`Parametro non numerico: ${key}`)
       }
-      normalizedParams[key] = numeric
+
+      if (PERCENT_PARAM_KEYS.has(key)) {
+        const dec = displayPercentToDecimal(numeric)
+        if (!Number.isFinite(dec)) {
+          throw new Error(`Parametro percentuale non valido: ${key}`)
+        }
+        normalizedParams[key] = dec
+      } else {
+        normalizedParams[key] = numeric
+      }
     }
 
     setSaving(true)
