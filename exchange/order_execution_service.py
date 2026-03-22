@@ -258,8 +258,8 @@ class OrderExecutionService:
                 rounded_trigger = self.client._round_price_to_tick(asset_id, trigger_px)
                 order_type = {
                     "trigger": {
-                        "triggerPx": str(rounded_trigger),
                         "isMarket": bool(trigger_obj.get("isMarket", True)),
+                        "triggerPx": str(rounded_trigger),
                         "tpsl": str(trigger_obj.get("tpsl", "")).strip().lower(),
                     }
                 }

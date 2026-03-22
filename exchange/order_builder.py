@@ -54,8 +54,8 @@ def build_trigger_order_action(
         "r": bool(reduce_only),
         "t": {
             "trigger": {
-                "triggerPx": trigger_str,
                 "isMarket": bool(is_market),
+                "triggerPx": trigger_str,
                 "tpsl": tpsl,
             }
         },
