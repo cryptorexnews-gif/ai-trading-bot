@@ -1,4 +1,5 @@
 import logging
+import os
 import time
 from decimal import Decimal, ROUND_DOWN
 from typing import Any, Dict, List, Optional, Tuple
@@ -20,7 +21,6 @@ from exchange.parsers import (
     extract_statuses,
     get_first_status_error,
     has_acknowledged_order_status,
-    is_master_wallet_not_found_error,
 )
 from exchange.signing import sign_l1_action_exact
 from exchange.transport import post_exchange_with_circuit_breaker, post_json_with_circuit_breaker
@@ -33,7 +33,8 @@ logger = logging.getLogger(__name__)
 
 class HyperliquidExchangeClient:
     """
-    Hyperliquid client (live-only, master wallet mode).
+    Hyperliquid client (live-only).
+    Includes auth fallback between direct signer mode and master-wallet mode.
     """
 
     def __init__(
@@ -46,6 +47,7 @@ class HyperliquidExchangeClient:
         paper_slippage_bps: Decimal = Decimal("5"),
         info_timeout: int = 15,
         exchange_timeout: int = 30,
+        vault_address: Optional[str] = None,
     ):
         self.base_url = base_url
         self.enable_mainnet_trading = enable_mainnet_trading
@@ -58,12 +60,19 @@ class HyperliquidExchangeClient:
         self.session = create_robust_session()
         self.account = Account.from_key(private_key)
 
+        self.vault_address = (vault_address or "").strip() or None
+        self.master_wallet_address = (os.getenv("HYPERLIQUID_WALLET_ADDRESS", "") or "").strip() or None
+
         self._last_nonce: int = 0
         self._meta_cache: Optional[Dict[str, Any]] = None
         self._meta_cache_at = 0.0
         self._mids_cache: Optional[Dict[str, str]] = None
         self._mids_cache_at = 0.0
         self._mids_cache_ttl = 30.0
+
+        self._auth_error_count = 0
+        self._auth_block_until = 0.0
+        self._auth_cooldown_sec = 120.0
 
         self._info_cb = get_or_create_circuit_breaker(
             "hyperliquid_info", failure_threshold=5, recovery_timeout=30.0
@@ -74,7 +83,8 @@ class HyperliquidExchangeClient:
 
         logger.info(
             f"Exchange client initialized: base_url={self.base_url}, mode={self.execution_mode}, "
-            f"mainnet={self.enable_mainnet_trading}, signer={self.get_wallet_address_masked()} (master-only)"
+            f"mainnet={self.enable_mainnet_trading}, signer={self.get_wallet_address_masked()} "
+            f"(master={self._mask_address(self.master_wallet_address)}, vault={self._mask_address(self.vault_address)})"
         )
 
     def _live_orders_enabled(self) -> bool:
@@ -100,6 +110,17 @@ class HyperliquidExchangeClient:
         return isinstance(result, dict) and result.get("status") == "ok"
 
     @staticmethod
+    def _is_auth_error(result: Optional[Dict[str, Any]]) -> bool:
+        if not isinstance(result, dict):
+            return False
+        if result.get("status") != "err":
+            return False
+        msg = str(result.get("response", "")).lower()
+        return (
+            "wallet" in msg and "does not exist" in msg
+        ) or ("api wallet" in msg and "does not exist" in msg)
+
+    @staticmethod
     def _is_close_enough(
         a: Decimal,
         b: Decimal,
@@ -113,21 +134,9 @@ class HyperliquidExchangeClient:
         return diff <= max(abs_tol, scale * rel_tol)
 
     @staticmethod
-    def _is_retryable_trigger_reason(reason: str) -> bool:
-        r = str(reason or "").strip().lower()
-        return r in {
-            "http_error",
-            "exchange_rejected",
-            "status_error",
-            "not_acknowledged",
-            "missing_trigger_order_id",
-        }
-
-    @staticmethod
     def _extract_order_oid(order: Dict[str, Any]) -> Optional[int]:
         if not isinstance(order, dict):
             return None
-
         direct_oid = order.get("oid")
         if direct_oid is not None:
             return int(direct_oid)
@@ -143,14 +152,12 @@ class HyperliquidExchangeClient:
             resting_oid = resting.get("oid")
             if resting_oid is not None:
                 return int(resting_oid)
-
         return None
 
     @staticmethod
     def _extract_order_side(order: Dict[str, Any]) -> str:
         if not isinstance(order, dict):
             return ""
-
         for candidate in [order.get("side"), order.get("dir"), order.get("b")]:
             side = HyperliquidExchangeClient._normalize_side(candidate)
             if side:
@@ -162,32 +169,18 @@ class HyperliquidExchangeClient:
                 side = HyperliquidExchangeClient._normalize_side(candidate)
                 if side:
                     return side
-
         return ""
 
     @staticmethod
     def _extract_order_size(order: Dict[str, Any]) -> Decimal:
         if not isinstance(order, dict):
             return Decimal("0")
-
-        candidates = [
-            order.get("sz"),
-            order.get("s"),
-            order.get("size"),
-            order.get("origSz"),
-        ]
-
+        candidates = [order.get("sz"), order.get("s"), order.get("size"), order.get("origSz")]
         nested_order = order.get("order", {})
         if isinstance(nested_order, dict):
             candidates.extend(
-                [
-                    nested_order.get("sz"),
-                    nested_order.get("s"),
-                    nested_order.get("size"),
-                    nested_order.get("origSz"),
-                ]
+                [nested_order.get("sz"), nested_order.get("s"), nested_order.get("size"), nested_order.get("origSz")]
             )
-
         for c in candidates:
             val = safe_decimal(c, Decimal("0"))
             if val != 0:
@@ -198,17 +191,10 @@ class HyperliquidExchangeClient:
     def _extract_trigger_px(order: Dict[str, Any]) -> Decimal:
         if not isinstance(order, dict):
             return Decimal("0")
-
-        candidates = [
-            order.get("triggerPx"),
-            order.get("tpTriggerPx"),
-            order.get("slTriggerPx"),
-        ]
-
+        candidates = [order.get("triggerPx"), order.get("tpTriggerPx"), order.get("slTriggerPx")]
         trigger_obj = order.get("trigger", {})
         if isinstance(trigger_obj, dict):
             candidates.append(trigger_obj.get("triggerPx"))
-
         order_type = order.get("orderType", {})
         if isinstance(order_type, dict):
             trigger_obj_2 = order_type.get("trigger", {})
@@ -217,13 +203,7 @@ class HyperliquidExchangeClient:
 
         nested_order = order.get("order", {})
         if isinstance(nested_order, dict):
-            candidates.extend(
-                [
-                    nested_order.get("triggerPx"),
-                    nested_order.get("tpTriggerPx"),
-                    nested_order.get("slTriggerPx"),
-                ]
-            )
+            candidates.extend([nested_order.get("triggerPx"), nested_order.get("tpTriggerPx"), nested_order.get("slTriggerPx")])
             nested_trigger = nested_order.get("trigger", {})
             if isinstance(nested_trigger, dict):
                 candidates.append(nested_trigger.get("triggerPx"))
@@ -245,7 +225,6 @@ class HyperliquidExchangeClient:
             return ""
 
         candidates: List[Any] = [order.get("tpsl"), order.get("triggerType")]
-
         trigger_obj = order.get("trigger", {})
         if isinstance(trigger_obj, dict):
             candidates.append(trigger_obj.get("tpsl"))
@@ -262,7 +241,6 @@ class HyperliquidExchangeClient:
         if isinstance(nested_order, dict):
             candidates.append(nested_order.get("tpsl"))
             candidates.append(nested_order.get("triggerType"))
-
             nested_trigger = nested_order.get("trigger", {})
             if isinstance(nested_trigger, dict):
                 candidates.append(nested_trigger.get("tpsl"))
@@ -272,34 +250,20 @@ class HyperliquidExchangeClient:
             value = str(c or "").strip().lower()
             if value in {"tp", "sl"}:
                 return value
-
         if bool(order.get("isTp")):
             return "tp"
         if bool(order.get("isSl")):
             return "sl"
-
         return ""
 
     @staticmethod
     def _extract_reduce_only(order: Dict[str, Any]) -> bool:
         if not isinstance(order, dict):
             return False
-
-        candidates: List[Any] = [
-            order.get("r"),
-            order.get("reduceOnly"),
-            order.get("isReduceOnly"),
-        ]
-
+        candidates: List[Any] = [order.get("r"), order.get("reduceOnly"), order.get("isReduceOnly")]
         nested_order = order.get("order", {})
         if isinstance(nested_order, dict):
-            candidates.extend(
-                [
-                    nested_order.get("r"),
-                    nested_order.get("reduceOnly"),
-                    nested_order.get("isReduceOnly"),
-                ]
-            )
+            candidates.extend([nested_order.get("r"), nested_order.get("reduceOnly"), nested_order.get("isReduceOnly")])
 
         for c in candidates:
             if isinstance(c, bool) and c:
@@ -337,11 +301,18 @@ class HyperliquidExchangeClient:
             endpoint_label="/exchange",
         )
 
-    def _post_signed_action_once(self, action: Dict[str, Any], timeout: Optional[int] = None) -> Optional[Dict[str, Any]]:
+    def _post_signed_action_once(
+        self,
+        action: Dict[str, Any],
+        timeout: Optional[int] = None,
+        vault_address_override: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
         nonce = self._next_nonce()
+        vault_for_sign = vault_address_override
         signature = sign_l1_action_exact(
             account=self.account,
             action=action,
+            vault_address=vault_for_sign,
             nonce=nonce,
             expires_after=None,
             is_mainnet=True,
@@ -350,29 +321,55 @@ class HyperliquidExchangeClient:
             "action": action,
             "nonce": nonce,
             "signature": signature,
-            "vaultAddress": None,
+            "vaultAddress": vault_for_sign,
         }
         return self._post_exchange(payload, timeout=timeout)
 
     def _post_signed_action_with_master_retry(self, action: Dict[str, Any], timeout: Optional[int] = None) -> Optional[Dict[str, Any]]:
-        result = self._post_signed_action_once(action, timeout=timeout)
-
-        attempt = 0
-        max_wallet_error_retries = 3
-        while is_master_wallet_not_found_error(result) and attempt < max_wallet_error_retries:
-            attempt += 1
-            backoff_sec = Decimal("0.25") * Decimal(str(attempt))
-            logger.warning(
-                f"Exchange reported master wallet not found (attempt {attempt}/{max_wallet_error_retries}). "
-                f"Retrying with fresh nonce in {float(backoff_sec):.2f}s."
-            )
-            time.sleep(float(backoff_sec))
-            result = self._post_signed_action_once(action, timeout=timeout)
-
-        if is_master_wallet_not_found_error(result):
+        now = time.time()
+        if now < self._auth_block_until:
             logger.error(
-                "Persistent master wallet auth error after retries. "
-                f"Signer={self.get_wallet_address_masked()}"
+                f"Auth cooldown active ({int(self._auth_block_until - now)}s left), skipping signed action."
+            )
+            return {"status": "err", "response": "auth_cooldown_active"}
+
+        signer = (self.account.address or "").lower()
+        master = (self.master_wallet_address or "").lower()
+        preferred_vault = self.vault_address
+
+        attempts: List[Optional[str]] = []
+
+        if preferred_vault:
+            attempts.append(preferred_vault)
+        else:
+            attempts.append(None)
+
+        if master and master != signer and master not in [str(a).lower() for a in attempts if a is not None]:
+            attempts.append(master)
+
+        if None not in attempts:
+            attempts.append(None)
+
+        result: Optional[Dict[str, Any]] = None
+        for idx, vault_mode in enumerate(attempts, start=1):
+            if idx > 1:
+                time.sleep(0.2)
+
+            result = self._post_signed_action_once(action, timeout=timeout, vault_address_override=vault_mode)
+            if not self._is_auth_error(result):
+                self._auth_error_count = 0
+                return result
+
+            logger.warning(
+                f"Auth mode attempt {idx}/{len(attempts)} failed "
+                f"(vault={self._mask_address(vault_mode)}): {result}"
+            )
+
+        self._auth_error_count += 1
+        if self._auth_error_count >= 2:
+            self._auth_block_until = time.time() + self._auth_cooldown_sec
+            logger.error(
+                f"Persistent auth errors. Enabling auth cooldown for {int(self._auth_cooldown_sec)}s"
             )
 
         return result
@@ -730,7 +727,6 @@ class HyperliquidExchangeClient:
     def _normalize_size_for_coin(self, coin: str, size: Decimal) -> Decimal:
         if size <= 0:
             return Decimal("0")
-
         sz_decimals = self.get_sz_decimals(coin)
         normalized = normalize_size_for_decimals(size, sz_decimals if sz_decimals is not None else -1)
         if normalized <= 0:
@@ -740,7 +736,6 @@ class HyperliquidExchangeClient:
     def _round_price_to_tick(self, asset_id: int, price: Decimal) -> Decimal:
         if price <= 0:
             return price
-
         tick_size, precision = self.get_tick_size_and_precision(asset_id)
         if tick_size <= 0:
             return price
@@ -845,9 +840,6 @@ class HyperliquidExchangeClient:
             return {"success": False, "mode": "live", "reason": "not_acknowledged", "notional": "0"}
 
         order_ids = extract_order_ids(result)
-        if not order_ids and statuses:
-            logger.warning(f"No order id extracted for {coin} despite acknowledged status")
-
         notional = abs(normalized_size * limit_price)
         logger.info(
             f"LIVE order success {coin} {normalized_side.upper()} size={normalized_size} "
@@ -899,10 +891,6 @@ class HyperliquidExchangeClient:
             delay_sec=0.0,
         )
         if existing_oid is not None:
-            logger.info(
-                f"Reusing existing trigger order for {coin} {tpsl.upper()} {normalized_side.upper()} "
-                f"size={normalized_size} trigger={rounded_trigger} oid={existing_oid}"
-            )
             return {"success": True, "order_id": existing_oid}
 
         order_wire = {
@@ -925,11 +913,9 @@ class HyperliquidExchangeClient:
         statuses = extract_statuses(result)
         status_error = get_first_status_error(statuses)
         if status_error is not None:
-            logger.error(f"Trigger order status error for {coin}: {status_error}")
             return {"success": False, "reason": "status_error"}
 
         if statuses and not has_acknowledged_order_status(statuses):
-            logger.error(f"Trigger order not acknowledged by Hyperliquid statuses for {coin}: {statuses}")
             return {"success": False, "reason": "not_acknowledged"}
 
         immediate_oids = extract_order_ids(result)
@@ -948,15 +934,6 @@ class HyperliquidExchangeClient:
         )
 
         if order_id is not None:
-            self._cancel_duplicate_trigger_orders(
-                user=self.account.address,
-                coin=coin,
-                side=normalized_side,
-                size=normalized_size,
-                trigger_price=rounded_trigger,
-                tpsl=tpsl,
-                keep_oid=order_id,
-            )
             return {"success": True, "order_id": order_id}
 
         fallback_oid = self._find_latest_protective_order_id(
@@ -1063,12 +1040,10 @@ class HyperliquidExchangeClient:
 
     def cancel_order(self, coin: str, order_id: int) -> bool:
         if not self._live_orders_enabled():
-            logger.error("Live cancel blocked: EXECUTION_MODE must be live and ENABLE_MAINNET_TRADING=true")
             return False
 
         asset_id = self.get_asset_id(coin)
         if asset_id is None:
-            logger.error(f"Asset ID not found for cancel {coin} oid={order_id}")
             return False
 
         action = build_cancel_action(asset_id=asset_id, order_id=order_id)
@@ -1076,7 +1051,6 @@ class HyperliquidExchangeClient:
         if result is None:
             return False
         if not self._is_ok_result(result):
-            logger.warning(f"Cancel rejected for {coin} oid={order_id}: {result}")
             return False
 
         logger.info(f"Cancel success {coin} oid={order_id}")
