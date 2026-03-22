@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Test live: apertura posizione a mercato con SL/TP in un unico invio (/exchange action bulk).
+Test live: apertura posizione con ordine entry, poi upsert SL/TP in seconda transazione.
 ATTENZIONE: usa soldi reali se ENABLE_MAINNET_TRADING=true.
 
 Configurazione via .env:
@@ -18,19 +18,20 @@ Parametri test (opzionali):
 - TEST_TP_PCT=0.06
 - TEST_IOC_BUFFER_PCT=0.01
 - TEST_TICK_SIZE=          # opzionale, es: 0.1 (override manuale)
+- TEST_POSITION_WAIT_ATTEMPTS=10
+- TEST_POSITION_WAIT_SEC=1
 """
 
 import logging
 import os
 import sys
+import time
 from decimal import Decimal, ROUND_DOWN
 from pathlib import Path
+from typing import Dict, Optional
 
 from dotenv import load_dotenv
 
-# Supporta sia:
-# - python -m scripts.test_live_atomic_market_tpsl
-# - python scripts/test_live_atomic_market_tpsl.py
 ROOT_DIR = Path(__file__).resolve().parent.parent
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
@@ -42,7 +43,7 @@ from utils.hyperliquid_state import get_open_positions
 load_dotenv()
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
-logger = logging.getLogger("live_atomic_market_tpsl")
+logger = logging.getLogger("live_entry_then_upsert_tpsl")
 
 
 def d(value: str, default: str) -> Decimal:
@@ -55,6 +56,30 @@ def round_to_tick(price: Decimal, tick_size: Decimal) -> Decimal:
         return price
     units = (price / tick_size).to_integral_value(rounding=ROUND_DOWN)
     return units * tick_size
+
+
+def fetch_open_position_with_retry(
+    client: HyperliquidExchangeClient,
+    wallet: str,
+    coin: str,
+    attempts: int,
+    sleep_sec: float,
+) -> Optional[Dict]:
+    for attempt in range(1, attempts + 1):
+        user_state = client.get_user_state(wallet)
+        if isinstance(user_state, dict):
+            positions = get_open_positions(user_state)
+            pos = positions.get(coin)
+            if pos:
+                size = Decimal(str(pos.get("size", "0")))
+                if size != 0:
+                    logger.info(
+                        f"Posizione rilevata al tentativo {attempt}/{attempts}: "
+                        f"size={size}, entry={pos.get('entry_price')}"
+                    )
+                    return pos
+        time.sleep(sleep_sec)
+    return None
 
 
 def main() -> None:
@@ -84,6 +109,8 @@ def main() -> None:
     tp_pct = d("TEST_TP_PCT", "0.06")
     ioc_buffer_pct = d("TEST_IOC_BUFFER_PCT", "0.01")
     tick_override_raw = os.getenv("TEST_TICK_SIZE", "").strip()
+    position_wait_attempts = int(os.getenv("TEST_POSITION_WAIT_ATTEMPTS", "10"))
+    position_wait_sec = float(os.getenv("TEST_POSITION_WAIT_SEC", "1"))
 
     if margin_usd <= 0:
         raise RuntimeError("TEST_MARGIN_USD deve essere > 0")
@@ -95,6 +122,10 @@ def main() -> None:
         raise RuntimeError("TEST_TP_PCT deve essere tra 0 e 2")
     if ioc_buffer_pct < 0 or ioc_buffer_pct > 0.2:
         raise RuntimeError("TEST_IOC_BUFFER_PCT fuori range ragionevole")
+    if position_wait_attempts < 1:
+        raise RuntimeError("TEST_POSITION_WAIT_ATTEMPTS deve essere >= 1")
+    if position_wait_sec <= 0:
+        raise RuntimeError("TEST_POSITION_WAIT_SEC deve essere > 0")
 
     logger.warning("TEST LIVE REALE ATTIVO: questo script può aprire una posizione con soldi reali")
     logger.info(
@@ -124,7 +155,6 @@ def main() -> None:
         raise RuntimeError(f"Asset ID non trovato per {coin}")
 
     tick_size, precision = client.get_tick_size_and_precision(asset_id)
-
     if tick_override_raw:
         tick_size = Decimal(tick_override_raw)
         logger.warning(f"Tick size override attivo da env: TEST_TICK_SIZE={tick_size}")
@@ -145,7 +175,6 @@ def main() -> None:
 
     notional_usd = margin_usd * Decimal(str(leverage))
     raw_size = notional_usd / mid_price
-
     sz_decimals = client.get_sz_decimals(coin)
     normalized_size = normalize_size_for_decimals(raw_size, sz_decimals if sz_decimals is not None else -1)
     if normalized_size <= 0:
@@ -154,80 +183,94 @@ def main() -> None:
     is_entry_buy = side == "buy"
     if is_entry_buy:
         entry_limit = mid_price * (Decimal("1") + ioc_buffer_pct)
-        sl_trigger = mid_price * (Decimal("1") - sl_pct)
-        tp_trigger = mid_price * (Decimal("1") + tp_pct)
-        close_is_buy = False
     else:
         entry_limit = mid_price * (Decimal("1") - ioc_buffer_pct)
-        sl_trigger = mid_price * (Decimal("1") + sl_pct)
-        tp_trigger = mid_price * (Decimal("1") - tp_pct)
-        close_is_buy = True
 
-    # Rounding robusto a tick per evitare "Price must be divisible by tick size"
     entry_limit = round_to_tick(entry_limit, tick_size)
+    if entry_limit <= 0:
+        raise RuntimeError("Prezzo entry arrotondato non valido")
+
+    logger.info(
+        f"ENTRY: side={side.upper()} size={normalized_size} desired_limit={entry_limit} "
+        f"(notional~{(normalized_size * mid_price):.4f})"
+    )
+
+    entry_result = client.place_order(
+        coin=coin,
+        side=side,
+        size=normalized_size,
+        desired_price=entry_limit,
+        reduce_only=False,
+    )
+    if not entry_result.get("success"):
+        raise RuntimeError(f"Entry order fallito: {entry_result}")
+
+    logger.info(f"Entry order successo: {entry_result}")
+
+    pos = fetch_open_position_with_retry(
+        client=client,
+        wallet=wallet,
+        coin=coin,
+        attempts=position_wait_attempts,
+        sleep_sec=position_wait_sec,
+    )
+
+    if not pos:
+        logger.warning(
+            f"Nessuna posizione aperta visibile su {coin} dopo entry; "
+            f"possibile IOC non fillato completamente. Stop test senza TP/SL."
+        )
+        return
+
+    pos_size = Decimal(str(pos.get("size", "0")))
+    is_long = pos_size > 0
+    entry_price = Decimal(str(pos.get("entry_price", "0")))
+    if entry_price <= 0:
+        fallback_price = Decimal(str(entry_result.get("filled_price", mid_price)))
+        entry_price = fallback_price if fallback_price > 0 else mid_price
+
+    if is_long:
+        sl_trigger = entry_price * (Decimal("1") - sl_pct)
+        tp_trigger = entry_price * (Decimal("1") + tp_pct)
+    else:
+        sl_trigger = entry_price * (Decimal("1") + sl_pct)
+        tp_trigger = entry_price * (Decimal("1") - tp_pct)
+
     sl_trigger = round_to_tick(sl_trigger, tick_size)
     tp_trigger = round_to_tick(tp_trigger, tick_size)
 
-    if entry_limit <= 0 or sl_trigger <= 0 or tp_trigger <= 0:
-        raise RuntimeError("Prezzi arrotondati non validi (<= 0)")
+    if sl_trigger <= 0 or tp_trigger <= 0:
+        raise RuntimeError("Trigger SL/TP arrotondati non validi")
 
     logger.info(
-        f"Ordine entry: side={side.upper()} size={normalized_size} limit={entry_limit} "
-        f"(notional~{(normalized_size * mid_price):.4f})"
+        f"UPSERT TP/SL: position_size={abs(pos_size)} is_long={is_long} "
+        f"entry={entry_price} sl={sl_trigger} tp={tp_trigger}"
     )
-    logger.info(f"Protezioni arrotondate: SL trigger={sl_trigger}, TP trigger={tp_trigger}")
 
-    orders = [
-        {
-            "coin": coin,
-            "is_buy": is_entry_buy,
-            "sz": normalized_size,
-            "limit_px": entry_limit,
-            "order_type": {"limit": {"tif": "Ioc"}},
-            "reduce_only": False,
-        },
-        {
-            "coin": coin,
-            "is_buy": close_is_buy,
-            "sz": normalized_size,
-            "limit_px": sl_trigger,
-            "order_type": {"trigger": {"isMarket": True, "triggerPx": sl_trigger, "tpsl": "sl"}},
-            "reduce_only": True,
-        },
-        {
-            "coin": coin,
-            "is_buy": close_is_buy,
-            "sz": normalized_size,
-            "limit_px": tp_trigger,
-            "order_type": {"trigger": {"isMarket": True, "triggerPx": tp_trigger, "tpsl": "tp"}},
-            "reduce_only": True,
-        },
-    ]
+    upsert_result = client.upsert_protective_orders(
+        coin=coin,
+        position_size=abs(pos_size),
+        is_long=is_long,
+        stop_loss_price=sl_trigger,
+        take_profit_price=tp_trigger,
+    )
 
-    result = client.bulk_orders(orders, grouping="positionTpsl")
-    if not result.get("success"):
-        raise RuntimeError(f"Bulk order fallito: {result}")
+    if not upsert_result.get("success"):
+        raise RuntimeError(f"Upsert TP/SL fallito: {upsert_result}")
 
-    logger.info(f"Bulk order inviato con successo. order_ids={result.get('order_ids', [])}")
+    sl_id = upsert_result.get("stop_loss_order_id")
+    tp_id = upsert_result.get("take_profit_order_id")
+    logger.info(f"Upsert TP/SL successo: SL oid={sl_id} TP oid={tp_id}")
 
-    user_state = client.get_user_state(wallet)
-    if not isinstance(user_state, dict):
-        raise RuntimeError("Impossibile leggere user state dopo il test")
-
-    open_positions = get_open_positions(user_state)
-    current_pos = open_positions.get(coin)
-    if not current_pos:
-        logger.warning(
-            f"Nessuna posizione aperta su {coin} rilevata subito dopo il test "
-            f"(possibile IOC non fillato completamente)."
+    if sl_id is not None and tp_id is not None:
+        open_confirmed = client.are_order_ids_open(
+            user=wallet,
+            coin=coin,
+            order_ids=[int(sl_id), int(tp_id)],
         )
-    else:
-        logger.info(
-            f"Posizione aperta confermata su {coin}: "
-            f"size={current_pos.get('size')} entry={current_pos.get('entry_price')}"
-        )
+        logger.info(f"Conferma ordini protettivi aperti su exchange: {open_confirmed}")
 
-    logger.info("Test completato.")
+    logger.info("Test completato con flusso a 2 transazioni (entry -> upsert TP/SL).")
 
 
 if __name__ == "__main__":
