@@ -10,6 +10,8 @@ const actionColors = {
   change_leverage: 'bg-purple-600',
 }
 
+const hiddenActions = new Set(['hold', 'no_trade', 'skip'])
+
 function toNum(v, fallback = 0) {
   const n = parseFloat(v)
   return Number.isNaN(n) ? fallback : n
@@ -26,6 +28,8 @@ export default function TradeHistory({
     if (!trades) return []
     return trades.filter((trade) => {
       const confidence = toNum(trade.confidence, 0)
+      const action = String(trade.action || '').trim().toLowerCase()
+      if (hiddenActions.has(action)) return false
       return confidence > minConfidence
     })
   }, [trades, minConfidence])
@@ -47,7 +51,7 @@ export default function TradeHistory({
       <div className="bg-gray-900 rounded-xl p-6 border border-gray-800">
         <h3 className="text-lg font-semibold mb-2">Recent Bot Decisions</h3>
         <p className="text-xs text-gray-500 mb-4">
-          Showing only decisions with confidence > {(minConfidence * 100).toFixed(0)}%
+          Showing only decisions with confidence > {(minConfidence * 100).toFixed(0)}% (holds excluded)
         </p>
         <div className="flex flex-col items-center justify-center py-8 text-gray-500">
           <div className="text-4xl mb-2">📋</div>
@@ -66,7 +70,7 @@ export default function TradeHistory({
             <span className="text-sm font-normal text-gray-500 ml-2">({filteredTrades.length})</span>
           </h3>
           <p className="text-[10px] text-gray-500 mt-1">
-            Confidence filter: > {(minConfidence * 100).toFixed(0)}%
+            Confidence filter: > {(minConfidence * 100).toFixed(0)}% (holds excluded)
           </p>
         </div>
         <div className="flex items-center gap-2">
