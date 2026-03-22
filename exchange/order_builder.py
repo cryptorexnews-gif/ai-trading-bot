@@ -2,6 +2,17 @@ from decimal import Decimal
 from typing import Any, Dict
 
 
+def _decimal_to_wire_str(value: Decimal) -> str:
+    """
+    Converte Decimal in stringa plain (no notazione scientifica),
+    mantenendo precisione e rimuovendo zeri finali non necessari.
+    """
+    q = format(value, "f")
+    if "." in q:
+        q = q.rstrip("0").rstrip(".")
+    return q if q else "0"
+
+
 def build_limit_order_action(
     asset_id: int,
     is_buy: bool,
@@ -16,8 +27,8 @@ def build_limit_order_action(
     order_wire = {
         "a": asset_id,
         "b": is_buy,
-        "p": str(price),
-        "s": str(size.normalize()),
+        "p": _decimal_to_wire_str(price),
+        "s": _decimal_to_wire_str(size),
         "r": bool(reduce_only),
         "t": {"limit": {"tif": tif}},
     }
@@ -33,13 +44,14 @@ def build_trigger_order_action(
     reduce_only: bool = True,
     is_market: bool = True,
 ) -> Dict[str, Any]:
+    trigger_str = _decimal_to_wire_str(trigger_price)
     order_wire = {
         "a": asset_id,
         "b": is_buy,
-        "p": str(trigger_price),
-        "s": str(size.normalize()),
+        "p": trigger_str,
+        "s": _decimal_to_wire_str(size),
         "r": bool(reduce_only),
-        "t": {"trigger": {"isMarket": bool(is_market), "triggerPx": str(trigger_price), "tpsl": tpsl}},
+        "t": {"trigger": {"isMarket": bool(is_market), "triggerPx": trigger_str, "tpsl": tpsl}},
     }
     return {"type": "order", "orders": [order_wire], "grouping": "positionTpsl"}
 
