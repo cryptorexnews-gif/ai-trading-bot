@@ -176,6 +176,69 @@ class CycleOrchestrator:
             order_ids=[sl_id, tp_id],
         )
 
+    def _validate_and_repair_managed_risk(self, coin: str) -> bool:
+        """
+        Garantisce che la configurazione SL/TP della posizione gestita sia coerente.
+        Se invalida, ripristina valori safe da config e resetta prezzi assoluti incoerenti.
+        """
+        managed = self.position_manager.get_position(coin)
+        if not managed:
+            return False
+
+        changed = False
+
+        if managed.stop_loss.percentage <= 0 or managed.stop_loss.percentage >= 1:
+            managed.stop_loss.percentage = self.cfg.trend_sl_pct
+            managed.stop_loss.price = None
+            changed = True
+
+        if managed.take_profit.percentage <= 0 or managed.take_profit.percentage >= 1:
+            managed.take_profit.percentage = self.cfg.trend_tp_pct
+            managed.take_profit.price = None
+            changed = True
+
+        if managed.entry_price <= 0:
+            logger.error(f"{coin} managed entry_price invalid ({managed.entry_price})")
+            return False
+
+        sl_price = managed.stop_loss.calculate_stop_price(managed.entry_price, managed.is_long)
+        if managed.break_even.activated and managed.stop_loss.price is not None:
+            sl_price = managed.stop_loss.price
+        tp_price = managed.take_profit.calculate_tp_price(managed.entry_price, managed.is_long)
+
+        if managed.is_long:
+            if tp_price <= managed.entry_price:
+                managed.take_profit.percentage = self.cfg.trend_tp_pct
+                managed.take_profit.price = None
+                changed = True
+
+            if sl_price <= 0 or sl_price >= tp_price:
+                managed.stop_loss.percentage = self.cfg.trend_sl_pct
+                managed.stop_loss.price = None
+                managed.break_even.activated = False
+                changed = True
+        else:
+            if tp_price >= managed.entry_price:
+                managed.take_profit.percentage = self.cfg.trend_tp_pct
+                managed.take_profit.price = None
+                changed = True
+
+            if sl_price <= 0 or sl_price <= tp_price:
+                managed.stop_loss.percentage = self.cfg.trend_sl_pct
+                managed.stop_loss.price = None
+                managed.break_even.activated = False
+                changed = True
+
+        if changed:
+            self.position_manager.clear_protective_order_ids(coin)
+            self.position_manager._save_state()  # persistenza immediata stato riparato
+            logger.warning(
+                f"{coin} repaired managed SL/TP config: "
+                f"sl_pct={managed.stop_loss.percentage}, tp_pct={managed.take_profit.percentage}"
+            )
+
+        return True
+
     def _sync_exchange_protective_orders(self, coin: str) -> bool:
         if not self._live_orders_enabled():
             self.position_manager.clear_protective_order_ids(coin)
@@ -189,6 +252,10 @@ class CycleOrchestrator:
         for attempt in range(1, max_attempts + 1):
             refreshed_portfolio = self.portfolio_service.get_portfolio_state()
             self.position_manager.sync_with_exchange(refreshed_portfolio.positions)
+
+            if not self._validate_and_repair_managed_risk(coin):
+                logger.error(f"{coin} cannot sync TP/SL: invalid managed position state")
+                return False
 
             managed = self.position_manager.get_position(coin)
             if not managed:
@@ -601,6 +668,15 @@ class CycleOrchestrator:
 
             managed = self.position_manager.get_position(coin)
             if not managed:
+                # tentativo extra di allineamento stato gestito
+                self.position_manager.sync_with_exchange(portfolio.positions)
+                managed = self.position_manager.get_position(coin)
+                if not managed:
+                    logger.error(f"{coin} has exchange position but no managed state; cannot enforce TP/SL")
+                    continue
+
+            if not self._validate_and_repair_managed_risk(coin):
+                logger.error(f"{coin} managed TP/SL validation failed; skipping sync this pass")
                 continue
 
             if self._is_protective_sync_suppressed(coin):
