@@ -69,6 +69,13 @@ class HyperliquidDataFetcher:
             logger.error(f"Hyperliquid /info request error: {e}")
             return None
 
+    def get_batch_info(self, requests_payload: List[Dict[str, Any]], timeout: int = 15) -> List[Any]:
+        """Batch helper for Hyperliquid /info endpoint."""
+        if not requests_payload:
+            return []
+        result = self._post_info({"type": "batch", "requests": requests_payload}, timeout=timeout)
+        return result if isinstance(result, list) else []
+
     def get_all_mids(self, force_refresh: bool = False) -> Optional[Dict[str, str]]:
         """Get all mid prices."""
         now = time.time()

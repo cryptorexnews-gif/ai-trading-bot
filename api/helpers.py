@@ -9,6 +9,7 @@ from typing import Any, Optional
 import requests
 
 from api.config import HYPERLIQUID_BASE_URL
+from utils.retry import retry_request
 
 # Re-export from shared utils so routes can import from one place
 from utils.file_io import read_json_file  # noqa: F401
@@ -19,8 +20,20 @@ logger = logging.getLogger(__name__)
 
 def post_hyperliquid_info(payload: dict, timeout: int = 15) -> Optional[Any]:
     """POST to Hyperliquid /info endpoint. Returns parsed JSON or None."""
+
+    def _do_request():
+        return requests.post(f"{HYPERLIQUID_BASE_URL}/info", json=payload, timeout=timeout)
+
     try:
-        response = requests.post(f"{HYPERLIQUID_BASE_URL}/info", json=payload, timeout=timeout)
+        response = retry_request(
+            _do_request,
+            max_attempts=3,
+            initial_delay=1.0,
+            max_delay=8.0,
+            backoff_factor=2.0,
+            jitter=True,
+            logger_instance=logger,
+        )
         if response.status_code != 200:
             logger.error(f"Hyperliquid /info error: status={response.status_code}, type={payload.get('type', 'unknown')}")
             return None
