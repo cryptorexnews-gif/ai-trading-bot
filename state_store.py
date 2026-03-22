@@ -125,27 +125,45 @@ class StateStore:
     def get_performance_summary(self, state: Dict[str, Any]) -> Dict[str, Any]:
         history = state.get("trade_history", [])
         if not history:
-            return {"total_trades": 0, "win_rate": 0.0, "total_pnl": "0", "wins": 0, "losses": 0, "holds": 0, "consecutive_losses": 0}
+            return {
+                "total_trades": 0,
+                "win_rate": 0.0,
+                "total_pnl": "0",
+                "wins": 0,
+                "losses": 0,
+                "holds": 0,
+                "failed_executions": 0,
+                "consecutive_losses": 0
+            }
 
         trade_actions = {"buy", "sell", "close_position", "increase_position", "reduce_position"}
         hold_actions = {"hold", "no_trade", "skip"}
+        filled_statuses = {"filled", "partially_filled", "filled_late", "partially_filled_late"}
 
         wins = 0
         losses = 0
         holds = 0
+        failed_executions = 0
 
         for t in history:
             action = str(t.get("action", "")).strip().lower()
             success = bool(t.get("success", False))
+            order_status = str(t.get("order_status", "")).strip().lower()
 
             if action in hold_actions or action not in trade_actions:
                 holds += 1
                 continue
 
-            if success:
-                wins += 1
-            else:
-                losses += 1
+            if not success:
+                # Failed execution / not filled should NOT count as losing trade.
+                if order_status in filled_statuses:
+                    losses += 1
+                else:
+                    failed_executions += 1
+                continue
+
+            # Executed successful trade (legacy behavior keeps it as "win" in absence of realized pnl field).
+            wins += 1
 
         actual_trades = wins + losses
 
@@ -154,6 +172,7 @@ class StateStore:
             "wins": wins,
             "losses": losses,
             "holds": holds,
+            "failed_executions": failed_executions,
             "win_rate": (wins / actual_trades * 100) if actual_trades > 0 else 0.0,
             "consecutive_losses": state.get("consecutive_losses", 0)
         }
