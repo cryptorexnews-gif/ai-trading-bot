@@ -26,9 +26,8 @@ from api.services.account_route_service import (
     build_portfolio_response,
     build_positions_response,
 )
-from api.services.account_snapshot_service import get_hyperliquid_account_snapshot
-from api.services.bot_payload_service import build_config_payload, build_status_payload
-from api.services.status_snapshot_service import load_status_snapshot
+from api.services.account_status_service import build_account_status_response
+from api.services.bot_payload_service import build_config_payload
 from runtime_config_store import RuntimeConfigStore
 from state_store import StateStore
 
@@ -54,19 +53,8 @@ def bot_status():
         return rate_limit_resp
 
     try:
-        snapshot = load_status_snapshot(_state_store, LIVE_STATUS_PATH)
         wallet = os.getenv("HYPERLIQUID_WALLET_ADDRESS", "").strip()
-        account_snapshot = get_hyperliquid_account_snapshot(wallet)
-
-        payload = build_status_payload(
-            live_status=snapshot["live_status"],
-            state=snapshot["state"],
-            metrics=snapshot["metrics"],
-            account_snapshot=account_snapshot,
-            circuit_breakers=snapshot["circuit_breakers"],
-            rate_limiters=snapshot["rate_limiters"],
-        )
-        return jsonify(payload)
+        return jsonify(build_account_status_response(_state_store, LIVE_STATUS_PATH, wallet))
     except Exception:
         logger.error("Account status endpoint failed", exc_info=True)
         return jsonify({"error": "internal_error"}), 500
