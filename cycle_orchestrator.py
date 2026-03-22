@@ -123,44 +123,62 @@ class CycleOrchestrator:
         self.position_manager.clear_protective_order_ids(coin)
 
     def _sync_exchange_protective_orders(self, coin: str) -> bool:
-        managed = self.position_manager.get_position(coin)
-        if not managed:
-            return False
-
-        sl_price = managed.stop_loss.calculate_stop_price(managed.entry_price, managed.is_long)
-        if managed.break_even.activated and managed.stop_loss.price is not None:
-            sl_price = managed.stop_loss.price
-
-        tp_price = managed.take_profit.calculate_tp_price(managed.entry_price, managed.is_long)
-
         if not self._live_orders_enabled():
             self.position_manager.clear_protective_order_ids(coin)
             return True
 
-        result = self.exchange_client.upsert_protective_orders(
-            coin=coin,
-            position_size=managed.size,
-            is_long=managed.is_long,
-            stop_loss_price=sl_price,
-            take_profit_price=tp_price,
-            current_stop_order_id=managed.stop_loss_order_id,
-            current_take_profit_order_id=managed.take_profit_order_id,
-        )
+        max_attempts = 3
+        for attempt in range(1, max_attempts + 1):
+            refreshed_portfolio = self.portfolio_service.get_portfolio_state()
+            self.position_manager.sync_with_exchange(refreshed_portfolio.positions)
 
-        if not result.get("success"):
-            logger.warning(f"{coin} protective order sync failed: {result.get('reason', 'unknown')}")
-            return False
+            managed = self.position_manager.get_position(coin)
+            if not managed:
+                logger.warning(
+                    f"{coin} protective sync attempt {attempt}/{max_attempts}: "
+                    f"position not visible yet on exchange"
+                )
+                if attempt < max_attempts:
+                    time.sleep(1.5)
+                    continue
+                return False
 
-        self.position_manager.set_protective_order_ids(
-            coin,
-            result.get("stop_loss_order_id"),
-            result.get("take_profit_order_id"),
-        )
-        logger.info(
-            f"{coin} protective orders synced on exchange: "
-            f"SL oid={result.get('stop_loss_order_id')} TP oid={result.get('take_profit_order_id')}"
-        )
-        return True
+            sl_price = managed.stop_loss.calculate_stop_price(managed.entry_price, managed.is_long)
+            if managed.break_even.activated and managed.stop_loss.price is not None:
+                sl_price = managed.stop_loss.price
+
+            tp_price = managed.take_profit.calculate_tp_price(managed.entry_price, managed.is_long)
+
+            result = self.exchange_client.upsert_protective_orders(
+                coin=coin,
+                position_size=managed.size,
+                is_long=managed.is_long,
+                stop_loss_price=sl_price,
+                take_profit_price=tp_price,
+                current_stop_order_id=managed.stop_loss_order_id,
+                current_take_profit_order_id=managed.take_profit_order_id,
+            )
+
+            if result.get("success"):
+                self.position_manager.set_protective_order_ids(
+                    coin,
+                    result.get("stop_loss_order_id"),
+                    result.get("take_profit_order_id"),
+                )
+                logger.info(
+                    f"{coin} protective orders synced on exchange: "
+                    f"SL oid={result.get('stop_loss_order_id')} TP oid={result.get('take_profit_order_id')}"
+                )
+                return True
+
+            logger.warning(
+                f"{coin} protective sync attempt {attempt}/{max_attempts} failed: "
+                f"{result.get('reason', 'unknown')}"
+            )
+            if attempt < max_attempts:
+                time.sleep(1.5)
+
+        return False
 
     def _update_protection_without_trade(self, coin: str, decision: Dict[str, Any]) -> bool:
         sl_pct = decision.get("stop_loss_pct")
