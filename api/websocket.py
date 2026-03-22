@@ -24,12 +24,11 @@ except ModuleNotFoundError:
             return decorator
 
 from api.config import API_AUTH_KEY, LIVE_STATUS_PATH, METRICS_PATH, STATE_PATH
-from api.helpers import post_hyperliquid_info, read_json_file
+from api.helpers import post_hyperliquid_info
 from api.security_utils import env_bool, is_loopback_ip
+from api.services.status_snapshot_service import load_status_snapshot
 from api.services.websocket_service import build_market_ws_payload, build_status_ws_payload
 from state_store import StateStore
-from utils.circuit_breaker import get_all_circuit_states
-from utils.rate_limiter import get_all_rate_limiter_stats
 
 logger = logging.getLogger(__name__)
 
@@ -65,16 +64,14 @@ def _json_default(value: Any):
 
 
 def _build_status_payload() -> Dict[str, Any]:
-    live_status = read_json_file(LIVE_STATUS_PATH)
-    state = _state_store.load_state()
-    metrics = _state_store.load_metrics()
+    snapshot = load_status_snapshot(_state_store, LIVE_STATUS_PATH)
 
     return build_status_ws_payload(
-        live_status=live_status,
-        state=state,
-        metrics=metrics,
-        circuit_breakers=get_all_circuit_states(),
-        rate_limiters=get_all_rate_limiter_stats(),
+        live_status=snapshot["live_status"],
+        state=snapshot["state"],
+        metrics=snapshot["metrics"],
+        circuit_breakers=snapshot["circuit_breakers"],
+        rate_limiters=snapshot["rate_limiters"],
     )
 
 

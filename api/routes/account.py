@@ -22,15 +22,13 @@ from api.config import (
     METRICS_PATH,
     RUNTIME_CONFIG_PATH,
 )
-from api.helpers import read_json_file
 from api.rate_limit_utils import build_rate_limiter, rate_limited_response
 from api.services.account_snapshot_service import get_hyperliquid_account_snapshot
 from api.services.bot_payload_service import build_config_payload, build_status_payload
 from api.services.managed_positions_service import build_managed_positions_payload
+from api.services.status_snapshot_service import load_status_snapshot
 from runtime_config_store import RuntimeConfigStore
 from state_store import StateStore
-from utils.circuit_breaker import get_all_circuit_states
-from utils.rate_limiter import get_all_rate_limiter_stats
 
 logger = logging.getLogger(__name__)
 
@@ -54,19 +52,17 @@ def bot_status():
         return rate_limit_resp
 
     try:
-        live_status = read_json_file(LIVE_STATUS_PATH)
-        state = _state_store.load_state()
-        metrics = _state_store.load_metrics()
+        snapshot = load_status_snapshot(_state_store, LIVE_STATUS_PATH)
         wallet = os.getenv("HYPERLIQUID_WALLET_ADDRESS", "").strip()
         account_snapshot = get_hyperliquid_account_snapshot(wallet)
 
         payload = build_status_payload(
-            live_status=live_status,
-            state=state,
-            metrics=metrics,
+            live_status=snapshot["live_status"],
+            state=snapshot["state"],
+            metrics=snapshot["metrics"],
             account_snapshot=account_snapshot,
-            circuit_breakers=get_all_circuit_states(),
-            rate_limiters=get_all_rate_limiter_stats(),
+            circuit_breakers=snapshot["circuit_breakers"],
+            rate_limiters=snapshot["rate_limiters"],
         )
         return jsonify(payload)
     except Exception:
@@ -125,6 +121,7 @@ def managed_positions():
         wallet = os.getenv("HYPERLIQUID_WALLET_ADDRESS", "").strip()
         account_snapshot = get_hyperliquid_account_snapshot(wallet)
         exchange_positions = account_snapshot.get("portfolio", {}).get("positions", {}) or {}
+        from api.helpers import read_json_file
         managed_data = read_json_file(MANAGED_POSITIONS_PATH) or {}
 
         default_sl_pct = Decimal(str(os.getenv("TREND_SL_PCT", "0.04")))
