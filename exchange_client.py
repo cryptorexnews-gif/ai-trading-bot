@@ -60,9 +60,7 @@ class HyperliquidExchangeClient:
         self.exchange_timeout = exchange_timeout
 
         requested_vault = str(vault_address).strip() if vault_address is not None else ""
-        if requested_vault:
-            logger.warning("Vault mode requested but disabled by policy. Ignoring vault and using signer wallet only.")
-        self.vault_address: Optional[str] = None
+        self.vault_address: Optional[str] = requested_vault if requested_vault else None
 
         self.session = create_robust_session()
         self.account = Account.from_key(private_key)
@@ -179,6 +177,20 @@ class HyperliquidExchangeClient:
             logger.warning(
                 f"Vault not registered for signer (vault={self._mask_address(old_vault)}). "
                 "Retrying once without vault."
+            )
+            retry_result = self._post_signed_action_once(action, None, timeout=timeout)
+            if self._is_ok_result(retry_result):
+                logger.warning("Retry without vault succeeded. Disabling vault mode for subsequent requests.")
+                self.vault_address = None
+                result = retry_result
+            else:
+                result = retry_result
+
+        if self.vault_address and is_user_or_api_wallet_not_found_error(result):
+            old_vault = self.vault_address
+            logger.warning(
+                f"Wallet/API wallet not found with vault={self._mask_address(old_vault)}. "
+                "Retrying once without vault to validate signer mode."
             )
             retry_result = self._post_signed_action_once(action, None, timeout=timeout)
             if self._is_ok_result(retry_result):
