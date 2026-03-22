@@ -3,7 +3,6 @@ import time
 from decimal import Decimal
 from typing import Any, Dict, Optional, Tuple
 
-import requests
 from eth_account import Account
 
 from exchange.market_rules import (
@@ -11,13 +10,20 @@ from exchange.market_rules import (
     infer_tick_size_and_precision_from_mid,
     normalize_size_for_decimals,
 )
+from exchange.order_builder import (
+    build_cancel_action,
+    build_limit_order_action,
+    build_trigger_order_action,
+    build_update_leverage_action,
+)
 from exchange.parsers import (
     extract_order_ids,
     is_user_or_api_wallet_not_found_error,
     is_vault_not_registered_error,
 )
 from exchange.signing import sign_l1_action_exact
-from utils.circuit_breaker import CircuitBreakerOpenError, get_or_create_circuit_breaker
+from exchange.transport import post_exchange_with_circuit_breaker, post_json_with_circuit_breaker
+from utils.circuit_breaker import get_or_create_circuit_breaker
 from utils.decimals import safe_decimal
 from utils.http import create_robust_session
 
@@ -28,9 +34,9 @@ class HyperliquidExchangeClient:
     """
     Hyperliquid client (live-only):
     - HTTP + circuit breaker
-    - EIP-712 signing via exchange.signing
-    - response parsing via exchange.parsers
-    - size/tick normalization via exchange.market_rules
+    - EIP-712 signing
+    - order payload builder separato
+    - parser separati
     """
 
     def __init__(
@@ -96,8 +102,18 @@ class HyperliquidExchangeClient:
     def _live_orders_enabled(self) -> bool:
         return self.execution_mode == "live" and self.enable_mainnet_trading
 
-    def _is_ok_result(self, result: Optional[Dict[str, Any]]) -> bool:
+    @staticmethod
+    def _is_ok_result(result: Optional[Dict[str, Any]]) -> bool:
         return isinstance(result, dict) and result.get("status") == "ok"
+
+    @staticmethod
+    def _extract_status_error(statuses: Any) -> Optional[str]:
+        if not isinstance(statuses, list):
+            return None
+        for status in statuses:
+            if isinstance(status, dict) and "error" in status:
+                return str(status.get("error", "status_error"))
+        return None
 
     def _next_nonce(self) -> int:
         current_ms = int(time.time() * 1000)
@@ -108,58 +124,25 @@ class HyperliquidExchangeClient:
 
     def _post_info(self, payload: Dict[str, Any], timeout: Optional[int] = None) -> Optional[Any]:
         timeout = timeout or self.info_timeout
-
-        def _do_post():
-            response = self.session.post(f"{self.base_url}/info", json=payload, timeout=timeout)
-            if response.status_code != 200:
-                logger.error(f"/info type={payload.get('type', 'unknown')} failed status={response.status_code}")
-                response.raise_for_status()
-            return response.json()
-
-        try:
-            return self._info_cb.call(_do_post)
-        except CircuitBreakerOpenError:
-            logger.error("Circuit breaker OPEN for /info endpoint")
-            return None
-        except requests.exceptions.Timeout:
-            logger.error(f"/info timeout after {timeout}s for type={payload.get('type', 'unknown')}")
-            return None
-        except requests.exceptions.ConnectionError as e:
-            logger.error(f"/info connection error: {e}")
-            return None
-        except Exception as e:
-            logger.error(f"/info unexpected error: {type(e).__name__}: {str(e)}")
-            return None
+        return post_json_with_circuit_breaker(
+            session=self.session,
+            url=f"{self.base_url}/info",
+            payload=payload,
+            timeout=timeout,
+            circuit_breaker=self._info_cb,
+            endpoint_label=f"/info type={payload.get('type', 'unknown')}",
+        )
 
     def _post_exchange(self, payload: Dict[str, Any], timeout: Optional[int] = None) -> Optional[Any]:
         timeout = timeout or self.exchange_timeout
-
-        def _do_post():
-            response = self.session.post(
-                f"{self.base_url}/exchange",
-                json=payload,
-                headers={"Content-Type": "application/json"},
-                timeout=timeout,
-            )
-            if response.status_code != 200:
-                logger.error(f"/exchange failed status={response.status_code}")
-                response.raise_for_status()
-            return response.json()
-
-        try:
-            return self._exchange_cb.call(_do_post)
-        except CircuitBreakerOpenError:
-            logger.error("Circuit breaker OPEN for /exchange endpoint")
-            return None
-        except requests.exceptions.Timeout:
-            logger.error(f"/exchange timeout after {timeout}s")
-            return None
-        except requests.exceptions.ConnectionError as e:
-            logger.error(f"/exchange connection error: {e}")
-            return None
-        except Exception as e:
-            logger.error(f"/exchange unexpected error: {type(e).__name__}: {str(e)}")
-            return None
+        return post_exchange_with_circuit_breaker(
+            session=self.session,
+            url=f"{self.base_url}/exchange",
+            payload=payload,
+            timeout=timeout,
+            circuit_breaker=self._exchange_cb,
+            endpoint_label="/exchange",
+        )
 
     def _post_signed_action_once(
         self,
@@ -210,15 +193,6 @@ class HyperliquidExchangeClient:
 
         return result
 
-    @staticmethod
-    def _extract_status_error(statuses: Any) -> Optional[str]:
-        if not isinstance(statuses, list):
-            return None
-        for status in statuses:
-            if isinstance(status, dict) and "error" in status:
-                return str(status.get("error", "status_error"))
-        return None
-
     def _round_price_to_tick(self, asset_id: int, price: Decimal) -> Decimal:
         tick_size, precision = self.get_tick_size_and_precision(asset_id)
         rounded_ticks = (price / tick_size).quantize(Decimal("1"))
@@ -241,6 +215,12 @@ class HyperliquidExchangeClient:
         limit_price = max(lower_bound, min(upper_bound, limit_price))
 
         return self._round_price_to_tick(asset_id, limit_price)
+
+    def _normalize_size_for_coin(self, coin: str, size: Decimal) -> Decimal:
+        sz_decimals = self.get_sz_decimals(coin)
+        if sz_decimals is None:
+            return size if size > 0 else Decimal("0")
+        return normalize_size_for_decimals(size, sz_decimals)
 
     def get_derived_address(self) -> str:
         return self.account.address
@@ -308,12 +288,6 @@ class HyperliquidExchangeClient:
                 return asset.get("szDecimals")
         return None
 
-    def _normalize_size_for_coin(self, coin: str, size: Decimal) -> Decimal:
-        sz_decimals = self.get_sz_decimals(coin)
-        if sz_decimals is None:
-            return size if size > 0 else Decimal("0")
-        return normalize_size_for_decimals(size, sz_decimals)
-
     def get_reference_price(self, coin: str, fallback_price: Decimal) -> Decimal:
         mids = self.get_all_mids()
         if mids and coin in mids:
@@ -352,7 +326,7 @@ class HyperliquidExchangeClient:
             logger.error(f"Asset ID not found for {coin}")
             return False
 
-        action = {"type": "updateLeverage", "asset": asset_id, "isCross": True, "leverage": leverage}
+        action = build_update_leverage_action(asset_id=asset_id, leverage=leverage)
         result = self._post_signed_action_with_vault_fallback(action)
         if result is None:
             return False
@@ -378,15 +352,13 @@ class HyperliquidExchangeClient:
         is_buy = side.lower() == "buy"
         limit_price = self._resolve_limit_price(coin=coin, side=side, desired_price=desired_price, asset_id=asset_id)
 
-        order_wire = {
-            "a": asset_id,
-            "b": is_buy,
-            "p": str(limit_price),
-            "s": str(normalized_size.normalize()),
-            "r": bool(reduce_only),
-            "t": {"limit": {"tif": "Gtc"}},
-        }
-        action = {"type": "order", "orders": [order_wire], "grouping": "na"}
+        action = build_limit_order_action(
+            asset_id=asset_id,
+            is_buy=is_buy,
+            price=limit_price,
+            size=normalized_size,
+            reduce_only=reduce_only,
+        )
 
         result = self._post_signed_action_with_vault_fallback(action)
         if result is None:
@@ -433,15 +405,15 @@ class HyperliquidExchangeClient:
         is_buy = side.lower() == "buy"
         rounded_trigger = self._round_price_to_tick(asset_id, trigger_price)
 
-        order_wire = {
-            "a": asset_id,
-            "b": is_buy,
-            "p": str(rounded_trigger),
-            "s": str(normalized_size.normalize()),
-            "r": bool(reduce_only),
-            "t": {"trigger": {"isMarket": bool(is_market), "triggerPx": str(rounded_trigger), "tpsl": tpsl}},
-        }
-        action = {"type": "order", "orders": [order_wire], "grouping": "positionTpsl"}
+        action = build_trigger_order_action(
+            asset_id=asset_id,
+            is_buy=is_buy,
+            trigger_price=rounded_trigger,
+            size=normalized_size,
+            tpsl=tpsl,
+            reduce_only=reduce_only,
+            is_market=is_market,
+        )
 
         result = self._post_signed_action_with_vault_fallback(action)
         if result is None:
@@ -474,7 +446,7 @@ class HyperliquidExchangeClient:
             logger.error(f"Asset ID not found for cancel {coin} oid={order_id}")
             return False
 
-        action = {"type": "cancel", "cancels": [{"a": asset_id, "o": int(order_id)}]}
+        action = build_cancel_action(asset_id=asset_id, order_id=order_id)
         result = self._post_signed_action_with_vault_fallback(action)
         if result is None:
             return False
