@@ -449,9 +449,15 @@ class CycleOrchestrator:
         current_price = Decimal(str(mids.get(worst_coin, "0"))) if mids and worst_coin in mids else Decimal("0")
 
         if current_price > 0:
-            self.hl_rate_limiter.acquire(1)
-            result = self.exchange_client.place_order(worst_coin, side, close_size, current_price, reduce_only=True)
-            if result.get("success"):
+            close_ok, result = self._execute_trigger_close_with_retries(
+                coin=worst_coin,
+                side=side,
+                close_size=close_size,
+                current_price=current_price,
+                trigger="emergency",
+                previous_size=pos_size,
+            )
+            if close_ok:
                 self._cancel_exchange_protective_orders(worst_coin)
                 self.position_manager.remove_position(worst_coin)
                 logger.info(f"Emergency close executed for {worst_coin}")
@@ -474,7 +480,7 @@ class CycleOrchestrator:
                 self.state_store.add_trade_record(state, trade_record)
                 self.state_store.save_state(state)
                 return self._fetch_portfolio()
-            logger.error(f"Emergency close FAILED for {worst_coin}: {result}")
+            logger.error(f"Emergency close FAILED for {worst_coin} after retries: {result}")
 
         return portfolio
 
