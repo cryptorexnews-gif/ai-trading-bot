@@ -95,10 +95,11 @@ export default function useRuntimeConfig() {
   const [saving, setSaving] = useState(false)
   const [loadError, setLoadError] = useState('')
   const [availablePairs, setAvailablePairs] = useState(DEFAULT_PAIRS)
-  const [strategyMode, setStrategyMode] = useState('trend')
+  const [strategyMode, setStrategyModeState] = useState('trend')
   const [selectedPairs, setSelectedPairs] = useState(['BTC', 'ETH'])
   const [strategyParams, setStrategyParams] = useState({})
   const [defaultParams, setDefaultParams] = useState({})
+  const [strategyPresets, setStrategyPresets] = useState({ trend: {}, scalping: {} })
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -125,9 +126,16 @@ export default function useRuntimeConfig() {
       const runtimeParams = normalizeStrategyParams(runtime.strategy_params || {})
       const mergedParams = { ...defaults, ...runtimeParams }
 
+      const rawPresets = json.strategy_presets || {}
+      const normalizedPresets = {
+        trend: normalizeStrategyParams(rawPresets.trend || {}),
+        scalping: normalizeStrategyParams(rawPresets.scalping || {}),
+      }
+
+      setStrategyPresets(normalizedPresets)
       setAvailablePairs(available.length ? available : DEFAULT_PAIRS)
       setSelectedPairs(selected.length ? selected : ['BTC', 'ETH'])
-      setStrategyMode(mode === 'scalping' ? 'scalping' : 'trend')
+      setStrategyModeState(mode === 'scalping' ? 'scalping' : 'trend')
       setDefaultParams(defaults)
       setStrategyParams(mergedParams)
       setLoading(false)
@@ -148,18 +156,20 @@ export default function useRuntimeConfig() {
 
         setAvailablePairs(configPairs.length ? configPairs : DEFAULT_PAIRS)
         setSelectedPairs(configPairs.slice(0, 5).length ? configPairs.slice(0, 5) : ['BTC', 'ETH'])
-        setStrategyMode('trend')
+        setStrategyModeState('trend')
         setDefaultParams({})
         setStrategyParams({})
+        setStrategyPresets({ trend: {}, scalping: {} })
         setLoadError('Runtime config non disponibile: fallback attivo su config base.')
         setLoading(false)
         return
       } catch {
         setAvailablePairs(DEFAULT_PAIRS)
         setSelectedPairs(['BTC', 'ETH'])
-        setStrategyMode('trend')
+        setStrategyModeState('trend')
         setDefaultParams({})
         setStrategyParams({})
+        setStrategyPresets({ trend: {}, scalping: {} })
         setLoadError(`Caricamento runtime fallito: ${runtimeErr.message}`)
         setLoading(false)
       }
@@ -172,6 +182,17 @@ export default function useRuntimeConfig() {
       setLoadError('Errore imprevisto durante il caricamento.')
     })
   }, [load])
+
+  const setStrategyMode = useCallback((mode) => {
+    const normalized = String(mode || '').toLowerCase() === 'scalping' ? 'scalping' : 'trend'
+    setStrategyModeState(normalized)
+
+    const presetForMode = strategyPresets[normalized] || {}
+    if (Object.keys(presetForMode).length > 0) {
+      setStrategyParams({ ...presetForMode })
+      setDefaultParams({ ...presetForMode })
+    }
+  }, [strategyPresets])
 
   const toggleCoin = useCallback((coin) => {
     const normalized = String(coin || '').trim().toUpperCase()
@@ -244,7 +265,7 @@ export default function useRuntimeConfig() {
     const runtimeMode = String(runtime.strategy_mode || strategyMode).toLowerCase()
     const runtimeParams = normalizeStrategyParams(runtime.strategy_params || {})
 
-    setStrategyMode(runtimeMode === 'scalping' ? 'scalping' : 'trend')
+    setStrategyModeState(runtimeMode === 'scalping' ? 'scalping' : 'trend')
     setSelectedPairs(runtimeSelected.length ? runtimeSelected : normalizedSelected)
     setStrategyParams((prev) => ({ ...prev, ...runtimeParams }))
     setLoadError('')

@@ -63,61 +63,66 @@ def _mask_wallet(wallet: str) -> str:
     return f"{wallet[:6]}...{wallet[-4:]}"
 
 
+def _strategy_presets() -> dict:
+    # Preset ottimizzati, indipendenti dal .env
+    return {
+        "trend": {
+            "cycle_sec": "1800",
+            "min_cycle_sec": "900",
+            "max_cycle_sec": "3600",
+            "max_trades_per_cycle": "2",
+            "hard_max_leverage": "6",
+            "min_confidence_open": "0.72",
+            "min_confidence_manage": "0.50",
+            "max_order_margin_pct": "0.08",
+            "trade_cooldown_sec": "600",
+            "daily_notional_limit_usd": "1500",
+            "max_drawdown_pct": "0.12",
+            "max_single_asset_pct": "0.30",
+            "emergency_margin_threshold": "0.85",
+            "position_size_pct": "0.02",
+            "volume_confirmation_threshold": "1.6",
+            "sl_pct": "0.04",
+            "tp_pct": "0.10",
+            "break_even_activation_pct": "0.02",
+            "trailing_activation_pct": "0.03",
+            "trailing_callback": "0.015",
+        },
+        "scalping": {
+            "cycle_sec": "300",
+            "min_cycle_sec": "120",
+            "max_cycle_sec": "900",
+            "max_trades_per_cycle": "3",
+            "hard_max_leverage": "3",
+            "min_confidence_open": "0.68",
+            "min_confidence_manage": "0.50",
+            "max_order_margin_pct": "0.04",
+            "trade_cooldown_sec": "90",
+            "daily_notional_limit_usd": "500",
+            "max_drawdown_pct": "0.07",
+            "max_single_asset_pct": "0.20",
+            "emergency_margin_threshold": "0.78",
+            "position_size_pct": "0.01",
+            "volume_confirmation_threshold": "1.3",
+            "sl_pct": "0.015",
+            "tp_pct": "0.03",
+            "break_even_activation_pct": "0.008",
+            "trailing_activation_pct": "0.012",
+            "trailing_callback": "0.008",
+        },
+    }
+
+
 def _default_strategy_params(strategy_mode: str) -> dict:
     mode = str(strategy_mode or "trend").strip().lower()
-    if mode == "scalping":
-        return {
-            "cycle_sec": os.getenv("SCALPING_DEFAULT_CYCLE_SEC", "300"),
-            "min_cycle_sec": os.getenv("SCALPING_MIN_CYCLE_SEC", "300"),
-            "max_cycle_sec": os.getenv("SCALPING_MAX_CYCLE_SEC", "900"),
-            "max_trades_per_cycle": os.getenv("SCALPING_MAX_TRADES_PER_CYCLE", "3"),
-            "hard_max_leverage": os.getenv("SCALPING_HARD_MAX_LEVERAGE", "2"),
-            "min_confidence_open": os.getenv("SCALPING_MIN_CONFIDENCE_OPEN", "0.66"),
-            "min_confidence_manage": os.getenv("SCALPING_MIN_CONFIDENCE_MANAGE", "0.45"),
-            "max_order_margin_pct": os.getenv("SCALPING_MAX_ORDER_MARGIN_PCT", "0.06"),
-            "trade_cooldown_sec": os.getenv("SCALPING_TRADE_COOLDOWN_SEC", "120"),
-            "daily_notional_limit_usd": os.getenv("SCALPING_DAILY_NOTIONAL_LIMIT_USD", "25"),
-            "max_drawdown_pct": os.getenv("SCALPING_MAX_DRAWDOWN_PCT", "0.08"),
-            "max_single_asset_pct": os.getenv("SCALPING_MAX_SINGLE_ASSET_PCT", "0.25"),
-            "emergency_margin_threshold": os.getenv("SCALPING_EMERGENCY_MARGIN_THRESHOLD", "0.80"),
-            "position_size_pct": os.getenv("SCALPING_POSITION_SIZE_PCT", "0.01"),
-            "volume_confirmation_threshold": os.getenv("SCALPING_VOLUME_CONFIRMATION_THRESHOLD", "1.2"),
-            "sl_pct": os.getenv("SCALPING_SL_PCT", "0.02"),
-            "tp_pct": os.getenv("SCALPING_TP_PCT", "0.04"),
-            "break_even_activation_pct": os.getenv("SCALPING_BREAK_EVEN_ACTIVATION_PCT", "0.01"),
-            "trailing_activation_pct": os.getenv("SCALPING_TRAILING_ACTIVATION_PCT", "0.015"),
-            "trailing_callback": os.getenv("SCALPING_TRAILING_CALLBACK", "0.01"),
-        }
-
-    return {
-        "cycle_sec": os.getenv("DEFAULT_CYCLE_SEC", "1800"),
-        "min_cycle_sec": os.getenv("MIN_CYCLE_SEC", "900"),
-        "max_cycle_sec": os.getenv("MAX_CYCLE_SEC", "3600"),
-        "max_trades_per_cycle": os.getenv("MAX_TRADES_PER_CYCLE", "2"),
-        "hard_max_leverage": os.getenv("HARD_MAX_LEVERAGE", "10"),
-        "min_confidence_open": os.getenv("MIN_CONFIDENCE_OPEN", "0.72"),
-        "min_confidence_manage": os.getenv("MIN_CONFIDENCE_MANAGE", "0.50"),
-        "max_order_margin_pct": os.getenv("MAX_ORDER_MARGIN_PCT", "0.1"),
-        "trade_cooldown_sec": os.getenv("TRADE_COOLDOWN_SEC", "300"),
-        "daily_notional_limit_usd": os.getenv("DAILY_NOTIONAL_LIMIT_USD", "1000"),
-        "max_drawdown_pct": os.getenv("MAX_DRAWDOWN_PCT", "0.15"),
-        "max_single_asset_pct": os.getenv("MAX_SINGLE_ASSET_PCT", "0.35"),
-        "emergency_margin_threshold": os.getenv("EMERGENCY_MARGIN_THRESHOLD", "0.88"),
-        "position_size_pct": os.getenv("TREND_POSITION_SIZE_PCT", "0.02"),
-        "volume_confirmation_threshold": os.getenv("VOLUME_CONFIRMATION_THRESHOLD", "1.6"),
-        "sl_pct": os.getenv("TREND_SL_PCT", "0.04"),
-        "tp_pct": os.getenv("TREND_TP_PCT", "0.08"),
-        "break_even_activation_pct": os.getenv("TREND_BREAK_EVEN_ACTIVATION_PCT", "0.02"),
-        "trailing_activation_pct": os.getenv("TREND_TRAILING_ACTIVATION_PCT", "0.03"),
-        "trailing_callback": os.getenv("TREND_TRAILING_CALLBACK", "0.02"),
-    }
+    presets = _strategy_presets()
+    return presets["scalping"] if mode == "scalping" else presets["trend"]
 
 
 def _normalize_strategy_params(raw_params: dict) -> tuple[dict, str]:
     if not isinstance(raw_params, dict):
         return {}, "invalid_strategy_params"
 
-    # Ora secondi e interi accettano input diretto semplice: 1 = 1 secondo, 1 = 1 trade
     int_keys = {
         "cycle_sec": (1, 86400),
         "min_cycle_sec": (1, 86400),
@@ -144,7 +149,6 @@ def _normalize_strategy_params(raw_params: dict) -> tuple[dict, str]:
         "trailing_callback": (Decimal("0"), Decimal("1")),
     }
 
-    # Campi percentuali: accetta sia 2 (=2%) sia 0.02 (=2%)
     percent_keys = {
         "min_confidence_open",
         "min_confidence_manage",
@@ -528,9 +532,12 @@ def runtime_config():
 
     runtime = _runtime_store.load()
     mode = str(runtime.get("strategy_mode", "trend")).strip().lower()
+    presets = _strategy_presets()
+
     return jsonify({
         "runtime_config": runtime,
         "default_strategy_params": _default_strategy_params(mode),
+        "strategy_presets": presets,
         "available_pairs": _get_hyperliquid_available_pairs(),
         "timestamp": time.time()
     })
@@ -573,9 +580,17 @@ def update_runtime_config():
     if len(normalized_pairs) > 20:
         return jsonify({"error": "too_many_coins_max_20"}), 400
 
-    runtime_current = _runtime_store.load()
-    incoming_params = payload.get("strategy_params", runtime_current.get("strategy_params", {}))
-    normalized_params, params_error = _normalize_strategy_params(incoming_params)
+    preset_params = _default_strategy_params(strategy_mode)
+    provided_params = payload.get("strategy_params", None)
+
+    if provided_params is None:
+        merged_params = dict(preset_params)
+    elif isinstance(provided_params, dict):
+        merged_params = {**preset_params, **provided_params}
+    else:
+        return jsonify({"error": "invalid_strategy_params"}), 400
+
+    normalized_params, params_error = _normalize_strategy_params(merged_params)
     if params_error:
         return jsonify({"error": params_error}), 400
 

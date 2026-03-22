@@ -116,9 +116,7 @@ export default function RuntimeControls() {
             </button>
           </div>
           <p className="text-[11px] text-gray-500 mt-2">
-            {strategyMode === 'scalping'
-              ? 'Profilo rapido/aggressivo, parametrizzabile da UI.'
-              : 'Profilo trend multi-timeframe, parametrizzabile da UI.'}
+            Cambiando strategia, i parametri preset ottimizzati vengono applicati automaticamente.
           </p>
         </div>
 
