@@ -37,11 +37,13 @@ def _is_valid_eth_address(value: str) -> bool:
 class BotConfig:
     """Configuration for the Hyperliquid Trading Bot."""
 
-    REQUIRED_LLM_MODEL = "anthropic/claude-opus-4.6"
+    REQUIRED_LLM_MODEL = "deepseek/deepseek-v3.2"
 
     def __init__(self):
         self.wallet_address = _env("HYPERLIQUID_WALLET_ADDRESS", "")
-        self.vault_address = _env("HYPERLIQUID_VAULT_ADDRESS", "").strip()
+        self._vault_address_env = _env("HYPERLIQUID_VAULT_ADDRESS", "").strip()
+        # Forza modalità wallet+private key: niente vault per ordini/gestione posizioni
+        self.vault_address = ""
         self.execution_mode = _env("EXECUTION_MODE", "paper").lower()
         self.enable_mainnet_trading = _env_bool("ENABLE_MAINNET_TRADING", False)
         self.base_url = _env("HYPERLIQUID_BASE_URL", "https://api.hyperliquid.xyz")
@@ -147,39 +149,29 @@ class BotConfig:
                 f"Expected 0x-prefixed 42-character hex string, got: {self.wallet_address[:10]}..."
             )
 
-        if self.vault_address and not _is_valid_eth_address(self.vault_address):
-            raise SystemExit(
-                f"CRITICAL: HYPERLIQUID_VAULT_ADDRESS has invalid format. "
-                f"Expected 0x-prefixed 42-character hex string, got: {self.vault_address[:10]}..."
+        # Se presente, ignoriamo esplicitamente il vault e lo azzeriamo anche a runtime
+        # per evitare qualsiasi riutilizzo involontario nei client.
+        if self._vault_address_env:
+            warnings.append(
+                "HYPERLIQUID_VAULT_ADDRESS presente ma ignorato: il bot usa solo "
+                "HYPERLIQUID_WALLET_ADDRESS + HYPERLIQUID_PRIVATE_KEY."
             )
+            os.environ["HYPERLIQUID_VAULT_ADDRESS"] = ""
+        self.vault_address = ""
 
         from exchange_client import HyperliquidExchangeClient
         from eth_account import Account
 
         signer_address = Account.from_key(private_key).address
 
-        if self.vault_address:
-            # API wallet mode: signer wallet can differ from trading wallet.
-            if signer_address.lower() == self.wallet_address.lower():
-                warnings.append(
-                    "HYPERLIQUID_VAULT_ADDRESS coincide col signer wallet: disabilito automaticamente vault mode."
-                )
-                self.vault_address = ""
-            else:
-                warnings.append(
-                    f"Vault mode enabled: signer={self.mask_wallet(signer_address)} "
-                    f"acting for vault={self.mask_wallet(self.vault_address)}"
-                )
-
-        if not self.vault_address:
-            # Standard mode: signer must match wallet address.
-            if not HyperliquidExchangeClient.validate_wallet_address(private_key, self.wallet_address):
-                derived = signer_address
-                raise SystemExit(
-                    f"CRITICAL: HYPERLIQUID_WALLET_ADDRESS ({self.wallet_address}) does not match "
-                    f"the address derived from HYPERLIQUID_PRIVATE_KEY ({derived[:6]}...{derived[-4:]}). "
-                    f"Fix your .env configuration."
-                )
+        # Modalità standard obbligatoria: signer deve coincidere col wallet configurato.
+        if not HyperliquidExchangeClient.validate_wallet_address(private_key, self.wallet_address):
+            derived = signer_address
+            raise SystemExit(
+                f"CRITICAL: HYPERLIQUID_WALLET_ADDRESS ({self.wallet_address}) does not match "
+                f"the address derived from HYPERLIQUID_PRIVATE_KEY ({derived[:6]}...{derived[-4:]}). "
+                f"Fix your .env configuration."
+            )
 
         if self.llm_model != self.REQUIRED_LLM_MODEL:
             warnings.append(
