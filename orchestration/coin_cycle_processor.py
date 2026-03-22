@@ -11,11 +11,8 @@ from models import MarketData, PortfolioState
 from notifier import Notifier
 from orchestration.coin_processing_utils import log_coin_indicators
 from orchestration.decision_service import get_decision_for_coin
-from orchestration.execution_result_service import (
-    build_trade_record,
-    normalize_executed_price_and_size,
-)
-from orchestration.fill_verification_service import verify_fill_after_execution
+from orchestration.execution_flow_service import execute_and_verify_trade
+from orchestration.execution_result_service import build_trade_record
 from orchestration.post_trade_service import handle_successful_execution
 from orchestration.risk_gate_service import evaluate_trade_gates
 from order_verifier import OrderVerifier
@@ -146,33 +143,17 @@ class CoinCycleProcessor:
             self.metrics.increment("holds_total")
             return {"trades": 0, "notional": Decimal("0"), "failed": False}
 
-        snapshot = None
-        if self.cfg.execution_mode == "live" and self.cfg.enable_mainnet_trading:
-            snapshot = self.order_verifier.snapshot_position(self.cfg.wallet_address, coin)
-
-        result = self.execution_engine.execute(coin, decision, market_data, portfolio.positions)
-
-        executed_price, executed_size = normalize_executed_price_and_size(
-            result=result,
-            market_price=market_data.last_price,
-            requested_size=Decimal(str(decision["size"])),
+        result, executed_price, executed_size, fill_status = execute_and_verify_trade(
+            cfg=self.cfg,
+            execution_engine=self.execution_engine,
+            order_verifier=self.order_verifier,
+            portfolio_service=self.portfolio_service,
+            coin=coin,
+            decision=decision,
+            market_data=market_data,
+            positions=portfolio.positions,
+            logger=logger,
         )
-
-        fill_status = "unknown"
-        if snapshot and result["success"] and decision["action"] in ["buy", "sell", "increase_position"]:
-            fill_status, fill_ok, failure_reason = verify_fill_after_execution(
-                wallet_address=self.cfg.wallet_address,
-                order_verifier=self.order_verifier,
-                portfolio_service=self.portfolio_service,
-                coin=coin,
-                decision=decision,
-                snapshot=snapshot,
-                executed_size=executed_size,
-                logger=logger,
-            )
-            if not fill_ok:
-                result["success"] = False
-                result["reason"] = failure_reason
 
         trade_record = build_trade_record(
             coin=coin,
