@@ -242,10 +242,6 @@ class OrderExecutionService:
             if normalized_size <= 0:
                 return {"success": False, "reason": f"invalid_size:{coin}"}
 
-            raw_px = safe_decimal(order.get("limit_px", "0"), Decimal("0"))
-            if raw_px <= 0:
-                return {"success": False, "reason": f"invalid_limit_px:{coin}"}
-
             order_type = order.get("order_type", {"limit": {"tif": "Gtc"}})
             if not isinstance(order_type, dict):
                 return {"success": False, "reason": f"invalid_order_type:{coin}"}
@@ -255,16 +251,27 @@ class OrderExecutionService:
                 trigger_px = safe_decimal(trigger_obj.get("triggerPx", "0"), Decimal("0"))
                 if trigger_px <= 0:
                     return {"success": False, "reason": f"invalid_trigger_px:{coin}"}
+
                 rounded_trigger = self.client._round_price_to_tick(asset_id, trigger_px)
+                is_market = bool(trigger_obj.get("isMarket", True))
+
+                raw_px = safe_decimal(order.get("limit_px", "0"), Decimal("0"))
+                if not is_market and raw_px <= 0:
+                    return {"success": False, "reason": f"invalid_limit_px:{coin}"}
+
+                rounded_px = Decimal("0") if is_market else self.client._round_price_to_tick(asset_id, raw_px)
+
                 order_type = {
                     "trigger": {
-                        "isMarket": bool(trigger_obj.get("isMarket", True)),
+                        "isMarket": is_market,
                         "triggerPx": str(rounded_trigger),
                         "tpsl": str(trigger_obj.get("tpsl", "")).strip().lower(),
                     }
                 }
-                rounded_px = self.client._round_price_to_tick(asset_id, raw_px)
             else:
+                raw_px = safe_decimal(order.get("limit_px", "0"), Decimal("0"))
+                if raw_px <= 0:
+                    return {"success": False, "reason": f"invalid_limit_px:{coin}"}
                 rounded_px = self.client._resolve_limit_price(
                     coin=coin,
                     side=side,
