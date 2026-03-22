@@ -133,6 +133,18 @@ class StateStore:
 
         return False
 
+    @staticmethod
+    def _extract_trade_pnl(trade: Dict[str, Any]) -> Decimal:
+        """
+        Estrae un pnl numerico quando disponibile.
+        Priorità: realized_pnl -> closed_pnl
+        """
+        if "realized_pnl" in trade:
+            return Decimal(str(trade.get("realized_pnl", "0")))
+        if "closed_pnl" in trade:
+            return Decimal(str(trade.get("closed_pnl", "0")))
+        return Decimal("0")
+
     def get_performance_summary(self, state: Dict[str, Any]) -> Dict[str, Any]:
         history = state.get("trade_history", [])
         if not history:
@@ -146,7 +158,11 @@ class StateStore:
                 "failed_executions": 0,
                 "executed_trades": 0,
                 "classified_trades": 0,
-                "consecutive_losses": 0
+                "consecutive_losses": 0,
+                "avg_win": "0",
+                "avg_loss": "0",
+                "profit_factor": "0",
+                "total_realized_pnl": "0",
             }
 
         trade_actions = {"buy", "sell", "close_position", "increase_position", "reduce_position"}
@@ -157,6 +173,10 @@ class StateStore:
         holds = 0
         failed_executions = 0
         executed_trades = 0
+
+        total_win_pnl = Decimal("0")
+        total_loss_pnl_abs = Decimal("0")
+        total_realized_pnl = Decimal("0")
 
         for t in history:
             action = str(t.get("action", "")).strip().lower()
@@ -172,12 +192,16 @@ class StateStore:
 
             executed_trades += 1
 
-            if "realized_pnl" in t:
-                realized = Decimal(str(t.get("realized_pnl", "0")))
-                if realized > 0:
+            pnl = self._extract_trade_pnl(t)
+            total_realized_pnl += pnl
+
+            if "realized_pnl" in t or "closed_pnl" in t:
+                if pnl > 0:
                     wins += 1
-                elif realized < 0:
+                    total_win_pnl += pnl
+                elif pnl < 0:
                     losses += 1
+                    total_loss_pnl_abs += abs(pnl)
                 continue
 
             if action == "close_position":
@@ -189,6 +213,10 @@ class StateStore:
         classified_trades = wins + losses
         win_rate = (wins / classified_trades * 100) if classified_trades > 0 else 0.0
 
+        avg_win = (total_win_pnl / Decimal(str(wins))) if wins > 0 else Decimal("0")
+        avg_loss = (total_loss_pnl_abs / Decimal(str(losses))) if losses > 0 else Decimal("0")
+        profit_factor = (total_win_pnl / total_loss_pnl_abs) if total_loss_pnl_abs > 0 else Decimal("0")
+
         return {
             "total_trades": classified_trades,
             "wins": wins,
@@ -198,5 +226,10 @@ class StateStore:
             "executed_trades": executed_trades,
             "classified_trades": classified_trades,
             "win_rate": win_rate,
-            "consecutive_losses": state.get("consecutive_losses", 0)
+            "consecutive_losses": state.get("consecutive_losses", 0),
+            "total_pnl": str(total_realized_pnl),
+            "total_realized_pnl": str(total_realized_pnl),
+            "avg_win": str(avg_win),
+            "avg_loss": str(avg_loss),
+            "profit_factor": str(profit_factor),
         }
