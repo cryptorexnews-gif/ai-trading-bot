@@ -13,7 +13,6 @@ from exchange.market_rules import (
 from exchange.order_builder import (
     build_cancel_action,
     build_limit_order_action,
-    build_trigger_order_action,
     build_update_leverage_action,
 )
 from exchange.parsers import (
@@ -131,28 +130,19 @@ class HyperliquidExchangeClient:
 
         direct_oid = order.get("oid")
         if direct_oid is not None:
-            try:
-                return int(direct_oid)
-            except (TypeError, ValueError):
-                pass
+            return int(direct_oid)
 
         nested_order = order.get("order", {})
         if isinstance(nested_order, dict):
             nested_oid = nested_order.get("oid")
             if nested_oid is not None:
-                try:
-                    return int(nested_oid)
-                except (TypeError, ValueError):
-                    pass
+                return int(nested_oid)
 
         resting = order.get("resting", {})
         if isinstance(resting, dict):
             resting_oid = resting.get("oid")
             if resting_oid is not None:
-                try:
-                    return int(resting_oid)
-                except (TypeError, ValueError):
-                    pass
+                return int(resting_oid)
 
         return None
 
@@ -312,10 +302,9 @@ class HyperliquidExchangeClient:
             )
 
         for c in candidates:
-            if isinstance(c, bool):
-                if c:
-                    return True
-            elif str(c).strip().lower() in {"true", "1"}:
+            if isinstance(c, bool) and c:
+                return True
+            if str(c).strip().lower() in {"true", "1"}:
                 return True
         return False
 
@@ -452,7 +441,6 @@ class HyperliquidExchangeClient:
     def _select_best_match_oid(self, matches: List[Dict[str, Any]], trigger_price: Decimal) -> Optional[int]:
         if not matches:
             return None
-
         best = min(matches, key=lambda m: abs(m["trigger_px"] - trigger_price))
         return int(best["oid"])
 
@@ -516,7 +504,6 @@ class HyperliquidExchangeClient:
 
         if not candidates:
             return None
-
         return max(candidates)
 
     def _wait_for_trigger_order_id(
@@ -918,16 +905,15 @@ class HyperliquidExchangeClient:
             )
             return {"success": True, "order_id": existing_oid}
 
-        is_buy = normalized_side == "buy"
-        action = build_trigger_order_action(
-            asset_id=asset_id,
-            is_buy=is_buy,
-            trigger_price=rounded_trigger,
-            size=normalized_size,
-            tpsl=tpsl,
-            reduce_only=reduce_only,
-            is_market=is_market,
-        )
+        order_wire = {
+            "a": asset_id,
+            "b": normalized_side == "buy",
+            "p": str(rounded_trigger),
+            "s": str(normalized_size.normalize()),
+            "r": bool(reduce_only),
+            "t": {"trigger": {"isMarket": bool(is_market), "triggerPx": str(rounded_trigger), "tpsl": tpsl}},
+        }
+        action = {"type": "order", "orders": [order_wire], "grouping": "normalTpsl"}
 
         result = self._post_signed_action_with_master_retry(action)
         if result is None:
@@ -948,12 +934,7 @@ class HyperliquidExchangeClient:
 
         immediate_oids = extract_order_ids(result)
         if immediate_oids:
-            order_id = int(immediate_oids[0])
-            logger.info(
-                f"Trigger order acknowledged with immediate oid for {coin} {tpsl.upper()} "
-                f"{normalized_side.upper()} oid={order_id}"
-            )
-            return {"success": True, "order_id": order_id}
+            return {"success": True, "order_id": int(immediate_oids[0])}
 
         order_id = self._wait_for_trigger_order_id(
             user=self.account.address,
@@ -976,10 +957,6 @@ class HyperliquidExchangeClient:
                 tpsl=tpsl,
                 keep_oid=order_id,
             )
-            logger.info(
-                f"LIVE trigger order placed {coin} {tpsl.upper()} {normalized_side.upper()} "
-                f"size={normalized_size} trigger={rounded_trigger} oid={order_id}"
-            )
             return {"success": True, "order_id": order_id}
 
         fallback_oid = self._find_latest_protective_order_id(
@@ -995,11 +972,94 @@ class HyperliquidExchangeClient:
             )
             return {"success": True, "order_id": fallback_oid}
 
-        logger.warning(
-            f"Trigger order accepted but oid unresolved for {coin} {tpsl.upper()} "
-            f"{normalized_side.upper()} size={normalized_size} trigger={rounded_trigger}"
-        )
         return {"success": False, "reason": "missing_trigger_order_id"}
+
+    def bulk_orders(self, orders: List[Dict[str, Any]], grouping: str = "na") -> Dict[str, Any]:
+        if not self._live_orders_enabled():
+            return {"success": False, "reason": "live_disabled_fail_closed"}
+
+        if not isinstance(orders, list) or len(orders) == 0:
+            return {"success": False, "reason": "empty_orders"}
+
+        wire_orders: List[Dict[str, Any]] = []
+
+        for order in orders:
+            coin = str(order.get("coin", "")).strip().upper()
+            if not coin:
+                return {"success": False, "reason": "missing_coin"}
+
+            asset_id = self.get_asset_id(coin)
+            if asset_id is None:
+                return {"success": False, "reason": f"asset_not_found:{coin}"}
+
+            is_buy = bool(order.get("is_buy", False))
+            side = "buy" if is_buy else "sell"
+
+            raw_size = safe_decimal(order.get("sz", "0"), Decimal("0"))
+            normalized_size = self._normalize_size_for_coin(coin, abs(raw_size))
+            if normalized_size <= 0:
+                return {"success": False, "reason": f"invalid_size:{coin}"}
+
+            raw_px = safe_decimal(order.get("limit_px", "0"), Decimal("0"))
+            if raw_px <= 0:
+                return {"success": False, "reason": f"invalid_limit_px:{coin}"}
+
+            order_type = order.get("order_type", {"limit": {"tif": "Gtc"}})
+            if not isinstance(order_type, dict):
+                return {"success": False, "reason": f"invalid_order_type:{coin}"}
+
+            if "trigger" in order_type:
+                trigger_obj = order_type.get("trigger", {})
+                trigger_px = safe_decimal(trigger_obj.get("triggerPx", "0"), Decimal("0"))
+                if trigger_px <= 0:
+                    return {"success": False, "reason": f"invalid_trigger_px:{coin}"}
+                rounded_trigger = self._round_price_to_tick(asset_id, trigger_px)
+                order_type = {
+                    "trigger": {
+                        "isMarket": bool(trigger_obj.get("isMarket", True)),
+                        "triggerPx": str(rounded_trigger),
+                        "tpsl": str(trigger_obj.get("tpsl", "")).strip().lower(),
+                    }
+                }
+                rounded_px = self._round_price_to_tick(asset_id, raw_px)
+            else:
+                rounded_px = self._resolve_limit_price(
+                    coin=coin,
+                    side=side,
+                    desired_price=raw_px,
+                    asset_id=asset_id,
+                )
+
+            reduce_only = bool(order.get("reduce_only", False))
+
+            wire_orders.append(
+                {
+                    "a": asset_id,
+                    "b": is_buy,
+                    "p": str(rounded_px),
+                    "s": str(normalized_size.normalize()),
+                    "r": reduce_only,
+                    "t": order_type,
+                }
+            )
+
+        action = {"type": "order", "orders": wire_orders, "grouping": grouping}
+        result = self._post_signed_action_with_master_retry(action)
+
+        if result is None:
+            return {"success": False, "reason": "http_error"}
+        if not self._is_ok_result(result):
+            return {"success": False, "reason": "exchange_rejected", "raw": result}
+
+        statuses = extract_statuses(result)
+        status_error = get_first_status_error(statuses)
+        if status_error is not None:
+            return {"success": False, "reason": "status_error", "raw": result}
+
+        if statuses and not has_acknowledged_order_status(statuses):
+            return {"success": False, "reason": "not_acknowledged", "raw": result}
+
+        return {"success": True, "order_ids": extract_order_ids(result), "raw": result}
 
     def cancel_order(self, coin: str, order_id: int) -> bool:
         if not self._live_orders_enabled():
@@ -1099,75 +1159,99 @@ class HyperliquidExchangeClient:
         if current_take_profit_order_id is not None:
             self.cancel_order(coin, current_take_profit_order_id)
 
-        sl_res = self.place_trigger_order(
+        is_close_buy = close_side == "buy"
+        orders = [
+            {
+                "coin": coin,
+                "is_buy": is_close_buy,
+                "sz": close_size,
+                "limit_px": stop_loss_price,
+                "order_type": {
+                    "trigger": {
+                        "isMarket": True,
+                        "triggerPx": stop_loss_price,
+                        "tpsl": "sl",
+                    }
+                },
+                "reduce_only": True,
+            },
+            {
+                "coin": coin,
+                "is_buy": is_close_buy,
+                "sz": close_size,
+                "limit_px": take_profit_price,
+                "order_type": {
+                    "trigger": {
+                        "isMarket": True,
+                        "triggerPx": take_profit_price,
+                        "tpsl": "tp",
+                    }
+                },
+                "reduce_only": True,
+            },
+        ]
+
+        bulk_res = self.bulk_orders(orders, grouping="normalTpsl")
+        if not bulk_res.get("success"):
+            return {"success": False, "reason": f"bulk_tpsl_failed:{bulk_res.get('reason', 'unknown')}"}
+
+        sl_id = self._wait_for_trigger_order_id(
+            user=self.account.address,
             coin=coin,
             side=close_side,
             size=close_size,
             trigger_price=stop_loss_price,
             tpsl="sl",
-            reduce_only=True,
-            is_market=True,
+            attempts=8,
+            delay_sec=0.5,
         )
-        if not sl_res.get("success"):
-            return {"success": False, "reason": f"stop_loss_place_failed:{sl_res.get('reason', 'unknown')}"}
+        tp_id = self._wait_for_trigger_order_id(
+            user=self.account.address,
+            coin=coin,
+            side=close_side,
+            size=close_size,
+            trigger_price=take_profit_price,
+            tpsl="tp",
+            attempts=8,
+            delay_sec=0.5,
+        )
 
-        sl_id = sl_res.get("order_id")
         if sl_id is None:
-            return {"success": False, "reason": "stop_loss_missing_order_id"}
-
-        tp_res: Dict[str, Any] = {"success": False, "reason": "not_attempted"}
-        max_tp_attempts = 4
-
-        for attempt in range(1, max_tp_attempts + 1):
-            tp_res = self.place_trigger_order(
-                coin=coin,
-                side=close_side,
-                size=close_size,
-                trigger_price=take_profit_price,
-                tpsl="tp",
-                reduce_only=True,
-                is_market=True,
-            )
-            if tp_res.get("success"):
-                break
-
-            reason = str(tp_res.get("reason", "unknown"))
-            if not self._is_retryable_trigger_reason(reason) or attempt == max_tp_attempts:
-                break
-
-            backoff = 0.35 + (attempt * 0.25)
-            logger.warning(
-                f"{coin} TP placement retry {attempt}/{max_tp_attempts} failed ({reason}), retry in {backoff:.2f}s"
-            )
-            time.sleep(backoff)
-
-        if not tp_res.get("success"):
-            tp_existing = self._wait_for_trigger_order_id(
+            sl_id = self._find_latest_protective_order_id(
                 user=self.account.address,
                 coin=coin,
                 side=close_side,
-                size=close_size,
-                trigger_price=take_profit_price,
-                tpsl="tp",
-                attempts=4,
-                delay_sec=0.4,
+                tpsl="sl",
             )
-            if tp_existing is not None:
-                tp_res = {"success": True, "order_id": tp_existing}
-
-        if not tp_res.get("success"):
-            logger.error(
-                f"{coin} TP failed after retries; keeping SL active (sl_id={sl_id}). "
-                f"reason={tp_res.get('reason', 'unknown')}"
-            )
-            return {
-                "success": False,
-                "reason": f"take_profit_place_failed:{tp_res.get('reason', 'unknown')}",
-            }
-
-        tp_id = tp_res.get("order_id")
         if tp_id is None:
-            return {"success": False, "reason": "take_profit_missing_order_id"}
+            tp_id = self._find_latest_protective_order_id(
+                user=self.account.address,
+                coin=coin,
+                side=close_side,
+                tpsl="tp",
+            )
+
+        if sl_id is None or tp_id is None:
+            return {"success": False, "reason": "missing_trigger_order_id_after_bulk"}
+
+        self._cancel_duplicate_trigger_orders(
+            user=self.account.address,
+            coin=coin,
+            side=close_side,
+            size=close_size,
+            trigger_price=stop_loss_price,
+            tpsl="sl",
+            keep_oid=sl_id,
+        )
+        self._cancel_duplicate_trigger_orders(
+            user=self.account.address,
+            coin=coin,
+            side=close_side,
+            size=close_size,
+            trigger_price=take_profit_price,
+            tpsl="tp",
+            keep_oid=tp_id,
+        )
 
         return {
             "success": True,
