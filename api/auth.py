@@ -1,54 +1,27 @@
 import hmac
 import os
 from functools import wraps
-from ipaddress import ip_address
 
 from flask import jsonify, request
 
 from api.config import API_AUTH_KEY
-
-
-def _env_bool(key: str, default: bool = False) -> bool:
-    val = os.getenv(key, "").strip().lower()
-    if val in ("true", "1", "yes", "on"):
-        return True
-    if val in ("false", "0", "no", "off"):
-        return False
-    return default
-
-
-def _is_loopback_ip(value: str) -> bool:
-    if not value:
-        return False
-
-    candidate = value.strip()
-
-    if candidate.startswith("::ffff:"):
-        candidate = candidate.replace("::ffff:", "", 1)
-
-    if candidate.count(":") == 1 and "." in candidate:
-        candidate = candidate.split(":", 1)[0]
-
-    try:
-        return ip_address(candidate).is_loopback
-    except ValueError:
-        return candidate in ("localhost",)
+from api.security_utils import env_bool, is_loopback_ip
 
 
 def _is_server_loopback_bound() -> bool:
     host = os.getenv("API_HOST", "127.0.0.1").strip()
-    return _is_loopback_ip(host)
+    return is_loopback_ip(host)
 
 
 def _is_local_socket_request() -> bool:
     remote_addr = (request.remote_addr or "").strip()
-    return _is_loopback_ip(remote_addr)
+    return is_loopback_ip(remote_addr)
 
 
 def require_api_key(f):
     @wraps(f)
     def decorated(*args, **kwargs):
-        allow_localhost_bypass = _env_bool("ALLOW_LOCALHOST_BYPASS", True)
+        allow_localhost_bypass = env_bool("ALLOW_LOCALHOST_BYPASS", True)
 
         if allow_localhost_bypass and _is_server_loopback_bound() and _is_local_socket_request():
             return f(*args, **kwargs)

@@ -4,7 +4,6 @@ import logging
 import os
 import time
 from decimal import Decimal
-from ipaddress import ip_address
 from typing import Any, Dict
 
 from flask import request
@@ -26,6 +25,7 @@ except ModuleNotFoundError:
 
 from api.config import API_AUTH_KEY, LIVE_STATUS_PATH, METRICS_PATH, STATE_PATH
 from api.helpers import post_hyperliquid_info, read_json_file
+from api.security_utils import env_bool, is_loopback_ip
 from state_store import StateStore
 from utils.circuit_breaker import get_all_circuit_states
 from utils.rate_limiter import get_all_rate_limiter_stats
@@ -36,38 +36,12 @@ sock = Sock()
 _state_store = StateStore(STATE_PATH, METRICS_PATH)
 
 
-def _is_loopback_ip(value: str) -> bool:
-    if not value:
-        return False
-
-    candidate = value.strip()
-    if candidate.startswith("::ffff:"):
-        candidate = candidate.replace("::ffff:", "", 1)
-
-    if candidate.count(":") == 1 and "." in candidate:
-        candidate = candidate.split(":", 1)[0]
-
-    try:
-        return ip_address(candidate).is_loopback
-    except ValueError:
-        return candidate in ("localhost",)
-
-
-def _env_bool(key: str, default: bool = False) -> bool:
-    raw = os.getenv(key, "").strip().lower()
-    if raw in ("true", "1", "yes", "on"):
-        return True
-    if raw in ("false", "0", "no", "off"):
-        return False
-    return default
-
-
 def _is_authorized() -> bool:
-    allow_localhost_bypass = _env_bool("ALLOW_LOCALHOST_BYPASS", True)
+    allow_localhost_bypass = env_bool("ALLOW_LOCALHOST_BYPASS", True)
     api_host = os.getenv("API_HOST", "127.0.0.1").strip()
     remote_addr = (request.remote_addr or "").strip()
 
-    if allow_localhost_bypass and _is_loopback_ip(api_host) and _is_loopback_ip(remote_addr):
+    if allow_localhost_bypass and is_loopback_ip(api_host) and is_loopback_ip(remote_addr):
         return True
 
     if not API_AUTH_KEY:
