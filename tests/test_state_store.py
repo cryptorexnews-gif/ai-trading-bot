@@ -159,14 +159,14 @@ def test_performance_summary_with_trades():
         store.add_trade_record(state, {"action": "close_position", "success": True, "trigger": "take_profit"})
         store.add_trade_record(state, {"action": "close_position", "success": True, "trigger": "stop_loss"})
 
-        # Success open trade (executed but not classifiable for win/loss)
+        # Success open trade (executed but non-classified for win/loss)
         store.add_trade_record(state, {"action": "buy", "success": True})
 
-        # Hold + explicit failure
+        # Hold + failed
         store.add_trade_record(state, {"action": "hold", "success": True})
         store.add_trade_record(state, {"action": "buy", "success": False})
 
-        # Legacy-like failures wrongly marked success=True but with error status/reason
+        # Legacy-like failed records
         store.add_trade_record(state, {"action": "increase_position", "success": True, "order_status": "not_filled"})
         store.add_trade_record(state, {"action": "increase_position", "success": True, "reason": "set_leverage_failed"})
 

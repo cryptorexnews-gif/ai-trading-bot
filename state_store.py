@@ -39,6 +39,7 @@ class StateStore:
         data = read_json_file(self.state_path, default=None)
         if data is None:
             return self._default_state()
+
         defaults = self._default_state()
         for key, value in defaults.items():
             if key not in data:
@@ -119,7 +120,6 @@ class StateStore:
 
     @staticmethod
     def _is_failed_transaction(trade: Dict[str, Any]) -> bool:
-        """Strict failure detection (including legacy/partial records)."""
         if not bool(trade.get("success", False)):
             return True
 

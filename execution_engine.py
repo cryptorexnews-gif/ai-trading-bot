@@ -1,9 +1,12 @@
+import logging
 from decimal import Decimal, ROUND_UP
 from typing import Any, Dict
 
 from exchange_client import HyperliquidExchangeClient
 from models import MarketData, TradingAction
 from utils.decimals import safe_decimal
+
+logger = logging.getLogger(__name__)
 
 
 class ExecutionEngine:
@@ -35,6 +38,29 @@ class ExecutionEngine:
         adjusted = (required_size / step).to_integral_value(rounding=ROUND_UP) * step
         return adjusted
 
+    def _set_leverage_with_vault_fallback(self, coin: str, leverage: int) -> bool:
+        """
+        Imposta leva con fallback automatico:
+        se fallisce e vault_address è presente, disabilita il vault runtime e ritenta una volta.
+        """
+        ok = self.exchange_client.set_leverage(coin, leverage)
+        if ok:
+            return True
+
+        vault = getattr(self.exchange_client, "vault_address", None)
+        if vault:
+            logger.warning(
+                f"Set leverage failed for {coin} with vault={vault}; "
+                "retrying once without vault mode"
+            )
+            self.exchange_client.vault_address = None
+            ok_retry = self.exchange_client.set_leverage(coin, leverage)
+            if ok_retry:
+                logger.info(f"Leverage fallback without vault succeeded for {coin}")
+                return True
+
+        return False
+
     def execute(
         self,
         coin: str,
@@ -55,7 +81,7 @@ class ExecutionEngine:
         if action == TradingAction.CHANGE_LEVERAGE.value:
             if coin not in positions:
                 return {"success": False, "notional": Decimal("0"), "reason": "no_position_for_leverage_change"}
-            ok = self.exchange_client.set_leverage(coin, leverage)
+            ok = self._set_leverage_with_vault_fallback(coin, leverage)
             return {"success": ok, "notional": Decimal("0"), "reason": "change_leverage"}
 
         if action == TradingAction.CLOSE_POSITION.value:
@@ -90,7 +116,7 @@ class ExecutionEngine:
                 return {"success": False, "notional": Decimal("0"), "reason": "no_position_to_increase"}
             pos_size = safe_decimal(positions[coin]["size"])
             side = "buy" if pos_size > 0 else "sell"
-            if not self.exchange_client.set_leverage(coin, leverage):
+            if not self._set_leverage_with_vault_fallback(coin, leverage):
                 return {"success": False, "notional": Decimal("0"), "reason": "set_leverage_failed"}
 
             adjusted_size = self._adjust_open_size_for_exchange_minimum(coin, size, market_data.last_price)
@@ -103,7 +129,7 @@ class ExecutionEngine:
 
         if action in [TradingAction.BUY.value, TradingAction.SELL.value]:
             side = "buy" if action == TradingAction.BUY.value else "sell"
-            if not self.exchange_client.set_leverage(coin, leverage):
+            if not self._set_leverage_with_vault_fallback(coin, leverage):
                 return {"success": False, "notional": Decimal("0"), "reason": "set_leverage_failed"}
 
             adjusted_size = self._adjust_open_size_for_exchange_minimum(coin, size, market_data.last_price)
