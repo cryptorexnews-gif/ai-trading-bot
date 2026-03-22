@@ -35,6 +35,7 @@ _runtime_store = RuntimeConfigStore(
     [p.strip().upper() for p in os.getenv("TRADING_PAIRS", "BTC,ETH,SOL").split(",") if p.strip()]
 )
 _bot_rl = get_rate_limiter("api_bot_endpoints", max_tokens=100, tokens_per_second=3.0)
+_config_rl = get_rate_limiter("api_bot_config_endpoint", max_tokens=300, tokens_per_second=20.0)
 
 _universe_cache = []
 _universe_cache_at = 0.0
@@ -43,6 +44,12 @@ _UNIVERSE_CACHE_TTL_SEC = 300.0
 
 def _rate_limited():
     if not _bot_rl.try_acquire(1):
+        return jsonify({"error": "rate_limited"}), 429
+    return None
+
+
+def _config_rate_limited():
+    if not _config_rl.try_acquire(1):
         return jsonify({"error": "rate_limited"}), 429
     return None
 
@@ -212,7 +219,7 @@ def managed_positions():
 @bot_bp.route("/api/config", methods=["GET"])
 @require_api_key
 def config():
-    rate_limit_resp = _rate_limited()
+    rate_limit_resp = _config_rate_limited()
     if rate_limit_resp:
         return rate_limit_resp
 
