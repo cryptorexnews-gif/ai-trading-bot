@@ -12,23 +12,49 @@ def extract_statuses(exchange_result: Dict[str, Any]) -> List[Dict[str, Any]]:
     return [status for status in statuses if isinstance(status, dict)]
 
 
+def _extract_oid_from_status(status: Dict[str, Any]) -> Optional[int]:
+    if not isinstance(status, dict):
+        return None
+
+    # Common Hyperliquid shape: {"resting": {"oid": ...}}
+    resting = status.get("resting", {})
+    if isinstance(resting, dict):
+        oid = resting.get("oid")
+        if oid is not None:
+            try:
+                return int(oid)
+            except (TypeError, ValueError):
+                pass
+
+    # Another possible shape: {"filled": {"oid": ...}}
+    filled = status.get("filled", {})
+    if isinstance(filled, dict):
+        oid = filled.get("oid")
+        if oid is not None:
+            try:
+                return int(oid)
+            except (TypeError, ValueError):
+                pass
+
+    # Fallback direct field
+    direct_oid = status.get("oid")
+    if direct_oid is not None:
+        try:
+            return int(direct_oid)
+        except (TypeError, ValueError):
+            pass
+
+    return None
+
+
 def extract_order_ids(exchange_result: Dict[str, Any]) -> List[int]:
     ids: List[int] = []
     statuses = extract_statuses(exchange_result)
 
     for status in statuses:
-        resting = status.get("resting", {})
-        if not isinstance(resting, dict):
-            continue
-
-        oid = resting.get("oid")
-        if oid is None:
-            continue
-
-        try:
-            ids.append(int(oid))
-        except (TypeError, ValueError):
-            continue
+        oid = _extract_oid_from_status(status)
+        if oid is not None:
+            ids.append(oid)
 
     return ids
 
@@ -60,6 +86,8 @@ def has_acknowledged_order_status(statuses: List[Dict[str, Any]]) -> bool:
         if isinstance(status.get("resting"), dict):
             return True
         if isinstance(status.get("filled"), dict):
+            return True
+        if status.get("oid") is not None:
             return True
 
     return False

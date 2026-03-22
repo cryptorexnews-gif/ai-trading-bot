@@ -281,12 +281,16 @@ class HyperliquidExchangeClient:
         size: Decimal,
         trigger_price: Decimal,
         tpsl: str,
+        strict_tpsl: bool = True,
     ) -> Optional[int]:
         open_orders = self.get_open_orders(user)
         wanted_coin = coin.upper()
         wanted_side = side.lower()
         wanted_tpsl = tpsl.lower()
         wanted_size = abs(size)
+
+        best_oid: Optional[int] = None
+        best_score: Optional[Decimal] = None
 
         for order in open_orders:
             if not isinstance(order, dict):
@@ -302,27 +306,75 @@ class HyperliquidExchangeClient:
             if order_side != wanted_side:
                 continue
 
-            order_tpsl = self._extract_tpsl(order)
-            if order_tpsl != wanted_tpsl:
-                continue
-
             order_size = abs(safe_decimal(order.get("sz", order.get("s", "0")), Decimal("0")))
-            if not self._is_close_enough(order_size, wanted_size, rel_tol=Decimal("0.03")):
+            if not self._is_close_enough(order_size, wanted_size, rel_tol=Decimal("0.05")):
                 continue
 
             order_trigger_px = self._extract_trigger_px(order)
             if order_trigger_px <= 0:
                 continue
-            if not self._is_close_enough(order_trigger_px, trigger_price, rel_tol=Decimal("0.01")):
+            if not self._is_close_enough(order_trigger_px, trigger_price, rel_tol=Decimal("0.015")):
+                continue
+
+            order_tpsl = self._extract_tpsl(order)
+            if strict_tpsl and order_tpsl and order_tpsl != wanted_tpsl:
+                continue
+            if strict_tpsl and not order_tpsl:
                 continue
 
             oid_raw = order.get("oid")
             if oid_raw is None:
                 continue
+
             try:
-                return int(oid_raw)
+                oid = int(oid_raw)
             except (TypeError, ValueError):
                 continue
+
+            score = abs(order_trigger_px - trigger_price)
+            if best_score is None or score < best_score:
+                best_score = score
+                best_oid = oid
+
+        return best_oid
+
+    def _wait_for_trigger_order_id(
+        self,
+        user: str,
+        coin: str,
+        side: str,
+        size: Decimal,
+        trigger_price: Decimal,
+        tpsl: str,
+        attempts: int = 6,
+        delay_sec: float = 0.5,
+    ) -> Optional[int]:
+        for _ in range(attempts):
+            strict_match = self._find_trigger_order_id(
+                user=user,
+                coin=coin,
+                side=side,
+                size=size,
+                trigger_price=trigger_price,
+                tpsl=tpsl,
+                strict_tpsl=True,
+            )
+            if strict_match is not None:
+                return strict_match
+
+            relaxed_match = self._find_trigger_order_id(
+                user=user,
+                coin=coin,
+                side=side,
+                size=size,
+                trigger_price=trigger_price,
+                tpsl=tpsl,
+                strict_tpsl=False,
+            )
+            if relaxed_match is not None:
+                return relaxed_match
+
+            time.sleep(delay_sec)
 
         return None
 
@@ -569,13 +621,15 @@ class HyperliquidExchangeClient:
         order_id = order_ids[0] if order_ids else None
 
         if order_id is None:
-            order_id = self._find_trigger_order_id(
+            order_id = self._wait_for_trigger_order_id(
                 user=self.account.address,
                 coin=coin,
                 side=side,
                 size=normalized_size,
                 trigger_price=rounded_trigger,
                 tpsl=tpsl,
+                attempts=6,
+                delay_sec=0.5,
             )
 
         logger.info(
@@ -627,23 +681,27 @@ class HyperliquidExchangeClient:
         existing_tp_id = current_take_profit_order_id
 
         if existing_sl_id is None:
-            existing_sl_id = self._find_trigger_order_id(
+            existing_sl_id = self._wait_for_trigger_order_id(
                 user=self.account.address,
                 coin=coin,
                 side=close_side,
                 size=close_size,
                 trigger_price=stop_loss_price,
                 tpsl="sl",
+                attempts=3,
+                delay_sec=0.3,
             )
 
         if existing_tp_id is None:
-            existing_tp_id = self._find_trigger_order_id(
+            existing_tp_id = self._wait_for_trigger_order_id(
                 user=self.account.address,
                 coin=coin,
                 side=close_side,
                 size=close_size,
                 trigger_price=take_profit_price,
                 tpsl="tp",
+                attempts=3,
+                delay_sec=0.3,
             )
 
         if existing_sl_id is not None and existing_tp_id is not None:
@@ -687,6 +745,29 @@ class HyperliquidExchangeClient:
 
         sl_id = sl_res.get("order_id")
         tp_id = tp_res.get("order_id")
+
+        if sl_id is None:
+            sl_id = self._wait_for_trigger_order_id(
+                user=self.account.address,
+                coin=coin,
+                side=close_side,
+                size=close_size,
+                trigger_price=stop_loss_price,
+                tpsl="sl",
+                attempts=6,
+                delay_sec=0.5,
+            )
+        if tp_id is None:
+            tp_id = self._wait_for_trigger_order_id(
+                user=self.account.address,
+                coin=coin,
+                side=close_side,
+                size=close_size,
+                trigger_price=take_profit_price,
+                tpsl="tp",
+                attempts=6,
+                delay_sec=0.5,
+            )
 
         if sl_id is None or tp_id is None:
             return {"success": False, "reason": "missing_trigger_order_id"}
