@@ -1,5 +1,7 @@
 import time
-from typing import Any, Dict, List, Set, Tuple
+from typing import Any, Dict, List, Set
+
+from api.helpers import post_hyperliquid_info
 
 
 _VALID_INTERVAL_MS = {
@@ -140,3 +142,42 @@ def serialize_orderbook_debug(data: Any, coin: str) -> Dict[str, Any]:
         "coin": coin,
         "timestamp": time.time(),
     }
+
+
+def fetch_candles_response(coin: str, interval: str, limit: int) -> Dict[str, Any]:
+    payload = candle_request_payload(coin=coin, interval=interval, limit=limit)
+    data = post_hyperliquid_info(payload)
+    return serialize_candles_response(data=data, coin=coin, interval=interval)
+
+
+def fetch_orderbook_response(coin: str, n_sig_figs: int) -> Dict[str, Any]:
+    data = post_hyperliquid_info({
+        "type": "l2Book",
+        "coin": coin,
+        "nSigFigs": n_sig_figs,
+    })
+
+    if data is None:
+        return {
+            "bids": [],
+            "asks": [],
+            "coin": coin,
+            "spread": 0,
+            "spread_pct": 0,
+            "timestamp": 0,
+        }
+
+    return serialize_orderbook_response(data=data, coin=coin)
+
+
+def fetch_orderbook_debug_response(coin: str) -> Dict[str, Any]:
+    data = post_hyperliquid_info({
+        "type": "l2Book",
+        "coin": coin,
+        "nSigFigs": 5,
+    })
+
+    if data is None:
+        return {"error": "upstream_unavailable", "coin": coin}
+
+    return serialize_orderbook_debug(data=data, coin=coin)

@@ -4,13 +4,11 @@ from flask import Blueprint, jsonify, request
 
 from api.auth import require_api_key
 from api.config import COIN_PATTERN, KNOWN_TRADING_PAIRS
-from api.helpers import post_hyperliquid_info
-from api.rate_limit import rate_limited
+from api.rate_limit_utils import build_rate_limiter, rate_limited_response
 from api.services.market_service import (
-    candle_request_payload,
-    serialize_candles_response,
-    serialize_orderbook_debug,
-    serialize_orderbook_response,
+    fetch_candles_response,
+    fetch_orderbook_debug_response,
+    fetch_orderbook_response,
     validate_coin,
     validate_interval,
     validate_limit,
@@ -22,12 +20,16 @@ logger = logging.getLogger(__name__)
 market_bp = Blueprint("market", __name__)
 
 _VALID_INTERVALS = {"1m", "3m", "5m", "15m", "1h", "4h", "1d"}
+_market_rl = build_rate_limiter("api_market_endpoints", max_tokens=120, tokens_per_second=4.0)
 
 
 @market_bp.route("/api/candles", methods=["GET"])
 @require_api_key
-@rate_limited("api_market_endpoints", max_tokens=120, tokens_per_second=4.0)
 def candles():
+    rate_limit_resp = rate_limited_response(_market_rl)
+    if rate_limit_resp:
+        return rate_limit_resp
+
     coin = validate_coin(request.args.get("coin", ""), COIN_PATTERN, KNOWN_TRADING_PAIRS)
     if not coin:
         return jsonify({"error": "invalid_request"}), 400
@@ -43,9 +45,7 @@ def candles():
         return jsonify({"error": "invalid_request"}), 400
 
     try:
-        payload = candle_request_payload(coin=coin, interval=interval, limit=limit)
-        data = post_hyperliquid_info(payload)
-        return jsonify(serialize_candles_response(data=data, coin=coin, interval=interval))
+        return jsonify(fetch_candles_response(coin=coin, interval=interval, limit=limit))
     except Exception:
         logger.error("Market candles endpoint failed", exc_info=True)
         return jsonify({"error": "internal_error"}), 500
@@ -53,8 +53,11 @@ def candles():
 
 @market_bp.route("/api/orderbook", methods=["GET"])
 @require_api_key
-@rate_limited("api_market_endpoints", max_tokens=120, tokens_per_second=4.0)
 def orderbook():
+    rate_limit_resp = rate_limited_response(_market_rl)
+    if rate_limit_resp:
+        return rate_limit_resp
+
     coin = validate_coin(request.args.get("coin", ""), COIN_PATTERN, KNOWN_TRADING_PAIRS)
     if not coin:
         return jsonify({"error": "invalid_request"}), 400
@@ -66,20 +69,7 @@ def orderbook():
         return jsonify({"error": "invalid_request"}), 400
 
     try:
-        data = post_hyperliquid_info({
-            "type": "l2Book",
-            "coin": coin,
-            "nSigFigs": n_sig_figs,
-        })
-
-        if data is None:
-            return jsonify({
-                "bids": [], "asks": [], "coin": coin,
-                "spread": 0, "spread_pct": 0,
-                "timestamp": 0
-            })
-
-        return jsonify(serialize_orderbook_response(data=data, coin=coin))
+        return jsonify(fetch_orderbook_response(coin=coin, n_sig_figs=n_sig_figs))
     except Exception:
         logger.error("Market orderbook endpoint failed", exc_info=True)
         return jsonify({"error": "internal_error"}), 500
@@ -87,8 +77,11 @@ def orderbook():
 
 @market_bp.route("/api/orderbook/debug", methods=["GET"])
 @require_api_key
-@rate_limited("api_market_endpoints", max_tokens=120, tokens_per_second=4.0)
 def orderbook_debug():
+    rate_limit_resp = rate_limited_response(_market_rl)
+    if rate_limit_resp:
+        return rate_limit_resp
+
     coin = validate_coin(request.args.get("coin", ""), COIN_PATTERN, KNOWN_TRADING_PAIRS)
     if not coin:
         return jsonify({"error": "invalid_request"}), 400
@@ -96,16 +89,10 @@ def orderbook_debug():
         logger.info(f"Coin {coin} non presente in TRADING_PAIRS env, tentativo comunque consentito")
 
     try:
-        data = post_hyperliquid_info({
-            "type": "l2Book",
-            "coin": coin,
-            "nSigFigs": 5,
-        })
-
-        if data is None:
-            return jsonify({"error": "upstream_unavailable", "coin": coin}), 502
-
-        return jsonify(serialize_orderbook_debug(data=data, coin=coin))
+        debug_payload = fetch_orderbook_debug_response(coin=coin)
+        if "error" in debug_payload:
+            return jsonify(debug_payload), 502
+        return jsonify(debug_payload)
     except Exception:
         logger.error("Market orderbook debug endpoint failed", exc_info=True)
         return jsonify({"error": "internal_error"}), 500
