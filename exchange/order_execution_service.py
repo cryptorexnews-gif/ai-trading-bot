@@ -125,6 +125,146 @@ class OrderExecutionService:
             "notional": str(notional),
         }
 
+    def place_entry_with_tpsl_batch(
+        self,
+        coin: str,
+        side: str,
+        size: Decimal,
+        desired_price: Decimal,
+        stop_loss_price: Decimal,
+        take_profit_price: Decimal,
+    ) -> Dict[str, Any]:
+        """
+        Atomic batch order:
+          1) Entry limit order
+          2) TP trigger reduce-only (isMarket=true)
+          3) SL trigger reduce-only (isMarket=true)
+        with grouping='positionTpsl'
+        """
+        if not self.client._live_orders_enabled():
+            return {"success": False, "mode": "live", "reason": "live_disabled_fail_closed", "notional": "0"}
+
+        normalized_side = str(side or "").strip().lower()
+        if normalized_side not in {"buy", "sell"}:
+            return {"success": False, "mode": "live", "reason": "invalid_side", "notional": "0"}
+
+        normalized_size = self.client._normalize_size_for_coin(coin, abs(size))
+        if normalized_size <= 0:
+            return {"success": False, "mode": "live", "reason": "invalid_size_after_normalization", "notional": "0"}
+
+        asset_id = self.client.get_asset_id(coin)
+        if asset_id is None:
+            return {"success": False, "mode": "live", "reason": "asset_not_found", "notional": "0"}
+
+        entry_limit_price = self.client._resolve_limit_price(
+            coin=coin,
+            side=normalized_side,
+            desired_price=desired_price,
+            asset_id=asset_id,
+        )
+        if entry_limit_price <= 0:
+            return {"success": False, "mode": "live", "reason": "invalid_limit_price", "notional": "0"}
+
+        rounded_sl = self.client._round_price_to_tick(asset_id, stop_loss_price)
+        rounded_tp = self.client._round_price_to_tick(asset_id, take_profit_price)
+        if rounded_sl <= 0 or rounded_tp <= 0:
+            return {"success": False, "mode": "live", "reason": "invalid_trigger_price", "notional": "0"}
+
+        is_buy = normalized_side == "buy"
+        close_is_buy = not is_buy
+
+        entry_order = {
+            "a": asset_id,
+            "b": is_buy,
+            "p": str(entry_limit_price),
+            "s": str(normalized_size.normalize()),
+            "r": False,
+            "t": {"limit": {"tif": "Gtc"}},
+        }
+
+        tp_order = {
+            "a": asset_id,
+            "b": close_is_buy,
+            "p": "0",
+            "s": str(normalized_size.normalize()),
+            "r": True,
+            "t": {
+                "trigger": {
+                    "isMarket": True,
+                    "triggerPx": str(rounded_tp),
+                    "tpsl": "tp",
+                }
+            },
+        }
+
+        sl_order = {
+            "a": asset_id,
+            "b": close_is_buy,
+            "p": "0",
+            "s": str(normalized_size.normalize()),
+            "r": True,
+            "t": {
+                "trigger": {
+                    "isMarket": True,
+                    "triggerPx": str(rounded_sl),
+                    "tpsl": "sl",
+                }
+            },
+        }
+
+        action = {
+            "type": "order",
+            "orders": [entry_order, tp_order, sl_order],
+            "grouping": "positionTpsl",
+        }
+
+        result = self.client._post_signed_action_with_master_retry(action)
+        if result is None:
+            return {"success": False, "mode": "live", "reason": "http_error", "notional": "0"}
+        if not self.client._is_ok_result(result):
+            logger.error(f"Exchange rejected atomic entry+TP/SL batch for {coin}: {result}")
+            return {"success": False, "mode": "live", "reason": "exchange_rejected", "notional": "0", "raw": result}
+
+        statuses = extract_statuses(result)
+        status_error = get_first_status_error(statuses)
+        if status_error is not None:
+            logger.error(f"Atomic batch status error for {coin}: {status_error} | statuses={statuses}")
+            return {
+                "success": False,
+                "mode": "live",
+                "reason": f"status_error:{status_error}",
+                "notional": "0",
+                "raw": result,
+                "statuses": statuses,
+            }
+
+        if statuses and not has_acknowledged_order_status(statuses):
+            return {
+                "success": False,
+                "mode": "live",
+                "reason": "not_acknowledged",
+                "notional": "0",
+                "raw": result,
+                "statuses": statuses,
+            }
+
+        notional = abs(normalized_size * entry_limit_price)
+        order_ids = extract_order_ids(result)
+        logger.info(
+            f"LIVE atomic entry+TP/SL success {coin} {normalized_side.upper()} "
+            f"size={normalized_size} entry={entry_limit_price} tp={rounded_tp} sl={rounded_sl} "
+            f"grouping=positionTpsl oids={order_ids}"
+        )
+        return {
+            "success": True,
+            "mode": "live",
+            "filled_price": str(entry_limit_price),
+            "executed_size": str(normalized_size),
+            "notional": str(notional),
+            "order_ids": order_ids,
+            "entry_with_protection": True,
+        }
+
     def place_trigger_order(
         self,
         coin: str,

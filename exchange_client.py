@@ -434,6 +434,24 @@ class HyperliquidExchangeClient:
             reduce_only=reduce_only,
         )
 
+    def place_entry_with_tpsl_batch(
+        self,
+        coin: str,
+        side: str,
+        size: Decimal,
+        desired_price: Decimal,
+        stop_loss_price: Decimal,
+        take_profit_price: Decimal,
+    ) -> Dict[str, Any]:
+        return self._execution.place_entry_with_tpsl_batch(
+            coin=coin,
+            side=side,
+            size=size,
+            desired_price=desired_price,
+            stop_loss_price=stop_loss_price,
+            take_profit_price=take_profit_price,
+        )
+
     def place_trigger_order(
         self,
         coin: str,
