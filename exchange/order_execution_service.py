@@ -164,7 +164,7 @@ class OrderExecutionService:
     ) -> Dict[str, Any]:
         """
         Atomic batch order:
-          1) Entry limit order
+          1) Entry limit order (IOC)
           2) TP trigger reduce-only (isMarket=true)
           3) SL trigger reduce-only (isMarket=true)
         with grouping='positionTpsl'
@@ -212,7 +212,7 @@ class OrderExecutionService:
             "p": entry_price_wire,
             "s": size_wire,
             "r": False,
-            "t": {"limit": {"tif": "Gtc"}},
+            "t": {"limit": {"tif": "Ioc"}},
         }
 
         tp_order = {

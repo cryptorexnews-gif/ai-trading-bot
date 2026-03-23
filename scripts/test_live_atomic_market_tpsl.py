@@ -342,7 +342,7 @@ def build_atomic_action(
         "p": entry_price_str,
         "s": size_str,
         "r": False,
-        "t": {"limit": {"tif": "Gtc"}},
+        "t": {"limit": {"tif": "Ioc"}},
     }
 
     tp_order = {
