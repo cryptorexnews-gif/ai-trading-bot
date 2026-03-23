@@ -1,6 +1,7 @@
+import json
 import logging
 from decimal import Decimal
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from exchange.order_builder import (
     build_cancel_action,
@@ -24,6 +25,19 @@ class OrderExecutionService:
 
     def __init__(self, client):
         self.client = client
+
+    def _format_price_for_asset(self, asset_id: int, price: Decimal) -> str:
+        """
+        Formatta il prezzo in stringa rispettando esattamente il tick size dell'asset:
+        - arrotondamento tramite _round_price_to_tick
+        - numero decimali fisso in base alla precisione asset
+        """
+        rounded = self.client._round_price_to_tick(asset_id, price)
+        _tick_size, precision = self.client.get_tick_size_and_precision(asset_id)
+        decimals = precision if precision >= 0 else 0
+        if decimals > 0:
+            return f"{rounded:.{decimals}f}"
+        return f"{rounded:.0f}"
 
     def set_leverage(self, coin: str, leverage: int) -> bool:
         if not self.client._live_orders_enabled():
@@ -170,13 +184,17 @@ class OrderExecutionService:
         if rounded_sl <= 0 or rounded_tp <= 0:
             return {"success": False, "mode": "live", "reason": "invalid_trigger_price", "notional": "0"}
 
+        entry_price_wire = self._format_price_for_asset(asset_id, entry_limit_price)
+        sl_price_wire = self._format_price_for_asset(asset_id, rounded_sl)
+        tp_price_wire = self._format_price_for_asset(asset_id, rounded_tp)
+
         is_buy = normalized_side == "buy"
         close_is_buy = not is_buy
 
         entry_order = {
             "a": asset_id,
             "b": is_buy,
-            "p": str(entry_limit_price),
+            "p": entry_price_wire,
             "s": str(normalized_size.normalize()),
             "r": False,
             "t": {"limit": {"tif": "Gtc"}},
@@ -191,7 +209,7 @@ class OrderExecutionService:
             "t": {
                 "trigger": {
                     "isMarket": True,
-                    "triggerPx": str(rounded_tp),
+                    "triggerPx": tp_price_wire,
                     "tpsl": "tp",
                 }
             },
@@ -206,7 +224,7 @@ class OrderExecutionService:
             "t": {
                 "trigger": {
                     "isMarket": True,
-                    "triggerPx": str(rounded_sl),
+                    "triggerPx": sl_price_wire,
                     "tpsl": "sl",
                 }
             },
@@ -217,6 +235,8 @@ class OrderExecutionService:
             "orders": [entry_order, tp_order, sl_order],
             "grouping": "positionTpsl",
         }
+
+        logger.debug(f"{coin} atomic entry+TP/SL payload:\n{json.dumps(action, indent=2)}")
 
         result = self.client._post_signed_action_with_master_retry(action)
         if result is None:
@@ -252,7 +272,7 @@ class OrderExecutionService:
         order_ids = extract_order_ids(result)
         logger.info(
             f"LIVE atomic entry+TP/SL success {coin} {normalized_side.upper()} "
-            f"size={normalized_size} entry={entry_limit_price} tp={rounded_tp} sl={rounded_sl} "
+            f"size={normalized_size} entry={entry_price_wire} tp={tp_price_wire} sl={sl_price_wire} "
             f"grouping=positionTpsl oids={order_ids}"
         )
         return {
