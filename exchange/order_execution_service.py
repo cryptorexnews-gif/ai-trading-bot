@@ -85,17 +85,31 @@ class OrderExecutionService:
             return {"success": False, "mode": "live", "reason": "http_error", "notional": "0"}
         if not self.client._is_ok_result(result):
             logger.error(f"Exchange rejected order for {coin}: {result}")
-            return {"success": False, "mode": "live", "reason": "exchange_rejected", "notional": "0"}
+            return {"success": False, "mode": "live", "reason": "exchange_rejected", "notional": "0", "raw": result}
 
         statuses = extract_statuses(result)
         status_error = get_first_status_error(statuses)
         if status_error is not None:
-            logger.error(f"Order status error for {coin}: {status_error}")
-            return {"success": False, "mode": "live", "reason": "status_error", "notional": "0"}
+            logger.error(f"Order status error for {coin}: {status_error} | statuses={statuses}")
+            return {
+                "success": False,
+                "mode": "live",
+                "reason": f"status_error:{status_error}",
+                "notional": "0",
+                "raw": result,
+                "statuses": statuses,
+            }
 
         if statuses and not has_acknowledged_order_status(statuses):
             logger.error(f"Order not acknowledged by Hyperliquid statuses for {coin}: {statuses}")
-            return {"success": False, "mode": "live", "reason": "not_acknowledged", "notional": "0"}
+            return {
+                "success": False,
+                "mode": "live",
+                "reason": "not_acknowledged",
+                "notional": "0",
+                "raw": result,
+                "statuses": statuses,
+            }
 
         order_ids = extract_order_ids(result)
         notional = abs(normalized_size * limit_price)
@@ -173,15 +187,26 @@ class OrderExecutionService:
             return {"success": False, "reason": "http_error"}
         if not self.client._is_ok_result(result):
             logger.error(f"Exchange rejected trigger order for {coin}: {result}")
-            return {"success": False, "reason": "exchange_rejected"}
+            return {"success": False, "reason": "exchange_rejected", "raw": result}
 
         statuses = extract_statuses(result)
         status_error = get_first_status_error(statuses)
         if status_error is not None:
-            return {"success": False, "reason": "status_error"}
+            logger.error(f"Trigger order status error for {coin}: {status_error} | statuses={statuses}")
+            return {
+                "success": False,
+                "reason": f"status_error:{status_error}",
+                "raw": result,
+                "statuses": statuses,
+            }
 
         if statuses and not has_acknowledged_order_status(statuses):
-            return {"success": False, "reason": "not_acknowledged"}
+            return {
+                "success": False,
+                "reason": "not_acknowledged",
+                "raw": result,
+                "statuses": statuses,
+            }
 
         immediate_oids = extract_order_ids(result)
         if immediate_oids:
@@ -303,10 +328,10 @@ class OrderExecutionService:
         statuses = extract_statuses(result)
         status_error = get_first_status_error(statuses)
         if status_error is not None:
-            return {"success": False, "reason": "status_error", "raw": result}
+            return {"success": False, "reason": f"status_error:{status_error}", "raw": result, "statuses": statuses}
 
         if statuses and not has_acknowledged_order_status(statuses):
-            return {"success": False, "reason": "not_acknowledged", "raw": result}
+            return {"success": False, "reason": "not_acknowledged", "raw": result, "statuses": statuses}
 
         return {"success": True, "order_ids": extract_order_ids(result), "raw": result}
 
