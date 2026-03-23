@@ -35,27 +35,17 @@ class OrderExecutionService:
             plain = plain.rstrip("0").rstrip(".")
         return plain if plain else "0"
 
-    def _format_price_for_asset(self, coin: str, asset_id: int, price: Decimal) -> str:
+    def _format_price_for_asset(self, coin: str, price: Decimal) -> str:
         """
-        Formatta prezzo con numero decimali fisso:
-        - se precision disponibile da metadata/fallback: usa quella
-        - altrimenti usa formatter robusto Hyperliquid
+        Formatta prezzo in modo compatibile Hyperliquid:
+        - limite significant figures
+        - limite decimali da szDecimals (6 - szDecimals)
+        Questo evita errori "Price must be divisible by tick size" quando pxDecimals non è disponibile.
         """
-        rounded = self.client._round_price_to_tick(asset_id, price)
-        _tick_size, precision = self.client.get_tick_size_and_precision(asset_id)
-
-        if precision >= 0:
-            if precision > 0:
-                return f"{rounded:.{precision}f}"
-            return f"{rounded:.0f}"
-
         sz_decimals = self.client.get_sz_decimals(coin)
-        return format_price_for_hyperliquid(rounded, sz_decimals)
+        return format_price_for_hyperliquid(price, sz_decimals)
 
     def _format_size_for_coin(self, coin: str, size: Decimal) -> str:
-        """
-        Formatta size con numero decimali fisso da szDecimals.
-        """
         sz_decimals = self.client.get_sz_decimals(coin)
         if sz_decimals is None or sz_decimals < 0:
             return self._canonical_decimal_str(size)
@@ -205,14 +195,12 @@ class OrderExecutionService:
         if entry_limit_price <= 0:
             return {"success": False, "mode": "live", "reason": "invalid_limit_price", "notional": "0"}
 
-        rounded_sl = self.client._round_price_to_tick(asset_id, stop_loss_price)
-        rounded_tp = self.client._round_price_to_tick(asset_id, take_profit_price)
-        if rounded_sl <= 0 or rounded_tp <= 0:
+        if stop_loss_price <= 0 or take_profit_price <= 0:
             return {"success": False, "mode": "live", "reason": "invalid_trigger_price", "notional": "0"}
 
-        entry_price_wire = self._format_price_for_asset(coin, asset_id, entry_limit_price)
-        sl_price_wire = self._format_price_for_asset(coin, asset_id, rounded_sl)
-        tp_price_wire = self._format_price_for_asset(coin, asset_id, rounded_tp)
+        entry_price_wire = self._format_price_for_asset(coin, entry_limit_price)
+        sl_price_wire = self._format_price_for_asset(coin, stop_loss_price)
+        tp_price_wire = self._format_price_for_asset(coin, take_profit_price)
         size_wire = self._format_size_for_coin(coin, normalized_size)
 
         is_buy = normalized_side == "buy"
