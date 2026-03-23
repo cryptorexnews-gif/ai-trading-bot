@@ -1,8 +1,16 @@
+import logging
 from decimal import Decimal
 from typing import Any, Dict, List, Optional, Tuple
 
-from exchange.market_rules import default_tick_size_for_asset, infer_tick_size_and_precision_from_mid
+from exchange.market_rules import (
+    default_tick_size_for_asset,
+    get_tick_size_for_known_coin,
+    infer_tick_size_from_price,
+    infer_tick_size_and_precision_from_mid,
+)
 from utils.decimals import safe_decimal
+
+logger = logging.getLogger(__name__)
 
 
 class ExchangeMarketDataService:
@@ -98,15 +106,36 @@ class ExchangeMarketDataService:
         asset = universe[asset_id]
         coin = str(asset.get("name", "")).strip().upper()
 
-        # Source of truth: pxDecimals from Hyperliquid metadata
+        # Priority 1: pxDecimals from Hyperliquid metadata (if present)
         px_decimals = self._asset_int(asset, ["pxDecimals", "priceDecimals", "pricePrecision"])
         if px_decimals is not None and px_decimals >= 0:
             tick_size = Decimal("1").scaleb(-px_decimals) if px_decimals > 0 else Decimal("1")
             return tick_size, px_decimals
 
-        # Fallback: infer from current mid if metadata lacks pxDecimals
-        if mids is not None and coin in mids:
-            return infer_tick_size_and_precision_from_mid(str(mids.get(coin, "0")))
+        # Priority 2: Known tick sizes table (verified against exchange)
+        known = get_tick_size_for_known_coin(coin)
+        if known is not None:
+            tick_size, precision = known
+            logger.debug(f"{coin} tick size from known table: tick={tick_size}, precision={precision}")
+            return tick_size, precision
 
-        # Last-resort fallback
-        return default_tick_size_for_asset(asset_id)
+        # Priority 3: Infer from current mid price using 5 significant figures rule
+        if mids is not None and coin in mids:
+            mid_str = str(mids.get(coin, "0"))
+            try:
+                mid_price = Decimal(mid_str)
+            except Exception:
+                mid_price = Decimal("0")
+
+            if mid_price > 0:
+                tick_size, precision = infer_tick_size_from_price(mid_price, max_sig_figs=5)
+                logger.info(
+                    f"{coin} tick size inferred from mid price ${mid_price}: "
+                    f"tick={tick_size}, precision={precision} (5 sig figs rule)"
+                )
+                return tick_size, precision
+
+        # Priority 4: Last-resort fallback by asset_id
+        tick_size, precision = default_tick_size_for_asset(asset_id)
+        logger.warning(f"{coin} using last-resort tick size fallback: tick={tick_size}, precision={precision}")
+        return tick_size, precision

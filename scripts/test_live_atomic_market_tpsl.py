@@ -8,6 +8,7 @@ Test live sequenziale:
 ATTENZIONE: usa soldi reali se ENABLE_MAINNET_TRADING=true.
 """
 
+import json
 import logging
 import os
 import sys
@@ -23,7 +24,7 @@ ROOT_DIR = Path(__file__).resolve().parent.parent
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
-from exchange.market_rules import get_max_price_decimals_from_sz, normalize_size_for_decimals
+from exchange.market_rules import get_tick_size_for_known_coin, infer_tick_size_from_price, normalize_size_for_decimals
 from exchange_client import HyperliquidExchangeClient
 from utils.hyperliquid_state import get_open_positions
 
@@ -57,7 +58,9 @@ def _asset_int(asset: Dict, keys: List[str]) -> Optional[int]:
     return None
 
 
-def get_asset_precision_from_meta(client: HyperliquidExchangeClient, coin: str) -> Tuple[Decimal, Decimal, int, int]:
+def get_asset_precision_from_meta(
+    client: HyperliquidExchangeClient, coin: str, mid_price: Decimal
+) -> Tuple[Decimal, Decimal, int, int]:
     meta = client.get_meta(force_refresh=True)
     if not isinstance(meta, dict):
         raise RuntimeError("Metadati Hyperliquid non disponibili o formato invalido")
@@ -70,15 +73,30 @@ def get_asset_precision_from_meta(client: HyperliquidExchangeClient, coin: str) 
         if str(asset.get("name", "")).strip().upper() != coin.upper():
             continue
 
+        # Diagnostic: dump the full asset metadata
+        logger.info(f"{coin} FULL METADATA DUMP: {json.dumps(asset, indent=2, default=str)}")
+
         sz_decimals = _asset_int(asset, ["szDecimals", "sizeDecimals", "qtyDecimals"])
         px_decimals = _asset_int(asset, ["pxDecimals", "priceDecimals", "pricePrecision"])
 
         if sz_decimals is None:
             raise RuntimeError(f"szDecimals mancanti per {coin} nel metadata")
 
-        if px_decimals is None:
-            px_decimals = get_max_price_decimals_from_sz(sz_decimals, max_decimals_perp=6)
-            logger.warning(f"{coin}: pxDecimals non presente nel metadata, fallback a 6-szDecimals => {px_decimals}")
+        if px_decimals is not None and px_decimals >= 0:
+            logger.info(f"{coin}: pxDecimals from metadata = {px_decimals}")
+        else:
+            # Try known table first
+            known = get_tick_size_for_known_coin(coin)
+            if known is not None:
+                tick_size, px_decimals = known
+                logger.info(f"{coin}: tick size from known table: tick={tick_size}, px_decimals={px_decimals}")
+            else:
+                # Infer from mid price using 5 sig figs rule
+                tick_size, px_decimals = infer_tick_size_from_price(mid_price, max_sig_figs=5)
+                logger.info(
+                    f"{coin}: pxDecimals inferred from mid ${mid_price} using 5 sig figs: "
+                    f"tick={tick_size}, px_decimals={px_decimals}"
+                )
 
         tick_size = Decimal("1").scaleb(-px_decimals) if px_decimals > 0 else Decimal("1")
         step_size = Decimal("1").scaleb(-sz_decimals) if sz_decimals > 0 else Decimal("1")
@@ -218,9 +236,9 @@ def main() -> None:
         raise RuntimeError(f"Mid price non disponibile per {coin}")
     mid_price = Decimal(str(mids[coin]))
 
-    tick_size, step_size, px_decimals, sz_decimals = get_asset_precision_from_meta(client, coin)
+    tick_size, step_size, px_decimals, sz_decimals = get_asset_precision_from_meta(client, coin, mid_price)
     logger.info(
-        f"{coin} mid={mid_price} tick={tick_size} step={step_size} "
+        f"{coin} FINAL PRECISION: mid={mid_price} tick={tick_size} step={step_size} "
         f"px_decimals={px_decimals} sz_decimals={sz_decimals}"
     )
 
@@ -242,8 +260,28 @@ def main() -> None:
     trading_user = client.get_trading_user_address()
     size_before = get_position_size(client, trading_user, coin)
 
-    desired_price = snap_to_tick(mid_price * (Decimal("1") + ioc_buffer_pct), tick_size) if side == "buy" else snap_to_tick(mid_price * (Decimal("1") - ioc_buffer_pct), tick_size)
-    entry_result = client.place_order(coin=coin, side=side, size=normalized_size, desired_price=desired_price, reduce_only=False)
+    if side == "buy":
+        raw_entry = mid_price * (Decimal("1") + ioc_buffer_pct)
+    else:
+        raw_entry = mid_price * (Decimal("1") - ioc_buffer_pct)
+
+    desired_price = snap_to_tick(raw_entry, tick_size)
+
+    # Format with correct decimals
+    if px_decimals > 0:
+        price_str = f"{desired_price:.{px_decimals}f}"
+    else:
+        price_str = f"{desired_price:.0f}"
+
+    logger.info(
+        f"ENTRY ORDER: {side.upper()} {normalized_size} {coin} @ {price_str} "
+        f"(raw={raw_entry}, snapped={desired_price}, tick={tick_size}, px_dec={px_decimals})"
+    )
+
+    entry_result = client.place_order(
+        coin=coin, side=side, size=normalized_size,
+        desired_price=desired_price, reduce_only=False
+    )
     if not entry_result.get("success"):
         raise RuntimeError(f"Entry fallita: {entry_result}")
 

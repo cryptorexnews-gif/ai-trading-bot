@@ -2,10 +2,36 @@ from decimal import Decimal, ROUND_DOWN, ROUND_HALF_UP
 from typing import Dict, Optional, Tuple
 
 
+# Known tick sizes for major assets on Hyperliquid (safety net).
+# These are verified against the exchange and override any heuristic.
+KNOWN_TICK_SIZES: Dict[str, Tuple[Decimal, int]] = {
+    "BTC": (Decimal("1"), 0),        # $100k+ → tick=1, 0 decimals
+    "ETH": (Decimal("0.1"), 1),      # $2k-$10k → tick=0.1, 1 decimal
+    "SOL": (Decimal("0.01"), 2),     # $100-$999 → tick=0.01, 2 decimals
+    "BNB": (Decimal("0.01"), 2),
+    "XRP": (Decimal("0.0001"), 4),
+    "ADA": (Decimal("0.0001"), 4),
+    "DOGE": (Decimal("0.00001"), 5),
+    "AVAX": (Decimal("0.01"), 2),
+    "LINK": (Decimal("0.001"), 3),
+    "SUI": (Decimal("0.0001"), 4),
+    "ARB": (Decimal("0.0001"), 4),
+    "OP": (Decimal("0.001"), 3),
+    "NEAR": (Decimal("0.001"), 3),
+    "WIF": (Decimal("0.0001"), 4),
+    "PEPE": (Decimal("0.0000001"), 7),
+    "INJ": (Decimal("0.01"), 2),
+    "TIA": (Decimal("0.001"), 3),
+    "SEI": (Decimal("0.0001"), 4),
+    "RENDER": (Decimal("0.001"), 3),
+    "FET": (Decimal("0.0001"), 4),
+}
+
+
 def default_tick_size_for_asset(asset_id: int) -> Tuple[Decimal, int]:
     defaults: Dict[int, Tuple[Decimal, int]] = {
-        0: (Decimal("0.1"), 1),
-        1: (Decimal("0.01"), 2),
+        0: (Decimal("1"), 0),         # BTC
+        1: (Decimal("0.1"), 1),       # ETH
         5: (Decimal("0.001"), 3),
         7: (Decimal("0.01"), 2),
         65: (Decimal("0.00001"), 5),
@@ -13,16 +39,50 @@ def default_tick_size_for_asset(asset_id: int) -> Tuple[Decimal, int]:
     return defaults.get(asset_id, (Decimal("0.01"), 2))
 
 
-def infer_tick_size_and_precision_from_mid(raw_price: str) -> Tuple[Decimal, int]:
-    if "." in raw_price:
-        right_side = raw_price.rstrip("0").split(".")[1]
-        decimals = len(right_side) if right_side else 0
-    else:
-        decimals = 0
+def get_tick_size_for_known_coin(coin: str) -> Optional[Tuple[Decimal, int]]:
+    """Return known tick size for a coin, or None if not in the table."""
+    return KNOWN_TICK_SIZES.get(str(coin or "").strip().upper())
 
-    decimals = max(1, min(decimals, 8))
+
+def infer_tick_size_from_price(price: Decimal, max_sig_figs: int = 5) -> Tuple[Decimal, int]:
+    """
+    Hyperliquid rule: prices must have at most 5 significant figures.
+    Given a price, compute the tick size and number of decimals allowed.
+
+    Examples:
+      price=2048.75 → 5 sig figs allows 1 decimal → tick=0.1, decimals=1
+      price=150.25  → 5 sig figs allows 2 decimals → tick=0.01, decimals=2
+      price=0.5432  → 5 sig figs allows 4 decimals → tick=0.0001, decimals=4
+      price=105000   → 5 sig figs allows 0 decimals → tick=1, decimals=0
+    """
+    if price <= 0:
+        return Decimal("0.01"), 2
+
+    # Count digits before decimal point
+    adjusted = price.normalize().adjusted()
+    digits_before_decimal = max(0, adjusted + 1)
+
+    # Decimals allowed = max_sig_figs - digits_before_decimal
+    decimals = max(0, max_sig_figs - digits_before_decimal)
+
     tick_size = Decimal("1").scaleb(-decimals) if decimals > 0 else Decimal("1")
     return tick_size, decimals
+
+
+def infer_tick_size_and_precision_from_mid(raw_price: str) -> Tuple[Decimal, int]:
+    """
+    Infer tick size from a mid price string using the 5 significant figures rule.
+    This replaces the old naive decimal-counting approach.
+    """
+    try:
+        price = Decimal(str(raw_price))
+    except Exception:
+        return Decimal("0.01"), 2
+
+    if price <= 0:
+        return Decimal("0.01"), 2
+
+    return infer_tick_size_from_price(price, max_sig_figs=5)
 
 
 def normalize_size_for_decimals(size: Decimal, sz_decimals: int) -> Decimal:
@@ -42,6 +102,9 @@ def get_max_price_decimals_from_sz(sz_decimals: Optional[int], max_decimals_perp
     """
     Hyperliquid perp rule fallback:
     max decimali prezzo = 6 - szDecimals
+
+    WARNING: This is a rough heuristic. Prefer infer_tick_size_from_price() or
+    KNOWN_TICK_SIZES for accurate results.
     """
     if sz_decimals is None:
         return 2
@@ -56,7 +119,7 @@ def get_sigfig_limited_decimals(price: Decimal, max_sigfigs: int = 5) -> int:
         return 0
 
     adjusted = price.normalize().adjusted()
-    digits_before_decimal = adjusted + 1 if adjusted >= 0 else 0
+    digits_before_decimal = max(0, adjusted + 1)
     return max(0, int(max_sigfigs) - digits_before_decimal)
 
 
