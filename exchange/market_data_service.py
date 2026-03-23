@@ -11,6 +11,36 @@ class ExchangeMarketDataService:
     def __init__(self, api_client):
         self.api_client = api_client
 
+    @staticmethod
+    def _normalize_meta(meta: Optional[Any]) -> Optional[Dict[str, Any]]:
+        if isinstance(meta, dict):
+            return meta
+        if isinstance(meta, list) and meta and isinstance(meta[0], dict) and "universe" in meta[0]:
+            return meta[0]
+        return None
+
+    @staticmethod
+    def _get_universe(meta: Optional[Any]) -> List[Dict[str, Any]]:
+        normalized = ExchangeMarketDataService._normalize_meta(meta)
+        if not normalized:
+            return []
+        universe = normalized.get("universe", [])
+        return universe if isinstance(universe, list) else []
+
+    @staticmethod
+    def _asset_int(asset: Dict[str, Any], keys: List[str]) -> Optional[int]:
+        for key in keys:
+            if key not in asset:
+                continue
+            raw = asset.get(key)
+            if raw is None:
+                continue
+            try:
+                return int(str(raw))
+            except (TypeError, ValueError):
+                continue
+        return None
+
     def get_meta(self, force_refresh: bool, fetcher) -> Optional[Dict[str, Any]]:
         return self.api_client.get_meta(force_refresh=force_refresh, fetcher=fetcher)
 
@@ -24,27 +54,25 @@ class ExchangeMarketDataService:
         return self.api_client.get_open_orders(user=user, force_refresh=force_refresh, fetcher=fetcher)
 
     def get_asset_id(self, coin: str, meta: Optional[Dict[str, Any]]) -> Optional[int]:
-        if meta is None:
-            return None
-        for index, asset in enumerate(meta.get("universe", [])):
-            if asset.get("name") == coin:
+        universe = self._get_universe(meta)
+        for index, asset in enumerate(universe):
+            if str(asset.get("name", "")).strip().upper() == str(coin).strip().upper():
                 return index
         return None
 
     def get_max_leverage(self, coin: str, meta: Optional[Dict[str, Any]]) -> int:
-        if meta is None:
-            return 10
-        for asset in meta.get("universe", []):
-            if asset.get("name") == coin:
-                return int(asset.get("maxLeverage", 10))
+        universe = self._get_universe(meta)
+        for asset in universe:
+            if str(asset.get("name", "")).strip().upper() == str(coin).strip().upper():
+                max_lev = self._asset_int(asset, ["maxLeverage", "max_leverage"])
+                return max_lev if max_lev is not None else 10
         return 10
 
     def get_sz_decimals(self, coin: str, meta: Optional[Dict[str, Any]]) -> Optional[int]:
-        if meta is None:
-            return None
-        for asset in meta.get("universe", []):
-            if asset.get("name") == coin:
-                return asset.get("szDecimals")
+        universe = self._get_universe(meta)
+        for asset in universe:
+            if str(asset.get("name", "")).strip().upper() == str(coin).strip().upper():
+                return self._asset_int(asset, ["szDecimals", "sizeDecimals", "qtyDecimals"])
         return None
 
     def get_reference_price(self, coin: str, fallback_price: Decimal, mids: Optional[Dict[str, str]]) -> Decimal:
@@ -60,26 +88,21 @@ class ExchangeMarketDataService:
         meta: Optional[Dict[str, Any]],
         mids: Optional[Dict[str, str]],
     ) -> Tuple[Decimal, int]:
-        if meta is None:
+        universe = self._get_universe(meta)
+        if not universe:
             return Decimal("0.01"), 2
 
-        universe = meta.get("universe", [])
         if not (0 <= asset_id < len(universe)):
             return Decimal("0.01"), 2
 
         asset = universe[asset_id]
-        coin = asset.get("name", "")
+        coin = str(asset.get("name", "")).strip().upper()
 
         # Source of truth: pxDecimals from Hyperliquid metadata
-        px_decimals_raw = asset.get("pxDecimals")
-        if px_decimals_raw is not None:
-            try:
-                px_decimals = int(px_decimals_raw)
-                if px_decimals >= 0:
-                    tick_size = Decimal("1").scaleb(-px_decimals) if px_decimals > 0 else Decimal("1")
-                    return tick_size, px_decimals
-            except (TypeError, ValueError):
-                pass
+        px_decimals = self._asset_int(asset, ["pxDecimals", "priceDecimals", "pricePrecision"])
+        if px_decimals is not None and px_decimals >= 0:
+            tick_size = Decimal("1").scaleb(-px_decimals) if px_decimals > 0 else Decimal("1")
+            return tick_size, px_decimals
 
         # Fallback: infer from current mid if metadata lacks pxDecimals
         if mids is not None and coin in mids:

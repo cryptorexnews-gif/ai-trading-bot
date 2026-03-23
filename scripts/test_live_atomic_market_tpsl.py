@@ -32,7 +32,7 @@ import logging
 import os
 import sys
 import time
-from decimal import Decimal, ROUND_DOWN, ROUND_HALF_UP
+from decimal import Decimal, ROUND_HALF_UP
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -63,42 +63,53 @@ def mask_wallet(wallet: str) -> str:
     return f"{wallet[:6]}...{wallet[-4:]}"
 
 
-def tick_decimals(tick_size: Decimal) -> int:
-    normalized = format(tick_size.normalize(), "f")
-    if "." not in normalized:
-        return 0
-    return len(normalized.split(".")[1])
+def _asset_int(asset: Dict, keys: List[str]) -> Optional[int]:
+    for key in keys:
+        if key not in asset:
+            continue
+        raw = asset.get(key)
+        if raw is None:
+            continue
+        try:
+            return int(str(raw))
+        except (TypeError, ValueError):
+            continue
+    return None
 
 
-def get_tick_size_from_meta(client: HyperliquidExchangeClient, coin: str) -> Tuple[Decimal, int]:
+def get_asset_precision_from_meta(client: HyperliquidExchangeClient, coin: str) -> Tuple[Decimal, Decimal, int, int]:
     """
-    Source of truth: pxDecimals da /info meta.
-    Tick size = 10 ** (-pxDecimals)
+    Restituisce:
+      tick_size, step_size, px_decimals, sz_decimals
+    usando i metadata Hyperliquid (source of truth).
     """
     meta = client.get_meta(force_refresh=True)
     if not isinstance(meta, dict):
-        raise RuntimeError("Metadata Hyperliquid non disponibile")
+        raise RuntimeError("Metadati Hyperliquid non disponibili o formato invalido")
 
-    for asset in meta.get("universe", []):
+    universe = meta.get("universe", [])
+    if not isinstance(universe, list):
+        raise RuntimeError("Metadati mancanti: 'universe' non trovato")
+
+    for asset in universe:
         if str(asset.get("name", "")).strip().upper() != coin.upper():
             continue
 
-        px_decimals_raw = asset.get("pxDecimals")
-        if px_decimals_raw is None:
-            raise RuntimeError(f"pxDecimals mancante per {coin} nel metadata")
+        px_decimals = _asset_int(asset, ["pxDecimals", "priceDecimals", "pricePrecision"])
+        sz_decimals = _asset_int(asset, ["szDecimals", "sizeDecimals", "qtyDecimals"])
 
-        try:
-            px_decimals = int(px_decimals_raw)
-        except (TypeError, ValueError):
-            raise RuntimeError(f"pxDecimals invalido per {coin}: {px_decimals_raw}")
+        if px_decimals is None or sz_decimals is None:
+            logger.error(f"Asset metadata per {coin}: {json.dumps(asset, indent=2)}")
+            raise RuntimeError(f"Decimali mancanti per {coin} nel metadata")
 
-        if px_decimals < 0:
-            raise RuntimeError(f"pxDecimals negativo per {coin}: {px_decimals}")
+        if px_decimals < 0 or sz_decimals < 0:
+            raise RuntimeError(f"Decimali negativi per {coin}: px={px_decimals}, sz={sz_decimals}")
 
         tick_size = Decimal("1").scaleb(-px_decimals) if px_decimals > 0 else Decimal("1")
-        return tick_size, px_decimals
+        step_size = Decimal("1").scaleb(-sz_decimals) if sz_decimals > 0 else Decimal("1")
+        return tick_size, step_size, px_decimals, sz_decimals
 
-    raise RuntimeError(f"Coin {coin} non trovata nel metadata Hyperliquid")
+    raise RuntimeError(f"Asset {coin} non trovato nel metadata")
 
 
 def quantize_to_tick(price: Decimal, tick_size: Decimal, decimals: int) -> Decimal:
@@ -112,10 +123,26 @@ def quantize_to_tick(price: Decimal, tick_size: Decimal, decimals: int) -> Decim
     return rounded
 
 
-def format_price_for_tick(price: Decimal, tick_size: Decimal, decimals: Optional[int] = None) -> str:
-    effective_decimals = decimals if decimals is not None else tick_decimals(tick_size)
-    rounded = quantize_to_tick(price, tick_size, effective_decimals)
-    return f"{rounded:.{effective_decimals}f}" if effective_decimals > 0 else f"{rounded:.0f}"
+def format_price_for_tick(price: Decimal, tick_size: Decimal, decimals: int) -> str:
+    rounded = quantize_to_tick(price, tick_size, decimals)
+    return f"{rounded:.{decimals}f}" if decimals > 0 else f"{rounded:.0f}"
+
+
+def quantize_to_step(size: Decimal, step_size: Decimal, sz_decimals: int) -> Decimal:
+    normalized = normalize_size_for_decimals(size, sz_decimals)
+    if normalized <= 0:
+        return Decimal("0")
+    if sz_decimals > 0:
+        q = Decimal("1").scaleb(-sz_decimals)
+        return normalized.quantize(q)
+    return normalized.quantize(Decimal("1"))
+
+
+def format_size_for_step(size: Decimal, step_size: Decimal, sz_decimals: int) -> str:
+    normalized = quantize_to_step(size, step_size, sz_decimals)
+    if sz_decimals > 0:
+        return f"{normalized:.{sz_decimals}f}"
+    return f"{normalized:.0f}"
 
 
 def get_position_size(client: HyperliquidExchangeClient, trading_user: str, coin: str) -> Decimal:
@@ -131,12 +158,12 @@ def normalize_size_for_min_notional(
     raw_size: Decimal,
     mid_price: Decimal,
     min_notional_usd: Decimal,
-    sz_decimals: Optional[int],
+    sz_decimals: int,
 ) -> Decimal:
     if mid_price <= 0:
         return Decimal("0")
 
-    size = normalize_size_for_decimals(raw_size, sz_decimals if sz_decimals is not None else -1)
+    size = normalize_size_for_decimals(raw_size, sz_decimals)
     if size <= 0:
         return Decimal("0")
 
@@ -145,9 +172,9 @@ def normalize_size_for_min_notional(
         return size
 
     required_size = min_notional_usd / mid_price
-    size = normalize_size_for_decimals(required_size, sz_decimals if sz_decimals is not None else -1)
+    size = normalize_size_for_decimals(required_size, sz_decimals)
 
-    if size * mid_price < min_notional_usd and sz_decimals is not None and sz_decimals >= 0:
+    if size * mid_price < min_notional_usd and sz_decimals >= 0:
         step = Decimal("1").scaleb(-sz_decimals)
         size = size + step
 
@@ -333,7 +360,7 @@ def wait_protective_orders_confirmation(
 def build_atomic_action(
     asset_id: int,
     is_buy: bool,
-    size: Decimal,
+    size_str: str,
     entry_price_str: str,
     tp_price_str: str,
     sl_price_str: str,
@@ -344,7 +371,7 @@ def build_atomic_action(
         "a": asset_id,
         "b": is_buy,
         "p": entry_price_str,
-        "s": str(size.normalize()),
+        "s": size_str,
         "r": False,
         "t": {"limit": {"tif": "Gtc"}},
     }
@@ -353,7 +380,7 @@ def build_atomic_action(
         "a": asset_id,
         "b": close_is_buy,
         "p": "0",
-        "s": str(size.normalize()),
+        "s": size_str,
         "r": True,
         "t": {
             "trigger": {
@@ -368,7 +395,7 @@ def build_atomic_action(
         "a": asset_id,
         "b": close_is_buy,
         "p": "0",
-        "s": str(size.normalize()),
+        "s": size_str,
         "r": True,
         "t": {
             "trigger": {
@@ -493,11 +520,14 @@ def main() -> None:
     if asset_id is None:
         raise RuntimeError(f"Asset ID non trovato per {coin}")
 
-    tick_size, precision = get_tick_size_from_meta(client, coin)
-    if tick_size <= 0:
-        raise RuntimeError(f"Tick size non valida per {coin}: {tick_size}")
+    tick_size, step_size, px_decimals, sz_decimals = get_asset_precision_from_meta(client, coin)
+    if tick_size <= 0 or step_size <= 0:
+        raise RuntimeError(f"Precisione non valida per {coin}: tick={tick_size}, step={step_size}")
 
-    logger.info(f"{coin} mid={mid_price} tick={tick_size} px_decimals={precision}")
+    logger.info(
+        f"{coin} mid={mid_price} tick={tick_size} step={step_size} "
+        f"px_decimals={px_decimals} sz_decimals={sz_decimals}"
+    )
 
     max_leverage = client.get_max_leverage(coin)
     if leverage > max_leverage:
@@ -510,7 +540,6 @@ def main() -> None:
 
     notional_usd = margin_usd * Decimal(str(leverage))
     raw_size = notional_usd / mid_price
-    sz_decimals = client.get_sz_decimals(coin)
     normalized_size = normalize_size_for_min_notional(
         raw_size=raw_size,
         mid_price=mid_price,
@@ -519,6 +548,9 @@ def main() -> None:
     )
     if normalized_size <= 0:
         raise RuntimeError("Size normalizzata non valida")
+
+    normalized_size = quantize_to_step(normalized_size, step_size, sz_decimals)
+    size_str = format_size_for_step(normalized_size, step_size, sz_decimals)
 
     expected_notional = normalized_size * mid_price
     if expected_notional < Decimal("10"):
@@ -532,28 +564,30 @@ def main() -> None:
 
     if side == "buy":
         entry_price_raw = mid_price * (Decimal("1") + ioc_buffer_pct)
-        sl_price_raw = mid_price * (Decimal("1") - sl_pct)
-        tp_price_raw = mid_price * (Decimal("1") + tp_pct)
+        entry_price_quantized = quantize_to_tick(entry_price_raw, tick_size, px_decimals)
+        sl_price_raw = entry_price_quantized * (Decimal("1") - sl_pct)
+        tp_price_raw = entry_price_quantized * (Decimal("1") + tp_pct)
         close_side = "sell"
     else:
         entry_price_raw = mid_price * (Decimal("1") - ioc_buffer_pct)
-        sl_price_raw = mid_price * (Decimal("1") + sl_pct)
-        tp_price_raw = mid_price * (Decimal("1") - tp_pct)
+        entry_price_quantized = quantize_to_tick(entry_price_raw, tick_size, px_decimals)
+        sl_price_raw = entry_price_quantized * (Decimal("1") + sl_pct)
+        tp_price_raw = entry_price_quantized * (Decimal("1") - tp_pct)
         close_side = "buy"
 
-    entry_price_str = format_price_for_tick(entry_price_raw, tick_size, precision)
-    sl_price_str = format_price_for_tick(sl_price_raw, tick_size, precision)
-    tp_price_str = format_price_for_tick(tp_price_raw, tick_size, precision)
+    entry_price_str = format_price_for_tick(entry_price_quantized, tick_size, px_decimals)
+    sl_price_str = format_price_for_tick(sl_price_raw, tick_size, px_decimals)
+    tp_price_str = format_price_for_tick(tp_price_raw, tick_size, px_decimals)
 
     logger.info(
-        "Prezzi formattati strict tick (da pxDecimals metadata): "
+        "Prezzi formattati strict tick (metadata): "
         f"entry={entry_price_str}, sl={sl_price_str}, tp={tp_price_str}, tick={tick_size}"
     )
 
     action = build_atomic_action(
         asset_id=asset_id,
         is_buy=(side == "buy"),
-        size=normalized_size,
+        size_str=size_str,
         entry_price_str=entry_price_str,
         tp_price_str=tp_price_str,
         sl_price_str=sl_price_str,
