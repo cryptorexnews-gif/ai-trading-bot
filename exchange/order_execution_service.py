@@ -27,6 +27,14 @@ class OrderExecutionService:
     def __init__(self, client):
         self.client = client
 
+    @staticmethod
+    def _canonical_decimal_str(value: Any) -> str:
+        dec = Decimal(str(value))
+        plain = format(dec, "f")
+        if "." in plain:
+            plain = plain.rstrip("0").rstrip(".")
+        return plain if plain else "0"
+
     def _format_price_for_asset(self, coin: str, asset_id: int, price: Decimal) -> str:
         """
         Formatta il prezzo in stringa rispettando:
@@ -190,9 +198,10 @@ class OrderExecutionService:
         if rounded_sl <= 0 or rounded_tp <= 0:
             return {"success": False, "mode": "live", "reason": "invalid_trigger_price", "notional": "0"}
 
-        entry_price_wire = self._format_price_for_asset(coin, asset_id, entry_limit_price)
-        sl_price_wire = self._format_price_for_asset(coin, asset_id, rounded_sl)
-        tp_price_wire = self._format_price_for_asset(coin, asset_id, rounded_tp)
+        entry_price_wire = self._canonical_decimal_str(self._format_price_for_asset(coin, asset_id, entry_limit_price))
+        sl_price_wire = self._canonical_decimal_str(self._format_price_for_asset(coin, asset_id, rounded_sl))
+        tp_price_wire = self._canonical_decimal_str(self._format_price_for_asset(coin, asset_id, rounded_tp))
+        size_wire = self._canonical_decimal_str(normalized_size)
 
         is_buy = normalized_side == "buy"
         close_is_buy = not is_buy
@@ -201,7 +210,7 @@ class OrderExecutionService:
             "a": asset_id,
             "b": is_buy,
             "p": entry_price_wire,
-            "s": str(normalized_size.normalize()),
+            "s": size_wire,
             "r": False,
             "t": {"limit": {"tif": "Gtc"}},
         }
@@ -210,7 +219,7 @@ class OrderExecutionService:
             "a": asset_id,
             "b": close_is_buy,
             "p": "0",
-            "s": str(normalized_size.normalize()),
+            "s": size_wire,
             "r": True,
             "t": {
                 "trigger": {
@@ -225,7 +234,7 @@ class OrderExecutionService:
             "a": asset_id,
             "b": close_is_buy,
             "p": "0",
-            "s": str(normalized_size.normalize()),
+            "s": size_wire,
             "r": True,
             "t": {
                 "trigger": {

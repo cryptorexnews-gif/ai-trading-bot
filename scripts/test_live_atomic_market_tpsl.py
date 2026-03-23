@@ -12,7 +12,7 @@ import logging
 import os
 import sys
 import time
-from decimal import Decimal, ROUND_HALF_UP
+from decimal import Decimal
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -41,6 +41,13 @@ def d(key: str, default: str) -> Decimal:
     return Decimal(str(os.getenv(key, default)))
 
 
+def canonical_decimal_str(value: Decimal) -> str:
+    plain = format(value, "f")
+    if "." in plain:
+        plain = plain.rstrip("0").rstrip(".")
+    return plain if plain else "0"
+
+
 def mask_wallet(wallet: str) -> str:
     if not wallet or len(wallet) < 12:
         return "invalid_wallet"
@@ -62,13 +69,6 @@ def _asset_int(asset: Dict, keys: List[str]) -> Optional[int]:
 
 
 def get_asset_precision_from_meta(client: HyperliquidExchangeClient, coin: str) -> Tuple[Decimal, Decimal, int, int]:
-    """
-    Restituisce:
-      tick_size, step_size, px_decimals, sz_decimals
-    Source of truth:
-      - pxDecimals se presente
-      - fallback: px_decimals = max(0, 6 - sz_decimals)
-    """
     meta = client.get_meta(force_refresh=True)
     if not isinstance(meta, dict):
         raise RuntimeError("Metadati Hyperliquid non disponibili o formato invalido")
@@ -112,13 +112,6 @@ def quantize_to_step(size: Decimal, sz_decimals: int) -> Decimal:
         q = Decimal("1").scaleb(-sz_decimals)
         return normalized.quantize(q)
     return normalized.quantize(Decimal("1"))
-
-
-def format_size_for_step(size: Decimal, sz_decimals: int) -> str:
-    normalized = quantize_to_step(size, sz_decimals)
-    if sz_decimals > 0:
-        return f"{normalized:.{sz_decimals}f}"
-    return f"{normalized:.0f}"
 
 
 def get_position_size(client: HyperliquidExchangeClient, trading_user: str, coin: str) -> Decimal:
@@ -526,7 +519,7 @@ def main() -> None:
         raise RuntimeError("Size normalizzata non valida")
 
     normalized_size = quantize_to_step(normalized_size, sz_decimals)
-    size_str = format_size_for_step(normalized_size, sz_decimals)
+    size_str = canonical_decimal_str(normalized_size)
 
     expected_notional = normalized_size * mid_price
     if expected_notional < Decimal("10"):
@@ -549,9 +542,9 @@ def main() -> None:
         tp_price_raw = entry_price_raw * (Decimal("1") - tp_pct)
         close_side = "buy"
 
-    entry_price_str = format_price_for_hyperliquid(entry_price_raw, sz_decimals)
-    sl_price_str = format_price_for_hyperliquid(sl_price_raw, sz_decimals)
-    tp_price_str = format_price_for_hyperliquid(tp_price_raw, sz_decimals)
+    entry_price_str = canonical_decimal_str(Decimal(format_price_for_hyperliquid(entry_price_raw, sz_decimals)))
+    sl_price_str = canonical_decimal_str(Decimal(format_price_for_hyperliquid(sl_price_raw, sz_decimals)))
+    tp_price_str = canonical_decimal_str(Decimal(format_price_for_hyperliquid(tp_price_raw, sz_decimals)))
 
     logger.info(
         "Prezzi formattati Hyperliquid strict: "
