@@ -37,9 +37,10 @@ class OrderExecutionService:
 
     def _format_price_for_asset(self, coin: str, price: Decimal) -> str:
         """
-        Formatta prezzo per Hyperliquid in modo robusto:
+        Formatta prezzo per Hyperliquid:
         - arrotonda al tick size
         - formatta con il numero esatto di decimali della precisione
+        - per precision=0 produce stringa intera senza punto decimale (es. "2015" non "2015.0")
         """
         asset_id = self.client.get_asset_id(coin)
         if asset_id is None:
@@ -51,7 +52,9 @@ class OrderExecutionService:
         if precision >= 0:
             if precision > 0:
                 return f"{rounded:.{precision}f}"
-            return f"{rounded:.0f}"
+            # precision == 0: integer format, no decimal point
+            int_val = int(rounded)
+            return str(int_val)
 
         # Fallback estremo
         sz_decimals = self.client.get_sz_decimals(coin)
@@ -354,8 +357,8 @@ class OrderExecutionService:
 
         logger.info(
             f"{coin} trigger order wire: {tpsl.upper()} {normalized_side.upper()} "
-            f"raw_trigger={trigger_price} -> rounded={rounded_trigger} -> wire={trigger_price_wire}, "
-            f"size_wire={size_wire}"
+            f"raw_trigger={trigger_price} -> rounded={rounded_trigger} -> wire='{trigger_price_wire}', "
+            f"size_wire='{size_wire}'"
         )
 
         existing_oid = self.client._wait_for_trigger_order_id(
@@ -383,6 +386,8 @@ class OrderExecutionService:
             trigger_price_str=trigger_price_wire,
             size_str=size_wire,
         )
+
+        logger.debug(f"{coin} trigger order payload: {json.dumps(action, indent=2)}")
 
         result = self.client._post_signed_action_with_master_retry(action)
         if result is None:

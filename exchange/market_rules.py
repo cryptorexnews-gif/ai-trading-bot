@@ -2,11 +2,13 @@ from decimal import Decimal, ROUND_DOWN, ROUND_HALF_UP
 from typing import Dict, Optional, Tuple
 
 
-# Known tick sizes for major assets on Hyperliquid (safety net).
-# These are verified against the exchange and override any heuristic.
+# Known tick sizes for major assets on Hyperliquid.
+# IMPORTANT: Trigger orders (TP/SL) require these tick sizes.
+# Limit orders may accept finer granularity but trigger orders do NOT.
+# Verified against live Hyperliquid exchange behavior.
 KNOWN_TICK_SIZES: Dict[str, Tuple[Decimal, int]] = {
     "BTC": (Decimal("1"), 0),        # $100k+ → tick=1, 0 decimals
-    "ETH": (Decimal("0.1"), 1),      # $2k-$10k → tick=0.1, 1 decimal
+    "ETH": (Decimal("1"), 0),        # $2k+ → tick=1, 0 decimals (trigger orders require integer)
     "SOL": (Decimal("0.01"), 2),     # $100-$999 → tick=0.01, 2 decimals
     "BNB": (Decimal("0.01"), 2),
     "XRP": (Decimal("0.0001"), 4),
@@ -31,7 +33,7 @@ KNOWN_TICK_SIZES: Dict[str, Tuple[Decimal, int]] = {
 def default_tick_size_for_asset(asset_id: int) -> Tuple[Decimal, int]:
     defaults: Dict[int, Tuple[Decimal, int]] = {
         0: (Decimal("1"), 0),         # BTC
-        1: (Decimal("0.1"), 1),       # ETH
+        1: (Decimal("1"), 0),         # ETH
         5: (Decimal("0.001"), 3),
         7: (Decimal("0.01"), 2),
         65: (Decimal("0.00001"), 5),
@@ -50,10 +52,10 @@ def infer_tick_size_from_price(price: Decimal, max_sig_figs: int = 5) -> Tuple[D
     Given a price, compute the tick size and number of decimals allowed.
 
     Examples:
-      price=2048.75 → 5 sig figs allows 1 decimal → tick=0.1, decimals=1
-      price=150.25  → 5 sig figs allows 2 decimals → tick=0.01, decimals=2
-      price=0.5432  → 5 sig figs allows 4 decimals → tick=0.0001, decimals=4
-      price=105000   → 5 sig figs allows 0 decimals → tick=1, decimals=0
+      price=2048.75 → 4 digits before decimal → 5-4=1 decimal → tick=0.1
+      price=150.25  → 3 digits before decimal → 5-3=2 decimals → tick=0.01
+      price=0.5432  → 0 digits before decimal → 5-0=5 decimals → tick=0.00001
+      price=105000   → 6 digits before decimal → 5-6=0 decimals → tick=1 (or 10)
     """
     if price <= 0:
         return Decimal("0.01"), 2
@@ -72,7 +74,6 @@ def infer_tick_size_from_price(price: Decimal, max_sig_figs: int = 5) -> Tuple[D
 def infer_tick_size_and_precision_from_mid(raw_price: str) -> Tuple[Decimal, int]:
     """
     Infer tick size from a mid price string using the 5 significant figures rule.
-    This replaces the old naive decimal-counting approach.
     """
     try:
         price = Decimal(str(raw_price))
