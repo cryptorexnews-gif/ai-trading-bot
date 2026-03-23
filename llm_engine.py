@@ -99,7 +99,7 @@ class LLMEngine:
             take_profit_match = re.search(r'"take_profit_pct"\s*:\s*(null|[\d.]+)', cleaned)
             reasoning_match = re.search(r'"reasoning"\s*:\s*"([^"]*(?:\\.[^"]*)*)"', cleaned)
 
-            if action_match and size_match and leverage_match and confidence_match:
+            if action_match and confidence_match:
                 stop_loss_pct = None
                 take_profit_pct = None
 
@@ -110,8 +110,8 @@ class LLMEngine:
 
                 return {
                     "action": action_match.group(1),
-                    "size": float(size_match.group(1)),
-                    "leverage": int(leverage_match.group(1)),
+                    "size": float(size_match.group(1)) if size_match else 0,
+                    "leverage": int(leverage_match.group(1)) if leverage_match else 1,
                     "confidence": float(confidence_match.group(1)),
                     "stop_loss_pct": stop_loss_pct,
                     "take_profit_pct": take_profit_pct,
@@ -141,10 +141,9 @@ class LLMEngine:
         return dec
 
     def _validate_decision(self, parsed: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        required_keys = ["action", "size", "leverage", "confidence", "reasoning"]
-        if not all(key in parsed for key in required_keys):
-            missing = [k for k in required_keys if k not in parsed]
-            logger.error(f"LLM response missing keys: {missing}")
+        # Only action and reasoning are truly required
+        if "action" not in parsed:
+            logger.error("LLM response missing 'action' key")
             return None
 
         action = str(parsed["action"]).strip().lower()
@@ -161,12 +160,13 @@ class LLMEngine:
                 "reasoning": f"Original action '{action}' invalid, defaulting to hold."
             }
 
-        confidence_dec = self._coerce_decimal(parsed.get("confidence"), Decimal("0"), Decimal("0"), Decimal("1"))
+        confidence_dec = self._coerce_decimal(parsed.get("confidence", 0), Decimal("0"), Decimal("0"), Decimal("1"))
         confidence = float(confidence_dec)
 
-        leverage = self._coerce_int(parsed.get("leverage"), default=1, min_value=1, max_value=50)
-
-        size = self._coerce_decimal(parsed.get("size"), Decimal("0"), Decimal("0"))
+        # Use defaults for missing fields instead of rejecting
+        leverage = self._coerce_int(parsed.get("leverage", 1), default=1, min_value=1, max_value=50)
+        size = self._coerce_decimal(parsed.get("size", 0), Decimal("0"), Decimal("0"))
+        reasoning = str(parsed.get("reasoning", "No reasoning provided"))
 
         stop_loss_pct = None
         raw_sl = parsed.get("stop_loss_pct")
@@ -189,7 +189,7 @@ class LLMEngine:
             "confidence": confidence,
             "stop_loss_pct": stop_loss_pct,
             "take_profit_pct": take_profit_pct,
-            "reasoning": str(parsed.get("reasoning", "")),
+            "reasoning": reasoning,
         }
 
     def _call_openrouter(self, prompt: str) -> Optional[str]:
