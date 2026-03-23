@@ -1,5 +1,5 @@
 from decimal import Decimal
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 
 def _decimal_to_wire_str(value: Decimal) -> str:
@@ -20,6 +20,8 @@ def build_limit_order_action(
     size: Decimal,
     reduce_only: bool = False,
     tif: str = "Ioc",
+    price_str: Optional[str] = None,
+    size_str: Optional[str] = None,
 ) -> Dict[str, Any]:
     if tif not in {"Ioc", "Gtc", "Alo"}:
         tif = "Ioc"
@@ -27,8 +29,8 @@ def build_limit_order_action(
     order_wire = {
         "a": asset_id,
         "b": is_buy,
-        "p": _decimal_to_wire_str(price),
-        "s": _decimal_to_wire_str(size),
+        "p": price_str if price_str is not None else _decimal_to_wire_str(price),
+        "s": size_str if size_str is not None else _decimal_to_wire_str(size),
         "r": bool(reduce_only),
         "t": {"limit": {"tif": tif}},
     }

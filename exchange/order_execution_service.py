@@ -114,12 +114,22 @@ class OrderExecutionService:
         if limit_price <= 0:
             return {"success": False, "mode": "live", "reason": "invalid_limit_price", "notional": "0"}
 
+        price_wire = self._format_price_for_asset(coin, limit_price)
+        size_wire = self._format_size_for_coin(coin, normalized_size)
+
+        logger.debug(
+            f"{coin} limit wire values: raw_price={limit_price} price_wire={price_wire} "
+            f"raw_size={normalized_size} size_wire={size_wire}"
+        )
+
         action = build_limit_order_action(
             asset_id=asset_id,
             is_buy=is_buy,
             price=limit_price,
             size=normalized_size,
             reduce_only=reduce_only,
+            price_str=price_wire,
+            size_str=size_wire,
         )
 
         result = self.client._post_signed_action_with_master_retry(action)
