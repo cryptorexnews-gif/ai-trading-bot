@@ -182,39 +182,20 @@ class ExecutionEngine:
             adjusted_size = self._adjust_open_size_for_exchange_minimum(coin, size, market_data.last_price)
             desired_price = self._market_desired_price(side, market_data.last_price)
 
-            sl_pct = safe_decimal(order.get("stop_loss_pct", 0))
-            tp_pct = safe_decimal(order.get("take_profit_pct", 0))
-            use_atomic_batch = sl_pct > 0 and tp_pct > 0
-
-            if use_atomic_batch:
-                if side == "buy":
-                    sl_price = market_data.last_price * (Decimal("1") - sl_pct)
-                    tp_price = market_data.last_price * (Decimal("1") + tp_pct)
-                else:
-                    sl_price = market_data.last_price * (Decimal("1") + sl_pct)
-                    tp_price = market_data.last_price * (Decimal("1") - tp_pct)
-
-                result = self.exchange_client.place_entry_with_tpsl_batch(
-                    coin=coin,
-                    side=side,
-                    size=adjusted_size,
-                    desired_price=desired_price,
-                    stop_loss_price=sl_price,
-                    take_profit_price=tp_price,
-                )
-            else:
-                result = self.exchange_client.place_order(coin, side, adjusted_size, desired_price)
+            # Flusso sequenziale: prima entry, poi protezioni in fase successiva (PositionManager/ProtectiveOrdersService)
+            result = self.exchange_client.place_order(coin, side, adjusted_size, desired_price)
 
             executed_size = safe_decimal(result.get("executed_size", adjusted_size))
             if executed_size <= 0:
                 executed_size = adjusted_size
+
             return {
                 "success": bool(result.get("success", False)),
                 "notional": safe_decimal(result.get("notional", "0")),
                 "filled_price": safe_decimal(result.get("filled_price", desired_price)),
                 "executed_size": executed_size,
-                "reason": "open_position",
-                "entry_with_protection": bool(result.get("entry_with_protection", False)),
+                "reason": "open_position_sequential",
+                "entry_with_protection": False,
             }
 
         return {"success": False, "notional": Decimal("0"), "reason": "unhandled_action"}

@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """
-Test live atomico:
-apertura posizione + stop loss + take profit in un unico batch request.
+Test live sequenziale:
+1) apertura posizione
+2) attesa conferma posizione
+3) creazione TP/SL con upsert_protective_orders
 
 ATTENZIONE: usa soldi reali se ENABLE_MAINNET_TRADING=true.
 """
@@ -9,6 +11,7 @@ ATTENZIONE: usa soldi reali se ENABLE_MAINNET_TRADING=true.
 import logging
 import os
 import sys
+import time
 from decimal import Decimal, ROUND_HALF_UP
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -22,11 +25,12 @@ if str(ROOT_DIR) not in sys.path:
 
 from exchange.market_rules import get_max_price_decimals_from_sz, normalize_size_for_decimals
 from exchange_client import HyperliquidExchangeClient
+from utils.hyperliquid_state import get_open_positions
 
 load_dotenv()
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
-logger = logging.getLogger("live_atomic_entry_tpsl")
+logger = logging.getLogger("live_sequential_entry_tpsl")
 
 
 def d(key: str, default: str) -> Decimal:
@@ -76,9 +80,6 @@ def get_asset_precision_from_meta(client: HyperliquidExchangeClient, coin: str) 
             px_decimals = get_max_price_decimals_from_sz(sz_decimals, max_decimals_perp=6)
             logger.warning(f"{coin}: pxDecimals non presente nel metadata, fallback a 6-szDecimals => {px_decimals}")
 
-        if px_decimals < 0 or sz_decimals < 0:
-            raise RuntimeError(f"Decimali negativi per {coin}: px={px_decimals}, sz={sz_decimals}")
-
         tick_size = Decimal("1").scaleb(-px_decimals) if px_decimals > 0 else Decimal("1")
         step_size = Decimal("1").scaleb(-sz_decimals) if sz_decimals > 0 else Decimal("1")
         return tick_size, step_size, px_decimals, sz_decimals
@@ -103,14 +104,39 @@ def quantize_to_step(size: Decimal, sz_decimals: int) -> Decimal:
     return normalized.quantize(Decimal("1"))
 
 
-def format_price_fixed_decimals(price: Decimal, decimals: int = 5) -> str:
-    if decimals < 0:
-        decimals = 0
-    quantizer = Decimal("1").scaleb(-decimals) if decimals > 0 else Decimal("1")
-    rounded = price.quantize(quantizer, rounding=ROUND_HALF_UP)
-    if decimals > 0:
-        return f"{rounded:.{decimals}f}"
-    return f"{rounded:.0f}"
+def get_position_size(client: HyperliquidExchangeClient, trading_user: str, coin: str) -> Decimal:
+    user_state = client.get_user_state(trading_user)
+    if not isinstance(user_state, dict):
+        return Decimal("0")
+    positions = get_open_positions(user_state)
+    pos = positions.get(coin, {})
+    return Decimal(str(pos.get("size", "0")))
+
+
+def wait_position_delta_confirmation(
+    client: HyperliquidExchangeClient,
+    trading_user: str,
+    coin: str,
+    size_before: Decimal,
+    side: str,
+    min_abs_delta: Decimal,
+    attempts: int,
+    sleep_sec: float,
+) -> Tuple[bool, Decimal]:
+    is_buy = side == "buy"
+
+    for attempt in range(1, attempts + 1):
+        current_size = get_position_size(client, trading_user, coin)
+        delta = current_size - size_before
+
+        if is_buy and delta >= min_abs_delta:
+            return True, current_size
+        if (not is_buy) and delta <= -min_abs_delta:
+            return True, current_size
+
+        time.sleep(sleep_sec)
+
+    return False, get_position_size(client, trading_user, coin)
 
 
 def normalize_size_for_min_notional(
@@ -170,16 +196,9 @@ def main() -> None:
     tp_pct = d("TEST_TP_PCT", "0.06")
     ioc_buffer_pct = d("TEST_IOC_BUFFER_PCT", "0.01")
     min_notional_usd = d("TEST_MIN_NOTIONAL_USD", "10.5")
-    forced_price_decimals = int(os.getenv("TEST_FORCE_PRICE_DECIMALS", "5"))
 
-    if margin_usd <= 0:
-        raise RuntimeError("TEST_MARGIN_USD deve essere > 0")
-    if leverage < 1:
-        raise RuntimeError("TEST_LEVERAGE deve essere >= 1")
-    if sl_pct <= 0 or sl_pct >= 1:
-        raise RuntimeError("TEST_SL_PCT deve essere tra 0 e 1")
-    if tp_pct <= 0 or tp_pct >= 2:
-        raise RuntimeError("TEST_TP_PCT deve essere tra 0 e 2")
+    entry_confirm_attempts = int(os.getenv("TEST_ENTRY_CONFIRM_ATTEMPTS", "20"))
+    entry_confirm_sleep_sec = float(os.getenv("TEST_ENTRY_CONFIRM_SLEEP_SEC", "1"))
 
     logger.warning("TEST LIVE REALE ATTIVO: questo script può aprire una posizione con soldi reali")
     logger.info(
@@ -217,43 +236,57 @@ def main() -> None:
     raw_size = notional_usd / mid_price
     normalized_size = normalize_size_for_min_notional(raw_size, mid_price, min_notional_usd, sz_decimals)
     normalized_size = quantize_to_step(normalized_size, sz_decimals)
-
     if normalized_size <= 0:
         raise RuntimeError("Size normalizzata non valida")
 
-    if side == "buy":
-        entry_price_raw = mid_price * (Decimal("1") + ioc_buffer_pct)
-        sl_price_raw = entry_price_raw * (Decimal("1") - sl_pct)
-        tp_price_raw = entry_price_raw * (Decimal("1") + tp_pct)
-    else:
-        entry_price_raw = mid_price * (Decimal("1") - ioc_buffer_pct)
-        sl_price_raw = entry_price_raw * (Decimal("1") + sl_pct)
-        tp_price_raw = entry_price_raw * (Decimal("1") - tp_pct)
+    trading_user = client.get_trading_user_address()
+    size_before = get_position_size(client, trading_user, coin)
 
-    entry_snapped = snap_to_tick(entry_price_raw, tick_size)
-    sl_snapped = snap_to_tick(sl_price_raw, tick_size)
-    tp_snapped = snap_to_tick(tp_price_raw, tick_size)
+    desired_price = snap_to_tick(mid_price * (Decimal("1") + ioc_buffer_pct), tick_size) if side == "buy" else snap_to_tick(mid_price * (Decimal("1") - ioc_buffer_pct), tick_size)
+    entry_result = client.place_order(coin=coin, side=side, size=normalized_size, desired_price=desired_price, reduce_only=False)
+    if not entry_result.get("success"):
+        raise RuntimeError(f"Entry fallita: {entry_result}")
+
+    filled_price = Decimal(str(entry_result.get("filled_price", desired_price)))
+
+    confirmed, size_after = wait_position_delta_confirmation(
+        client=client,
+        trading_user=trading_user,
+        coin=coin,
+        size_before=size_before,
+        side=side,
+        min_abs_delta=normalized_size * Decimal("0.8"),
+        attempts=entry_confirm_attempts,
+        sleep_sec=entry_confirm_sleep_sec,
+    )
+    if not confirmed:
+        raise RuntimeError(f"Entry non confermata: before={size_before}, after={size_after}")
+
+    is_long = side == "buy"
+    if is_long:
+        sl_price = snap_to_tick(filled_price * (Decimal("1") - sl_pct), tick_size)
+        tp_price = snap_to_tick(filled_price * (Decimal("1") + tp_pct), tick_size)
+        position_size_to_protect = size_after if size_after > 0 else normalized_size
+    else:
+        sl_price = snap_to_tick(filled_price * (Decimal("1") + sl_pct), tick_size)
+        tp_price = snap_to_tick(filled_price * (Decimal("1") - tp_pct), tick_size)
+        position_size_to_protect = abs(size_after) if size_after < 0 else normalized_size
+
+    protection_result = client.upsert_protective_orders(
+        coin=coin,
+        position_size=abs(position_size_to_protect),
+        is_long=is_long,
+        stop_loss_price=sl_price,
+        take_profit_price=tp_price,
+    )
+    if not protection_result.get("success"):
+        raise RuntimeError(f"Protezioni fallite: {protection_result}")
 
     logger.info(
-        "Preview prezzi forced 5 decimali: "
-        f"entry={format_price_fixed_decimals(entry_snapped, forced_price_decimals)}, "
-        f"sl={format_price_fixed_decimals(sl_snapped, forced_price_decimals)}, "
-        f"tp={format_price_fixed_decimals(tp_snapped, forced_price_decimals)}"
+        f"Sequenziale OK: entry confermata + protezioni create | "
+        f"entry={filled_price} sl={sl_price} tp={tp_price} "
+        f"sl_oid={protection_result.get('stop_loss_order_id')} tp_oid={protection_result.get('take_profit_order_id')}"
     )
-
-    result = client.place_entry_with_tpsl_batch(
-        coin=coin,
-        side=side,
-        size=normalized_size,
-        desired_price=entry_snapped,
-        stop_loss_price=sl_snapped,
-        take_profit_price=tp_snapped,
-    )
-
-    if not result.get("success"):
-        raise RuntimeError(f"Batch atomico fallito: {result.get('reason', 'unknown')} | raw={result}")
-
-    logger.info(f"Batch atomico inviato con successo: {result}")
 
 
 if __name__ == "__main__":
