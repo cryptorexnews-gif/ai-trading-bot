@@ -37,13 +37,25 @@ class OrderExecutionService:
 
     def _format_price_for_asset(self, coin: str, price: Decimal) -> str:
         """
-        Formatta prezzo in modo compatibile Hyperliquid:
-        - limite significant figures
-        - limite decimali da szDecimals (6 - szDecimals)
-        Questo evita errori "Price must be divisible by tick size" quando pxDecimals non è disponibile.
+        Formatta prezzo per Hyperliquid in modo robusto:
+        - usa tick+precision da get_tick_size_and_precision (metadata o fallback mids)
+        - mantiene numero decimali fisso della precisione
         """
+        asset_id = self.client.get_asset_id(coin)
+        if asset_id is None:
+            return self._canonical_decimal_str(price)
+
+        rounded = self.client._round_price_to_tick(asset_id, price)
+        _tick_size, precision = self.client.get_tick_size_and_precision(asset_id)
+
+        if precision >= 0:
+            if precision > 0:
+                return f"{rounded:.{precision}f}"
+            return f"{rounded:.0f}"
+
+        # Fallback estremo (non dovrebbe avvenire): formatter robusto da regole Hyperliquid
         sz_decimals = self.client.get_sz_decimals(coin)
-        return format_price_for_hyperliquid(price, sz_decimals)
+        return format_price_for_hyperliquid(rounded, sz_decimals)
 
     def _format_size_for_coin(self, coin: str, size: Decimal) -> str:
         sz_decimals = self.client.get_sz_decimals(coin)
