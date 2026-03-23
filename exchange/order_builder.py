@@ -51,8 +51,15 @@ def build_trigger_order_action(
 ) -> Dict[str, Any]:
     effective_trigger_str = trigger_price_str if trigger_price_str is not None else _decimal_to_wire_str(trigger_price)
     effective_size_str = size_str if size_str is not None else _decimal_to_wire_str(size)
-    # Hyperliquid: per trigger market, p deve essere "0"
-    limit_price_str = "0" if bool(is_market) else effective_trigger_str
+
+    # Hyperliquid trigger order rules:
+    # - For atomic batch (grouping="positionTpsl"), p="0" is allowed
+    # - For standalone (grouping="na"), p must be the trigger price itself
+    if grouping == "positionTpsl":
+        limit_price_str = "0" if bool(is_market) else effective_trigger_str
+    else:
+        # Standalone trigger: p = triggerPx (required by Hyperliquid)
+        limit_price_str = effective_trigger_str
 
     order_wire = {
         "a": asset_id,
