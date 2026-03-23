@@ -13,7 +13,7 @@ import logging
 import os
 import sys
 import time
-from decimal import Decimal, ROUND_HALF_UP
+from decimal import Decimal, ROUND_HALF_UP, ROUND_DOWN
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -30,7 +30,7 @@ from utils.hyperliquid_state import get_open_positions
 
 load_dotenv()
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+logging.basicConfig(level=logging.DEBUG, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger("live_sequential_entry_tpsl")
 
 
@@ -73,7 +73,6 @@ def get_asset_precision_from_meta(
         if str(asset.get("name", "")).strip().upper() != coin.upper():
             continue
 
-        # Diagnostic: dump the full asset metadata
         logger.info(f"{coin} FULL METADATA DUMP: {json.dumps(asset, indent=2, default=str)}")
 
         sz_decimals = _asset_int(asset, ["szDecimals", "sizeDecimals", "qtyDecimals"])
@@ -85,13 +84,11 @@ def get_asset_precision_from_meta(
         if px_decimals is not None and px_decimals >= 0:
             logger.info(f"{coin}: pxDecimals from metadata = {px_decimals}")
         else:
-            # Try known table first
             known = get_tick_size_for_known_coin(coin)
             if known is not None:
                 tick_size, px_decimals = known
                 logger.info(f"{coin}: tick size from known table: tick={tick_size}, px_decimals={px_decimals}")
             else:
-                # Infer from mid price using 5 sig figs rule
                 tick_size, px_decimals = infer_tick_size_from_price(mid_price, max_sig_figs=5)
                 logger.info(
                     f"{coin}: pxDecimals inferred from mid ${mid_price} using 5 sig figs: "
@@ -183,6 +180,80 @@ def normalize_size_for_min_notional(
     return size
 
 
+def round_trigger_price(price: Decimal, tick_size: Decimal, px_decimals: int) -> Decimal:
+    """
+    Round trigger price to tick and ensure max 5 significant figures.
+    For safety, also ensure the string representation has <= px_decimals decimal places.
+    """
+    snapped = snap_to_tick(price, tick_size)
+
+    # Verify significant figures count
+    # Convert to string and count sig figs
+    plain = format(snapped, "f")
+    # Remove leading zeros and decimal point for sig fig counting
+    stripped = plain.lstrip("0").replace(".", "")
+    if not stripped:
+        stripped = "0"
+    sig_figs = len(stripped.lstrip("0")) if stripped != "0" else 1
+
+    if sig_figs > 5:
+        # Need to reduce precision - round to fewer decimals
+        new_decimals = max(0, px_decimals - (sig_figs - 5))
+        quantizer = Decimal("1").scaleb(-new_decimals) if new_decimals > 0 else Decimal("1")
+        snapped = snapped.quantize(quantizer, rounding=ROUND_HALF_UP)
+
+    return snapped
+
+
+def format_trigger_price(price: Decimal, px_decimals: int) -> str:
+    """Format trigger price with exact decimal places."""
+    if px_decimals > 0:
+        return f"{price:.{px_decimals}f}"
+    return f"{price:.0f}"
+
+
+def test_trigger_order_directly(
+    client: HyperliquidExchangeClient,
+    coin: str,
+    trigger_price: Decimal,
+    size: Decimal,
+    is_long: bool,
+    tpsl: str,
+    px_decimals: int,
+) -> Dict:
+    """
+    Test a single trigger order with detailed logging of the exact payload.
+    """
+    close_side = "sell" if is_long else "buy"
+
+    trigger_wire = format_trigger_price(trigger_price, px_decimals)
+    sz_decimals = client.get_sz_decimals(coin)
+    if sz_decimals is not None and sz_decimals > 0:
+        size_wire = f"{size:.{sz_decimals}f}"
+    else:
+        size_wire = str(size)
+
+    logger.info(
+        f"TEST TRIGGER ORDER: {coin} {tpsl.upper()} {close_side.upper()} "
+        f"trigger={trigger_price} -> wire='{trigger_wire}' "
+        f"size={size} -> wire='{size_wire}' "
+        f"px_decimals={px_decimals}"
+    )
+
+    result = client.place_trigger_order(
+        coin=coin,
+        side=close_side,
+        size=size,
+        trigger_price=trigger_price,
+        tpsl=tpsl,
+        reduce_only=True,
+        is_market=True,
+    )
+
+    logger.info(f"TRIGGER ORDER RESULT: {json.dumps(result, indent=2, default=str)}")
+    return result
+
+
 def main() -> None:
     private_key = os.getenv("HYPERLIQUID_PRIVATE_KEY", "")
     env_wallet = os.getenv("HYPERLIQUID_WALLET_ADDRESS", "")
@@ -242,6 +313,16 @@ def main() -> None:
         f"px_decimals={px_decimals} sz_decimals={sz_decimals}"
     )
 
+    # ── DIAGNOSTIC: Test what tick size the exchange_client resolves ──
+    asset_id = client.get_asset_id(coin)
+    if asset_id is not None:
+        client_tick, client_precision = client.get_tick_size_and_precision(asset_id)
+        logger.info(
+            f"{coin} EXCHANGE CLIENT tick resolution: tick={client_tick}, precision={client_precision} "
+            f"(asset_id={asset_id})"
+        )
+    # ──────────────────────────────────────────────────────────────────
+
     max_leverage = client.get_max_leverage(coin)
     if leverage > max_leverage:
         leverage = max_leverage
@@ -268,7 +349,6 @@ def main() -> None:
 
     desired_price = snap_to_tick(raw_entry, tick_size)
 
-    # Format with correct decimals
     if px_decimals > 0:
         price_str = f"{desired_price:.{px_decimals}f}"
     else:
@@ -303,13 +383,10 @@ def main() -> None:
 
     logger.info(f"{coin} position size AFTER entry: {size_after} (before={size_before})")
 
-    # Calculate the actual delta — this is what we just opened and need to protect
     actual_delta = abs(size_after) - abs(size_before)
     if actual_delta <= 0:
-        # Fallback: use the normalized_size we requested
         actual_delta = normalized_size
 
-    # Use the DELTA (what we just opened) as the protection size, NOT the total position
     position_size_to_protect = quantize_to_step(actual_delta, sz_decimals)
 
     logger.info(
@@ -320,40 +397,82 @@ def main() -> None:
 
     is_long = side == "buy"
     if is_long:
-        sl_price = snap_to_tick(filled_price * (Decimal("1") - sl_pct), tick_size)
-        tp_price = snap_to_tick(filled_price * (Decimal("1") + tp_pct), tick_size)
+        raw_sl = filled_price * (Decimal("1") - sl_pct)
+        raw_tp = filled_price * (Decimal("1") + tp_pct)
     else:
-        sl_price = snap_to_tick(filled_price * (Decimal("1") + sl_pct), tick_size)
-        tp_price = snap_to_tick(filled_price * (Decimal("1") - tp_pct), tick_size)
+        raw_sl = filled_price * (Decimal("1") + sl_pct)
+        raw_tp = filled_price * (Decimal("1") - tp_pct)
 
-    # Format for logging
-    if px_decimals > 0:
-        sl_str = f"{sl_price:.{px_decimals}f}"
-        tp_str = f"{tp_price:.{px_decimals}f}"
-    else:
-        sl_str = f"{sl_price:.0f}"
-        tp_str = f"{tp_price:.0f}"
+    sl_price = round_trigger_price(raw_sl, tick_size, px_decimals)
+    tp_price = round_trigger_price(raw_tp, tick_size, px_decimals)
+
+    sl_wire = format_trigger_price(sl_price, px_decimals)
+    tp_wire = format_trigger_price(tp_price, px_decimals)
 
     logger.info(
-        f"PROTECTIVE ORDERS: SL={sl_str} TP={tp_str} size={position_size_to_protect} "
-        f"is_long={is_long} filled_price={filled_price}"
+        f"PROTECTIVE ORDERS DIAGNOSTIC:\n"
+        f"  filled_price={filled_price}\n"
+        f"  raw_sl={raw_sl} -> snapped={sl_price} -> wire='{sl_wire}'\n"
+        f"  raw_tp={raw_tp} -> snapped={tp_price} -> wire='{tp_wire}'\n"
+        f"  size={position_size_to_protect} is_long={is_long}\n"
+        f"  tick={tick_size} px_decimals={px_decimals}"
     )
 
-    protection_result = client.upsert_protective_orders(
+    # ── DIAGNOSTIC: Try SL trigger order directly first ──
+    logger.info("=" * 50)
+    logger.info("DIAGNOSTIC: Testing SL trigger order directly...")
+    sl_test = test_trigger_order_directly(
+        client=client,
         coin=coin,
-        position_size=abs(position_size_to_protect),
+        trigger_price=sl_price,
+        size=position_size_to_protect,
         is_long=is_long,
-        stop_loss_price=sl_price,
-        take_profit_price=tp_price,
+        tpsl="sl",
+        px_decimals=px_decimals,
     )
-    if not protection_result.get("success"):
-        raise RuntimeError(f"Protezioni fallite: {protection_result}")
 
-    logger.info(
-        f"Sequenziale OK: entry confermata + protezioni create | "
-        f"entry={filled_price} sl={sl_str} tp={tp_str} "
-        f"sl_oid={protection_result.get('stop_loss_order_id')} tp_oid={protection_result.get('take_profit_order_id')}"
-    )
+    if sl_test.get("success"):
+        logger.info("SL trigger order succeeded directly!")
+
+        logger.info("DIAGNOSTIC: Testing TP trigger order directly...")
+        tp_test = test_trigger_order_directly(
+            client=client,
+            coin=coin,
+            trigger_price=tp_price,
+            size=position_size_to_protect,
+            is_long=is_long,
+            tpsl="tp",
+            px_decimals=px_decimals,
+        )
+
+        if tp_test.get("success"):
+            logger.info(
+                f"BOTH PROTECTIVE ORDERS SUCCEEDED!\n"
+                f"  SL oid={sl_test.get('order_id')}\n"
+                f"  TP oid={tp_test.get('order_id')}"
+            )
+        else:
+            logger.error(f"TP trigger order failed: {tp_test}")
+    else:
+        logger.error(f"SL trigger order failed: {sl_test}")
+
+        # Try with integer prices as diagnostic
+        sl_int = snap_to_tick(raw_sl, Decimal("1"))
+        tp_int = snap_to_tick(raw_tp, Decimal("1"))
+        logger.info(
+            f"DIAGNOSTIC: Retrying with INTEGER trigger prices: SL={sl_int} TP={tp_int}"
+        )
+
+        sl_test_int = test_trigger_order_directly(
+            client=client,
+            coin=coin,
+            trigger_price=sl_int,
+            size=position_size_to_protect,
+            is_long=is_long,
+            tpsl="sl",
+            px_decimals=0,
+        )
+        logger.info(f"SL with integer price result: {sl_test_int}")
 
 
 if __name__ == "__main__":
