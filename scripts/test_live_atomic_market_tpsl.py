@@ -259,6 +259,7 @@ def main() -> None:
 
     trading_user = client.get_trading_user_address()
     size_before = get_position_size(client, trading_user, coin)
+    logger.info(f"{coin} position size BEFORE entry: {size_before}")
 
     if side == "buy":
         raw_entry = mid_price * (Decimal("1") + ioc_buffer_pct)
@@ -300,15 +301,43 @@ def main() -> None:
     if not confirmed:
         raise RuntimeError(f"Entry non confermata: before={size_before}, after={size_after}")
 
+    logger.info(f"{coin} position size AFTER entry: {size_after} (before={size_before})")
+
+    # Calculate the actual delta — this is what we just opened and need to protect
+    actual_delta = abs(size_after) - abs(size_before)
+    if actual_delta <= 0:
+        # Fallback: use the normalized_size we requested
+        actual_delta = normalized_size
+
+    # Use the DELTA (what we just opened) as the protection size, NOT the total position
+    position_size_to_protect = quantize_to_step(actual_delta, sz_decimals)
+
+    logger.info(
+        f"{coin} PROTECTION SIZE CALCULATION: "
+        f"size_before={size_before}, size_after={size_after}, "
+        f"actual_delta={actual_delta}, protection_size={position_size_to_protect}"
+    )
+
     is_long = side == "buy"
     if is_long:
         sl_price = snap_to_tick(filled_price * (Decimal("1") - sl_pct), tick_size)
         tp_price = snap_to_tick(filled_price * (Decimal("1") + tp_pct), tick_size)
-        position_size_to_protect = size_after if size_after > 0 else normalized_size
     else:
         sl_price = snap_to_tick(filled_price * (Decimal("1") + sl_pct), tick_size)
         tp_price = snap_to_tick(filled_price * (Decimal("1") - tp_pct), tick_size)
-        position_size_to_protect = abs(size_after) if size_after < 0 else normalized_size
+
+    # Format for logging
+    if px_decimals > 0:
+        sl_str = f"{sl_price:.{px_decimals}f}"
+        tp_str = f"{tp_price:.{px_decimals}f}"
+    else:
+        sl_str = f"{sl_price:.0f}"
+        tp_str = f"{tp_price:.0f}"
+
+    logger.info(
+        f"PROTECTIVE ORDERS: SL={sl_str} TP={tp_str} size={position_size_to_protect} "
+        f"is_long={is_long} filled_price={filled_price}"
+    )
 
     protection_result = client.upsert_protective_orders(
         coin=coin,
@@ -322,7 +351,7 @@ def main() -> None:
 
     logger.info(
         f"Sequenziale OK: entry confermata + protezioni create | "
-        f"entry={filled_price} sl={sl_price} tp={tp_price} "
+        f"entry={filled_price} sl={sl_str} tp={tp_str} "
         f"sl_oid={protection_result.get('stop_loss_order_id')} tp_oid={protection_result.get('take_profit_order_id')}"
     )
 
