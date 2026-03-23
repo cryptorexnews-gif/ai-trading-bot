@@ -1,7 +1,7 @@
 import json
 import logging
 from decimal import Decimal
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List
 
 from exchange.market_rules import format_price_for_hyperliquid
 from exchange.order_builder import (
@@ -37,21 +37,33 @@ class OrderExecutionService:
 
     def _format_price_for_asset(self, coin: str, asset_id: int, price: Decimal) -> str:
         """
-        Formatta il prezzo in stringa rispettando:
-        1) tick/precision da metadata se disponibili
-        2) regole Hyperliquid sig-fig + max decimali da szDecimals come fallback robusto
+        Formatta prezzo con numero decimali fisso:
+        - se precision disponibile da metadata/fallback: usa quella
+        - altrimenti usa formatter robusto Hyperliquid
         """
         rounded = self.client._round_price_to_tick(asset_id, price)
         _tick_size, precision = self.client.get_tick_size_and_precision(asset_id)
 
         if precision >= 0:
-            decimals = precision
-            if decimals > 0:
-                return f"{rounded:.{decimals}f}"
+            if precision > 0:
+                return f"{rounded:.{precision}f}"
             return f"{rounded:.0f}"
 
         sz_decimals = self.client.get_sz_decimals(coin)
         return format_price_for_hyperliquid(rounded, sz_decimals)
+
+    def _format_size_for_coin(self, coin: str, size: Decimal) -> str:
+        """
+        Formatta size con numero decimali fisso da szDecimals.
+        """
+        sz_decimals = self.client.get_sz_decimals(coin)
+        if sz_decimals is None or sz_decimals < 0:
+            return self._canonical_decimal_str(size)
+
+        normalized = self.client._normalize_size_for_coin(coin, abs(size))
+        if sz_decimals > 0:
+            return f"{normalized:.{sz_decimals}f}"
+        return f"{normalized:.0f}"
 
     def set_leverage(self, coin: str, leverage: int) -> bool:
         if not self.client._live_orders_enabled():
@@ -198,10 +210,10 @@ class OrderExecutionService:
         if rounded_sl <= 0 or rounded_tp <= 0:
             return {"success": False, "mode": "live", "reason": "invalid_trigger_price", "notional": "0"}
 
-        entry_price_wire = self._canonical_decimal_str(self._format_price_for_asset(coin, asset_id, entry_limit_price))
-        sl_price_wire = self._canonical_decimal_str(self._format_price_for_asset(coin, asset_id, rounded_sl))
-        tp_price_wire = self._canonical_decimal_str(self._format_price_for_asset(coin, asset_id, rounded_tp))
-        size_wire = self._canonical_decimal_str(normalized_size)
+        entry_price_wire = self._format_price_for_asset(coin, asset_id, entry_limit_price)
+        sl_price_wire = self._format_price_for_asset(coin, asset_id, rounded_sl)
+        tp_price_wire = self._format_price_for_asset(coin, asset_id, rounded_tp)
+        size_wire = self._format_size_for_coin(coin, normalized_size)
 
         is_buy = normalized_side == "buy"
         close_is_buy = not is_buy
