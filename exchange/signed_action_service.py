@@ -30,7 +30,6 @@ class SignedActionService:
     def _build_signature(
         self,
         action: Dict[str, Any],
-        vault_address_override: Optional[str],
         nonce: int,
         signature_mode: str = "padded",
     ) -> Dict[str, Any]:
@@ -38,7 +37,6 @@ class SignedActionService:
             return sign_l1_action_exact_legacy(
                 account=self.account,
                 action=action,
-                vault_address=vault_address_override,
                 nonce=nonce,
                 expires_after=None,
                 is_mainnet=True,
@@ -46,7 +44,6 @@ class SignedActionService:
         return sign_l1_action_exact(
             account=self.account,
             action=action,
-            vault_address=vault_address_override,
             nonce=nonce,
             expires_after=None,
             is_mainnet=True,
@@ -64,14 +61,12 @@ class SignedActionService:
         self,
         action: Dict[str, Any],
         timeout: Optional[int],
-        vault_address_override: Optional[str],
         signature_mode: str,
         use_recovery_v: bool,
     ) -> Optional[Dict[str, Any]]:
         nonce = self.next_nonce()
         signature = self._build_signature(
             action=action,
-            vault_address_override=vault_address_override,
             nonce=nonce,
             signature_mode=signature_mode,
         )
@@ -83,7 +78,6 @@ class SignedActionService:
             "action": action,
             "nonce": nonce,
             "signature": signature,
-            "vaultAddress": vault_address_override,
         }
 
         return self._post_exchange(payload, timeout)
@@ -92,13 +86,11 @@ class SignedActionService:
         self,
         action: Dict[str, Any],
         timeout: Optional[int] = None,
-        vault_address_override: Optional[str] = None,
         signature_mode: str = "padded",
     ) -> Optional[Dict[str, Any]]:
         return self._post_with_signature_strategy(
             action=action,
             timeout=timeout,
-            vault_address_override=vault_address_override,
             signature_mode=signature_mode,
             use_recovery_v=False,
         )
@@ -107,7 +99,6 @@ class SignedActionService:
         self,
         action: Dict[str, Any],
         timeout: Optional[int] = None,
-        vault_address_override: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
         now = time.time()
         if now < self._auth_block_until:
@@ -131,7 +122,6 @@ class SignedActionService:
             result = self._post_with_signature_strategy(
                 action=action,
                 timeout=timeout,
-                vault_address_override=vault_address_override,
                 signature_mode=mode,
                 use_recovery_v=recovery_v,
             )

@@ -21,9 +21,8 @@ logger = logging.getLogger(__name__)
 
 class HyperliquidExchangeClient:
     """
-    Hyperliquid client (live-only) con supporto:
-    - EOA diretto (signer == trading user, vaultAddress=None)
-    - API wallet (signer != trading user, con vaultAddress impostato)
+    Hyperliquid client (live-only) in modalità wallet diretto:
+    signer address deve coincidere con HYPERLIQUID_WALLET_ADDRESS.
     """
 
     def __init__(
@@ -36,7 +35,6 @@ class HyperliquidExchangeClient:
         paper_slippage_bps: Decimal = Decimal("5"),
         info_timeout: int = 15,
         exchange_timeout: int = 30,
-        vault_address: Optional[str] = None,
     ):
         self.base_url = base_url
         self.enable_mainnet_trading = enable_mainnet_trading
@@ -50,54 +48,19 @@ class HyperliquidExchangeClient:
         self.account = Account.from_key(private_key)
 
         env_wallet = (os.getenv("HYPERLIQUID_WALLET_ADDRESS", "") or "").strip()
-        env_vault = (os.getenv("HYPERLIQUID_VAULT_ADDRESS", "") or "").strip()
-        allow_api_wallet = os.getenv("ALLOW_API_WALLET", "false").lower() in {"1", "true", "yes", "on"}
-
-        provided_vault = (vault_address or env_vault or "").strip()
-
         if not self._is_valid_wallet_address_format(env_wallet):
             raise ValueError(
                 "HYPERLIQUID_WALLET_ADDRESS invalido o mancante. "
                 "È richiesto un address 0x... lungo 42 caratteri da .env."
             )
 
-        if provided_vault and not self._is_valid_wallet_address_format(provided_vault):
+        signer_matches_wallet = self.account.address.lower() == env_wallet.lower()
+        if not signer_matches_wallet:
             raise ValueError(
-                "HYPERLIQUID_VAULT_ADDRESS invalido: richiesto formato 0x... lungo 42 caratteri."
+                "HYPERLIQUID_PRIVATE_KEY non corrisponde a HYPERLIQUID_WALLET_ADDRESS."
             )
 
-        signer_matches_wallet = self.account.address.lower() == env_wallet.lower()
-
-        if provided_vault:
-            # API wallet mode (or explicit vault mode):
-            # trading user = vault/master, firma include vaultAddress.
-            self._fixed_vault_for_signing = provided_vault
-            self._trading_user_address = provided_vault
-
-            if signer_matches_wallet:
-                logger.warning(
-                    "Vault mode attivo ma signer coincide con HYPERLIQUID_WALLET_ADDRESS; "
-                    "verifica se è voluto."
-                )
-            if env_wallet.lower() != provided_vault.lower():
-                logger.info(
-                    f"API wallet mode: trading_user={self._mask_address(provided_vault)} "
-                    f"(env wallet={self._mask_address(env_wallet)} signer={self.get_wallet_address_masked()})"
-                )
-        else:
-            # Legacy direct wallet mode:
-            if not signer_matches_wallet:
-                if allow_api_wallet:
-                    raise ValueError(
-                        "ALLOW_API_WALLET=true ma HYPERLIQUID_VAULT_ADDRESS non è impostato. "
-                        "Per API wallet devi impostare anche HYPERLIQUID_VAULT_ADDRESS."
-                    )
-                raise ValueError(
-                    "HYPERLIQUID_PRIVATE_KEY non corrisponde a HYPERLIQUID_WALLET_ADDRESS. "
-                    "Per API wallet imposta HYPERLIQUID_VAULT_ADDRESS."
-                )
-            self._fixed_vault_for_signing = None
-            self._trading_user_address = env_wallet
+        self._trading_user_address = env_wallet
 
         self._info_cb = get_or_create_circuit_breaker(
             "hyperliquid_info", failure_threshold=5, recovery_timeout=30.0
@@ -136,8 +99,7 @@ class HyperliquidExchangeClient:
         logger.info(
             f"Exchange client initialized: base_url={self.base_url}, mode={self.execution_mode}, "
             f"mainnet={self.enable_mainnet_trading}, signer={self.get_wallet_address_masked()} "
-            f"(trading_user={self._mask_address(self._trading_user_address)}, "
-            f"signing_vault={self._mask_address(self._fixed_vault_for_signing) if self._fixed_vault_for_signing else 'none'})"
+            f"(trading_user={self._mask_address(self._trading_user_address)})"
         )
 
     def _live_orders_enabled(self) -> bool:
@@ -190,23 +152,16 @@ class HyperliquidExchangeClient:
         self,
         action: Dict[str, Any],
         timeout: Optional[int] = None,
-        vault_address_override: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
         return self._signed_actions.post_signed_action_once(
             action=action,
             timeout=timeout,
-            vault_address_override=vault_address_override,
         )
 
     def _post_signed_action_with_master_retry(self, action: Dict[str, Any], timeout: Optional[int] = None) -> Optional[Dict[str, Any]]:
-        """
-        Mantiene nome per compatibilità interna.
-        In modalità API-wallet usa vaultAddress fisso.
-        """
         return self._signed_actions.post_signed_action_with_auth_guard(
             action=action,
             timeout=timeout,
-            vault_address_override=self._fixed_vault_for_signing,
         )
 
     def get_meta(self, force_refresh: bool = False) -> Optional[Dict[str, Any]]:

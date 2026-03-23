@@ -35,15 +35,6 @@ def has_acknowledged_order_status(statuses: List[Dict[str, Any]]) -> bool:
     return False
 
 
-def is_vault_not_registered_error(result: Optional[Dict[str, Any]]) -> bool:
-    if not isinstance(result, dict):
-        return False
-    if result.get("status") != "err":
-        return False
-    message = str(result.get("response", "")).lower()
-    return "vault not registered" in message
-
-
 def is_user_or_api_wallet_not_found_error(result: Optional[Dict[str, Any]]) -> bool:
     if not isinstance(result, dict):
         return False

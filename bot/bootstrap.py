@@ -95,7 +95,6 @@ class BotBootstrap:
             paper_slippage_bps=cfg.paper_slippage_bps,
             info_timeout=cfg.info_timeout,
             exchange_timeout=cfg.exchange_timeout,
-            vault_address=cfg.vault_address,
         )
 
     @staticmethod

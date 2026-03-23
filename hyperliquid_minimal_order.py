@@ -13,10 +13,8 @@ import requests
 import os
 from dotenv import load_dotenv
 from eth_account import Account
-from eth_account.messages import encode_typed_data
-import msgpack
-from Crypto.Hash import keccak
 
+from exchange.signing import sign_l1_action_exact
 from utils.hyperliquid_state import get_account_balances
 
 load_dotenv()
@@ -38,65 +36,6 @@ def mask_wallet(wallet: str) -> str:
     if not wallet or len(wallet) < 12:
         return "invalid_wallet"
     return f"{wallet[:6]}...{wallet[-4:]}"
-
-
-def address_to_bytes(address):
-    return bytes.fromhex(address[2:].lower())
-
-
-def action_hash(action, vault_address, nonce, expires_after):
-    data = msgpack.packb(action)
-    data += nonce.to_bytes(8, "big")
-    if vault_address is None:
-        data += b"\x00"
-    else:
-        data += b"\x01"
-        data += address_to_bytes(vault_address)
-    if expires_after is not None:
-        data += b"\x00"
-        data += expires_after.to_bytes(8, "big")
-    return keccak.new(data=data, digest_bits=256).digest()
-
-
-def construct_phantom_agent(hash_bytes, is_mainnet=True):
-    return {
-        "source": "a" if is_mainnet else "b",
-        "connectionId": "0x" + hash_bytes.hex()
-    }
-
-
-def l1_payload(phantom_agent):
-    return {
-        "domain": {
-            "chainId": 1337,
-            "name": "Exchange",
-            "verifyingContract": "0x0000000000000000000000000000000000000000",
-            "version": "1",
-        },
-        "types": {
-            "Agent": [
-                {"name": "source", "type": "string"},
-                {"name": "connectionId", "type": "bytes32"},
-            ],
-            "EIP712Domain": [
-                {"name": "name", "type": "string"},
-                {"name": "version", "type": "string"},
-                {"name": "chainId", "type": "uint256"},
-                {"name": "verifyingContract", "type": "address"},
-            ],
-        },
-        "primaryType": "Agent",
-        "message": phantom_agent,
-    }
-
-
-def sign_l1_action_exact(wallet, action, vault_address, nonce, expires_after, is_mainnet=True):
-    hash_bytes = action_hash(action, vault_address, nonce, expires_after)
-    phantom_agent = construct_phantom_agent(hash_bytes, is_mainnet)
-    data = l1_payload(phantom_agent)
-    structured_data = encode_typed_data(full_message=data)
-    signed = wallet.sign_message(structured_data)
-    return {"r": hex(signed.r), "s": hex(signed.s), "v": signed.v}
 
 
 def get_timestamp_ms():
@@ -187,9 +126,8 @@ def send_minimal_order():
 
     print("🔐 Firma...")
     signature = sign_l1_action_exact(
-        wallet=ACCOUNT,
+        account=ACCOUNT,
         action=order_action,
-        vault_address=None,
         nonce=timestamp,
         expires_after=None,
         is_mainnet=True
@@ -200,7 +138,6 @@ def send_minimal_order():
         "action": order_action,
         "nonce": timestamp,
         "signature": signature,
-        "vaultAddress": None
     }
 
     print("\n🚀 INVIO ORDINE REALE...")

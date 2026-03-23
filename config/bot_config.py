@@ -40,14 +40,7 @@ class BotConfig:
     REQUIRED_LLM_MODEL = "deepseek/deepseek-v3.2"
 
     def __init__(self):
-        wallet_env = _env("HYPERLIQUID_WALLET_ADDRESS", "").strip()
-        vault_env = _env("HYPERLIQUID_VAULT_ADDRESS", "").strip()
-
-        # In API-wallet mode, the trading user should be the vault/master address.
-        self.vault_address = vault_env
-        self.wallet_address = vault_env if vault_env else wallet_env
-
-        self.allow_api_wallet = _env_bool("ALLOW_API_WALLET", bool(vault_env))
+        self.wallet_address = _env("HYPERLIQUID_WALLET_ADDRESS", "").strip()
 
         env_mode = _env("EXECUTION_MODE", "live").lower()
         self.execution_mode = "live" if env_mode != "live" else env_mode
@@ -168,7 +161,7 @@ class BotConfig:
         warnings = []
 
         if not self.wallet_address:
-            raise SystemExit("CRITICAL: HYPERLIQUID_WALLET_ADDRESS or HYPERLIQUID_VAULT_ADDRESS not set")
+            raise SystemExit("CRITICAL: HYPERLIQUID_WALLET_ADDRESS not set")
 
         private_key = os.getenv("HYPERLIQUID_PRIVATE_KEY", "")
         if not private_key:
@@ -179,30 +172,16 @@ class BotConfig:
                 f"CRITICAL: trading wallet address invalid format: {self.wallet_address[:10]}..."
             )
 
-        if self.vault_address and not _is_valid_eth_address(self.vault_address):
-            raise SystemExit(
-                f"CRITICAL: HYPERLIQUID_VAULT_ADDRESS invalid format: {self.vault_address[:10]}..."
-            )
-
         from eth_account import Account
 
         signer_address = Account.from_key(private_key).address
         signer_matches_trading = signer_address.lower() == self.wallet_address.lower()
 
         if not signer_matches_trading:
-            if self.allow_api_wallet and self.vault_address:
-                warnings.append(
-                    "API wallet mode attivo: signer diverso dal trading wallet, uso vaultAddress per firme."
-                )
-            else:
-                raise SystemExit(
-                    f"CRITICAL: HYPERLIQUID_PRIVATE_KEY ({signer_address[:6]}...{signer_address[-4:]}) "
-                    f"non corrisponde al trading wallet ({self.wallet_address[:6]}...{self.wallet_address[-4:]}). "
-                    f"Per API wallet imposta ALLOW_API_WALLET=true e HYPERLIQUID_VAULT_ADDRESS."
-                )
-
-        if self.allow_api_wallet and not self.vault_address:
-            warnings.append("ALLOW_API_WALLET=true ma HYPERLIQUID_VAULT_ADDRESS non impostato.")
+            raise SystemExit(
+                f"CRITICAL: HYPERLIQUID_PRIVATE_KEY ({signer_address[:6]}...{signer_address[-4:]}) "
+                f"non corrisponde al trading wallet ({self.wallet_address[:6]}...{self.wallet_address[-4:]})."
+            )
 
         if self.llm_model != self.REQUIRED_LLM_MODEL:
             warnings.append(
