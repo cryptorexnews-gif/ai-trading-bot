@@ -67,7 +67,23 @@ class ExchangeMarketDataService:
         if not (0 <= asset_id < len(universe)):
             return Decimal("0.01"), 2
 
-        coin = universe[asset_id].get("name", "")
+        asset = universe[asset_id]
+        coin = asset.get("name", "")
+
+        # Source of truth: pxDecimals from Hyperliquid metadata
+        px_decimals_raw = asset.get("pxDecimals")
+        if px_decimals_raw is not None:
+            try:
+                px_decimals = int(px_decimals_raw)
+                if px_decimals >= 0:
+                    tick_size = Decimal("1").scaleb(-px_decimals) if px_decimals > 0 else Decimal("1")
+                    return tick_size, px_decimals
+            except (TypeError, ValueError):
+                pass
+
+        # Fallback: infer from current mid if metadata lacks pxDecimals
         if mids is not None and coin in mids:
             return infer_tick_size_and_precision_from_mid(str(mids.get(coin, "0")))
+
+        # Last-resort fallback
         return default_tick_size_for_asset(asset_id)
