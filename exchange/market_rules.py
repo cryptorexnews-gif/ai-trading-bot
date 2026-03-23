@@ -2,31 +2,83 @@ from decimal import Decimal, ROUND_DOWN, ROUND_HALF_UP
 from typing import Dict, Optional, Tuple
 
 
-# Known tick sizes for major assets on Hyperliquid.
-# IMPORTANT: Trigger orders (TP/SL) require these tick sizes.
+# Known tick sizes for assets on Hyperliquid.
+# IMPORTANT: These are verified against live exchange behavior.
+# Trigger orders (TP/SL) require these exact tick sizes.
 # Limit orders may accept finer granularity but trigger orders do NOT.
-# Verified against live Hyperliquid exchange behavior.
+#
+# Rule of thumb from Hyperliquid: max 5 significant figures in price.
+# For a $2000 asset: 4 digits before decimal → 1 decimal max → tick=0.1
+# But trigger orders for BTC/ETH actually require integer prices (tick=1).
+#
+# When in doubt, use infer_tick_size_from_price() which applies the 5-sig-fig rule.
 KNOWN_TICK_SIZES: Dict[str, Tuple[Decimal, int]] = {
-    "BTC": (Decimal("1"), 0),        # $100k+ → tick=1, 0 decimals
-    "ETH": (Decimal("1"), 0),        # $2k+ → tick=1, 0 decimals (trigger orders require integer)
-    "SOL": (Decimal("0.01"), 2),     # $100-$999 → tick=0.01, 2 decimals
+    # Tier 1: $10,000+ assets — tick=1, 0 decimals
+    "BTC": (Decimal("1"), 0),
+    "ETH": (Decimal("1"), 0),
+
+    # Tier 2: $100-$9999 assets — tick=0.01, 2 decimals
+    "SOL": (Decimal("0.01"), 2),
     "BNB": (Decimal("0.01"), 2),
-    "XRP": (Decimal("0.0001"), 4),
-    "ADA": (Decimal("0.0001"), 4),
-    "DOGE": (Decimal("0.00001"), 5),
     "AVAX": (Decimal("0.01"), 2),
+    "INJ": (Decimal("0.01"), 2),
+    "AAVE": (Decimal("0.01"), 2),
+    "MKR": (Decimal("1"), 0),
+    "BCH": (Decimal("0.01"), 2),
+    "LTC": (Decimal("0.01"), 2),
+
+    # Tier 3: $1-$99 assets — tick=0.001, 3 decimals
     "LINK": (Decimal("0.001"), 3),
-    "SUI": (Decimal("0.0001"), 4),
-    "ARB": (Decimal("0.0001"), 4),
     "OP": (Decimal("0.001"), 3),
     "NEAR": (Decimal("0.001"), 3),
-    "WIF": (Decimal("0.0001"), 4),
-    "PEPE": (Decimal("0.0000001"), 7),
-    "INJ": (Decimal("0.01"), 2),
     "TIA": (Decimal("0.001"), 3),
-    "SEI": (Decimal("0.0001"), 4),
     "RENDER": (Decimal("0.001"), 3),
+    "FIL": (Decimal("0.001"), 3),
+    "APT": (Decimal("0.001"), 3),
+    "ATOM": (Decimal("0.001"), 3),
+    "DOT": (Decimal("0.001"), 3),
+    "UNI": (Decimal("0.001"), 3),
+    "ICP": (Decimal("0.001"), 3),
+    "IMX": (Decimal("0.001"), 3),
+    "STX": (Decimal("0.001"), 3),
+    "ETC": (Decimal("0.001"), 3),
+
+    # Tier 4: $0.01-$0.99 assets — tick=0.0001, 4 decimals
+    "XRP": (Decimal("0.0001"), 4),
+    "ADA": (Decimal("0.0001"), 4),
+    "SUI": (Decimal("0.0001"), 4),
+    "ARB": (Decimal("0.0001"), 4),
+    "SEI": (Decimal("0.0001"), 4),
     "FET": (Decimal("0.0001"), 4),
+    "WIF": (Decimal("0.0001"), 4),
+    "MATIC": (Decimal("0.0001"), 4),
+    "FTM": (Decimal("0.0001"), 4),
+    "ALGO": (Decimal("0.0001"), 4),
+    "MANA": (Decimal("0.0001"), 4),
+    "SAND": (Decimal("0.0001"), 4),
+    "GALA": (Decimal("0.00001"), 5),
+    "CRV": (Decimal("0.0001"), 4),
+    "DYDX": (Decimal("0.0001"), 4),
+    "ENS": (Decimal("0.001"), 3),
+    "SNX": (Decimal("0.001"), 3),
+    "RUNE": (Decimal("0.001"), 3),
+    "PENDLE": (Decimal("0.001"), 3),
+    "JUP": (Decimal("0.0001"), 4),
+    "W": (Decimal("0.0001"), 4),
+    "ONDO": (Decimal("0.0001"), 4),
+    "ENA": (Decimal("0.0001"), 4),
+    "EIGEN": (Decimal("0.001"), 3),
+
+    # Tier 5: $0.001-$0.01 assets — tick=0.00001, 5 decimals
+    "DOGE": (Decimal("0.00001"), 5),
+    "SHIB": (Decimal("0.000000001"), 9),
+    "PEPE": (Decimal("0.0000001"), 7),
+    "FLOKI": (Decimal("0.0000001"), 7),
+    "BONK": (Decimal("0.000000001"), 9),
+    "1000PEPE": (Decimal("0.0001"), 4),
+    "1000SHIB": (Decimal("0.0001"), 4),
+    "1000BONK": (Decimal("0.0001"), 4),
+    "1000FLOKI": (Decimal("0.0001"), 4),
 }
 
 
@@ -52,10 +104,12 @@ def infer_tick_size_from_price(price: Decimal, max_sig_figs: int = 5) -> Tuple[D
     Given a price, compute the tick size and number of decimals allowed.
 
     Examples:
-      price=2048.75 → 4 digits before decimal → 5-4=1 decimal → tick=0.1
-      price=150.25  → 3 digits before decimal → 5-3=2 decimals → tick=0.01
-      price=0.5432  → 0 digits before decimal → 5-0=5 decimals → tick=0.00001
-      price=105000   → 6 digits before decimal → 5-6=0 decimals → tick=1 (or 10)
+      price=95000    → 5 digits before decimal → 5-5=0 decimals → tick=1
+      price=2048.75  → 4 digits before decimal → 5-4=1 decimal  → tick=0.1
+      price=150.25   → 3 digits before decimal → 5-3=2 decimals → tick=0.01
+      price=9.08     → 1 digit before decimal  → 5-1=4 decimals → tick=0.0001
+      price=0.5432   → 0 digits before decimal → 5-0=5 decimals → tick=0.00001
+      price=0.00123  → need more decimals      → tick=0.0000001
     """
     if price <= 0:
         return Decimal("0.01"), 2

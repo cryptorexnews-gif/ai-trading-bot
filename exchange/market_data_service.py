@@ -6,7 +6,6 @@ from exchange.market_rules import (
     default_tick_size_for_asset,
     get_tick_size_for_known_coin,
     infer_tick_size_from_price,
-    infer_tick_size_and_precision_from_mid,
 )
 from utils.decimals import safe_decimal
 

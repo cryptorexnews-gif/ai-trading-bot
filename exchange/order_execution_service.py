@@ -335,6 +335,7 @@ class OrderExecutionService:
         """
         Place a standalone trigger order (TP or SL).
         Uses grouping='na' — 'positionTpsl' is only valid in atomic batch with entry.
+        p = triggerPx for standalone trigger orders.
         """
         if not self.client._live_orders_enabled():
             return {"success": False, "reason": "live_disabled_fail_closed"}
@@ -359,7 +360,7 @@ class OrderExecutionService:
         if rounded_trigger <= 0:
             return {"success": False, "reason": "invalid_trigger_price"}
 
-        # Format trigger price with tick-precise decimals
+        # Format trigger price and size with tick-precise decimals
         trigger_price_wire = self._format_price_for_asset(coin, rounded_trigger)
         size_wire = self._format_size_for_coin(coin, normalized_size)
 
@@ -384,6 +385,7 @@ class OrderExecutionService:
 
         # IMPORTANT: standalone trigger orders use grouping="na"
         # "positionTpsl" is only valid when sent as atomic batch with entry order
+        # p = triggerPx for standalone (not "0")
         action = build_trigger_order_action(
             asset_id=asset_id,
             is_buy=(normalized_side == "buy"),
