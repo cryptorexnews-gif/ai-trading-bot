@@ -69,8 +69,8 @@ def round_to_tick(price: Decimal, tick_size: Decimal) -> Decimal:
     return units * tick_size
 
 
-def get_position_size(client: HyperliquidExchangeClient, wallet: str, coin: str) -> Decimal:
-    user_state = client.get_user_state(wallet)
+def get_position_size(client: HyperliquidExchangeClient, trading_user: str, coin: str) -> Decimal:
+    user_state = client.get_user_state(trading_user)
     if not isinstance(user_state, dict):
         return Decimal("0")
     positions = get_open_positions(user_state)
@@ -107,7 +107,7 @@ def normalize_size_for_min_notional(
 
 def wait_position_delta_confirmation(
     client: HyperliquidExchangeClient,
-    wallet: str,
+    trading_user: str,
     coin: str,
     size_before: Decimal,
     side: str,
@@ -118,7 +118,7 @@ def wait_position_delta_confirmation(
     is_buy = side == "buy"
 
     for attempt in range(1, attempts + 1):
-        current_size = get_position_size(client, wallet, coin)
+        current_size = get_position_size(client, trading_user, coin)
         delta = current_size - size_before
 
         if is_buy and delta >= min_abs_delta:
@@ -137,7 +137,7 @@ def wait_position_delta_confirmation(
 
         time.sleep(sleep_sec)
 
-    return False, get_position_size(client, wallet, coin)
+    return False, get_position_size(client, trading_user, coin)
 
 
 def _extract_order_tpsl(order: Dict) -> str:
@@ -232,14 +232,14 @@ def _extract_reduce_only(order: Dict) -> bool:
 
 def wait_protective_orders_confirmation(
     client: HyperliquidExchangeClient,
-    wallet: str,
+    trading_user: str,
     coin: str,
     close_side: str,
     attempts: int,
     sleep_sec: float,
 ) -> Tuple[bool, int, int, List[int]]:
     for attempt in range(1, attempts + 1):
-        open_orders = client.get_open_orders(wallet, force_refresh=True)
+        open_orders = client.get_open_orders(trading_user, force_refresh=True)
 
         tp_count = 0
         sl_count = 0
@@ -283,14 +283,14 @@ def wait_protective_orders_confirmation(
 
 def main() -> None:
     private_key = os.getenv("HYPERLIQUID_PRIVATE_KEY", "")
-    wallet = os.getenv("HYPERLIQUID_WALLET_ADDRESS", "")
+    env_wallet = os.getenv("HYPERLIQUID_WALLET_ADDRESS", "")
     base_url = os.getenv("HYPERLIQUID_BASE_URL", "https://api.hyperliquid.xyz")
     execution_mode = os.getenv("EXECUTION_MODE", "live").lower()
     enable_mainnet = os.getenv("ENABLE_MAINNET_TRADING", "false").lower() == "true"
 
     if not private_key:
         raise RuntimeError("HYPERLIQUID_PRIVATE_KEY mancante")
-    if not wallet:
+    if not env_wallet:
         raise RuntimeError("HYPERLIQUID_WALLET_ADDRESS mancante")
     if execution_mode != "live":
         raise RuntimeError("EXECUTION_MODE deve essere 'live' per questo test")
@@ -298,9 +298,9 @@ def main() -> None:
         raise RuntimeError("ENABLE_MAINNET_TRADING deve essere true per questo test")
 
     derived = Account.from_key(private_key).address
-    if derived.lower() != wallet.lower():
+    if derived.lower() != env_wallet.lower():
         raise RuntimeError(
-            f"Mismatch key/address: derived={derived} env={wallet}. "
+            f"Mismatch key/address: derived={derived} env={env_wallet}. "
             f"Correggi .env prima del test."
         )
 
@@ -335,7 +335,7 @@ def main() -> None:
         raise RuntimeError("TEST_MIN_NOTIONAL_USD deve essere >= 10")
 
     logger.warning("TEST LIVE REALE ATTIVO: questo script può aprire una posizione con soldi reali")
-    logger.info(f"Wallet diagnostics: derived={mask_wallet(derived)} env={mask_wallet(wallet)}")
+    logger.info(f"Wallet diagnostics: derived={mask_wallet(derived)} env={mask_wallet(env_wallet)}")
     logger.info(
         f"Parametri: coin={coin}, side={side}, margin={margin_usd}, lev={leverage}, "
         f"sl_pct={sl_pct}, tp_pct={tp_pct}, min_notional={min_notional_usd}"
@@ -348,9 +348,16 @@ def main() -> None:
         execution_mode=execution_mode,
     )
 
+    trading_user = client.get_trading_user_address()
+    if trading_user.lower() != derived.lower():
+        raise RuntimeError(
+            f"Identità non coerente: signer={derived} trading_user={trading_user}. "
+            "Il test richiede signer e trading_user uguali."
+        )
+
     logger.info(
         f"Client diagnostics: signer={client.get_wallet_address_masked()} "
-        f"trading_user={mask_wallet(client.get_trading_user_address())}"
+        f"trading_user={mask_wallet(trading_user)} (match signer=yes)"
     )
 
     mids = client.get_all_mids(force_refresh=True)
@@ -399,7 +406,7 @@ def main() -> None:
             f"(size={normalized_size}, mid={mid_price})"
         )
 
-    size_before_entry = get_position_size(client, wallet, coin)
+    size_before_entry = get_position_size(client, trading_user, coin)
     logger.info(f"Posizione prima entry su {coin}: size={size_before_entry}")
 
     if side == "buy":
@@ -441,7 +448,7 @@ def main() -> None:
     min_delta = normalized_size * Decimal("0.8")
     entry_confirmed, size_after_entry = wait_position_delta_confirmation(
         client=client,
-        wallet=wallet,
+        trading_user=trading_user,
         coin=coin,
         size_before=size_before_entry,
         side=side,
@@ -456,7 +463,7 @@ def main() -> None:
 
     protective_ok, tp_count, sl_count, oids = wait_protective_orders_confirmation(
         client=client,
-        wallet=wallet,
+        trading_user=trading_user,
         coin=coin,
         close_side=close_side,
         attempts=orders_confirm_attempts,
