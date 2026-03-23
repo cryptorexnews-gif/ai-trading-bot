@@ -38,8 +38,8 @@ class OrderExecutionService:
     def _format_price_for_asset(self, coin: str, price: Decimal) -> str:
         """
         Formatta prezzo per Hyperliquid in modo robusto:
-        - usa tick+precision da get_tick_size_and_precision (metadata o fallback mids)
-        - mantiene numero decimali fisso della precisione
+        - arrotonda al tick size
+        - formatta con il numero esatto di decimali della precisione
         """
         asset_id = self.client.get_asset_id(coin)
         if asset_id is None:
@@ -53,7 +53,7 @@ class OrderExecutionService:
                 return f"{rounded:.{precision}f}"
             return f"{rounded:.0f}"
 
-        # Fallback estremo (non dovrebbe avvenire): formatter robusto da regole Hyperliquid
+        # Fallback estremo
         sz_decimals = self.client.get_sz_decimals(coin)
         return format_price_for_hyperliquid(rounded, sz_decimals)
 
@@ -117,9 +117,9 @@ class OrderExecutionService:
         price_wire = self._format_price_for_asset(coin, limit_price)
         size_wire = self._format_size_for_coin(coin, normalized_size)
 
-        logger.debug(
-            f"{coin} limit wire values: raw_price={limit_price} price_wire={price_wire} "
-            f"raw_size={normalized_size} size_wire={size_wire}"
+        logger.info(
+            f"{coin} limit order wire: raw_price={limit_price} -> price_wire={price_wire}, "
+            f"raw_size={normalized_size} -> size_wire={size_wire}"
         )
 
         action = build_limit_order_action(
@@ -186,13 +186,6 @@ class OrderExecutionService:
         stop_loss_price: Decimal,
         take_profit_price: Decimal,
     ) -> Dict[str, Any]:
-        """
-        Atomic batch order:
-          1) Entry limit order (IOC)
-          2) TP trigger reduce-only (isMarket=true)
-          3) SL trigger reduce-only (isMarket=true)
-        with grouping='positionTpsl'
-        """
         if not self.client._live_orders_enabled():
             return {"success": False, "mode": "live", "reason": "live_disabled_fail_closed", "notional": "0"}
 
@@ -355,6 +348,16 @@ class OrderExecutionService:
         if rounded_trigger <= 0:
             return {"success": False, "reason": "invalid_trigger_price"}
 
+        # Format trigger price with tick-precise decimals
+        trigger_price_wire = self._format_price_for_asset(coin, rounded_trigger)
+        size_wire = self._format_size_for_coin(coin, normalized_size)
+
+        logger.info(
+            f"{coin} trigger order wire: {tpsl.upper()} {normalized_side.upper()} "
+            f"raw_trigger={trigger_price} -> rounded={rounded_trigger} -> wire={trigger_price_wire}, "
+            f"size_wire={size_wire}"
+        )
+
         existing_oid = self.client._wait_for_trigger_order_id(
             user=self.client._trading_user_address,
             coin=coin,
@@ -377,6 +380,8 @@ class OrderExecutionService:
             reduce_only=reduce_only,
             is_market=is_market,
             grouping="positionTpsl",
+            trigger_price_str=trigger_price_wire,
+            size_str=size_wire,
         )
 
         result = self.client._post_signed_action_with_master_retry(action)
@@ -483,10 +488,13 @@ class OrderExecutionService:
 
                 rounded_px = Decimal("0") if is_market else self.client._round_price_to_tick(asset_id, raw_px)
 
+                # Format trigger price with tick precision
+                trigger_wire = self._format_price_for_asset(coin, rounded_trigger)
+
                 order_type = {
                     "trigger": {
                         "isMarket": is_market,
-                        "triggerPx": str(rounded_trigger),
+                        "triggerPx": trigger_wire,
                         "tpsl": str(trigger_obj.get("tpsl", "")).strip().lower(),
                     }
                 }
@@ -503,12 +511,16 @@ class OrderExecutionService:
 
             reduce_only = bool(order.get("reduce_only", False))
 
+            # Format all prices and sizes with tick precision
+            price_wire = self._format_price_for_asset(coin, rounded_px) if rounded_px > 0 else "0"
+            size_wire = self._format_size_for_coin(coin, normalized_size)
+
             wire_orders.append(
                 {
                     "a": asset_id,
                     "b": is_buy,
-                    "p": str(rounded_px),
-                    "s": str(normalized_size.normalize()),
+                    "p": price_wire,
+                    "s": size_wire,
                     "r": reduce_only,
                     "t": order_type,
                 }

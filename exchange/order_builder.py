@@ -46,21 +46,24 @@ def build_trigger_order_action(
     reduce_only: bool = True,
     is_market: bool = True,
     grouping: str = "na",
+    trigger_price_str: Optional[str] = None,
+    size_str: Optional[str] = None,
 ) -> Dict[str, Any]:
-    trigger_str = _decimal_to_wire_str(trigger_price)
+    effective_trigger_str = trigger_price_str if trigger_price_str is not None else _decimal_to_wire_str(trigger_price)
+    effective_size_str = size_str if size_str is not None else _decimal_to_wire_str(size)
     # Hyperliquid: per trigger market, p deve essere "0"
-    limit_price_str = "0" if bool(is_market) else trigger_str
+    limit_price_str = "0" if bool(is_market) else effective_trigger_str
 
     order_wire = {
         "a": asset_id,
         "b": is_buy,
         "p": limit_price_str,
-        "s": _decimal_to_wire_str(size),
+        "s": effective_size_str,
         "r": bool(reduce_only),
         "t": {
             "trigger": {
                 "isMarket": bool(is_market),
-                "triggerPx": trigger_str,
+                "triggerPx": effective_trigger_str,
                 "tpsl": tpsl,
             }
         },
