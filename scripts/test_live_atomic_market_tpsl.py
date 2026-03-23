@@ -5,26 +5,6 @@ apertura posizione + stop loss + take profit in un unico batch request
 con grouping='positionTpsl'.
 
 ATTENZIONE: usa soldi reali se ENABLE_MAINNET_TRADING=true.
-
-Configurazione via .env:
-- HYPERLIQUID_PRIVATE_KEY
-- HYPERLIQUID_WALLET_ADDRESS
-- EXECUTION_MODE=live
-- ENABLE_MAINNET_TRADING=true
-
-Parametri test (opzionali):
-- TEST_COIN=ETH
-- TEST_SIDE=buy                  # buy (long) o sell (short)
-- TEST_MARGIN_USD=2
-- TEST_LEVERAGE=5
-- TEST_SL_PCT=0.03
-- TEST_TP_PCT=0.06
-- TEST_IOC_BUFFER_PCT=0.01
-- TEST_MIN_NOTIONAL_USD=10.5
-- TEST_ENTRY_CONFIRM_ATTEMPTS=20
-- TEST_ENTRY_CONFIRM_SLEEP_SEC=1
-- TEST_ORDERS_CONFIRM_ATTEMPTS=15
-- TEST_ORDERS_CONFIRM_SLEEP_SEC=1
 """
 
 import json
@@ -43,7 +23,11 @@ ROOT_DIR = Path(__file__).resolve().parent.parent
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
-from exchange.market_rules import normalize_size_for_decimals
+from exchange.market_rules import (
+    format_price_for_hyperliquid,
+    get_max_price_decimals_from_sz,
+    normalize_size_for_decimals,
+)
 from exchange_client import HyperliquidExchangeClient
 from utils.hyperliquid_state import get_open_positions
 
@@ -81,7 +65,9 @@ def get_asset_precision_from_meta(client: HyperliquidExchangeClient, coin: str) 
     """
     Restituisce:
       tick_size, step_size, px_decimals, sz_decimals
-    usando i metadata Hyperliquid (source of truth).
+    Source of truth:
+      - pxDecimals se presente
+      - fallback: px_decimals = max(0, 6 - sz_decimals)
     """
     meta = client.get_meta(force_refresh=True)
     if not isinstance(meta, dict):
@@ -95,12 +81,18 @@ def get_asset_precision_from_meta(client: HyperliquidExchangeClient, coin: str) 
         if str(asset.get("name", "")).strip().upper() != coin.upper():
             continue
 
-        px_decimals = _asset_int(asset, ["pxDecimals", "priceDecimals", "pricePrecision"])
         sz_decimals = _asset_int(asset, ["szDecimals", "sizeDecimals", "qtyDecimals"])
+        px_decimals = _asset_int(asset, ["pxDecimals", "priceDecimals", "pricePrecision"])
 
-        if px_decimals is None or sz_decimals is None:
+        if sz_decimals is None:
             logger.error(f"Asset metadata per {coin}: {json.dumps(asset, indent=2)}")
-            raise RuntimeError(f"Decimali mancanti per {coin} nel metadata")
+            raise RuntimeError(f"szDecimals mancanti per {coin} nel metadata")
+
+        if px_decimals is None:
+            px_decimals = get_max_price_decimals_from_sz(sz_decimals, max_decimals_perp=6)
+            logger.warning(
+                f"{coin}: pxDecimals non presente nel metadata, fallback a 6-szDecimals => {px_decimals}"
+            )
 
         if px_decimals < 0 or sz_decimals < 0:
             raise RuntimeError(f"Decimali negativi per {coin}: px={px_decimals}, sz={sz_decimals}")
@@ -112,23 +104,7 @@ def get_asset_precision_from_meta(client: HyperliquidExchangeClient, coin: str) 
     raise RuntimeError(f"Asset {coin} non trovato nel metadata")
 
 
-def quantize_to_tick(price: Decimal, tick_size: Decimal, decimals: int) -> Decimal:
-    if price <= 0:
-        return Decimal("0")
-    units = (price / tick_size).to_integral_value(rounding=ROUND_HALF_UP)
-    rounded = units * tick_size
-    if decimals > 0:
-        q = Decimal("1").scaleb(-decimals)
-        rounded = rounded.quantize(q)
-    return rounded
-
-
-def format_price_for_tick(price: Decimal, tick_size: Decimal, decimals: int) -> str:
-    rounded = quantize_to_tick(price, tick_size, decimals)
-    return f"{rounded:.{decimals}f}" if decimals > 0 else f"{rounded:.0f}"
-
-
-def quantize_to_step(size: Decimal, step_size: Decimal, sz_decimals: int) -> Decimal:
+def quantize_to_step(size: Decimal, sz_decimals: int) -> Decimal:
     normalized = normalize_size_for_decimals(size, sz_decimals)
     if normalized <= 0:
         return Decimal("0")
@@ -138,8 +114,8 @@ def quantize_to_step(size: Decimal, step_size: Decimal, sz_decimals: int) -> Dec
     return normalized.quantize(Decimal("1"))
 
 
-def format_size_for_step(size: Decimal, step_size: Decimal, sz_decimals: int) -> str:
-    normalized = quantize_to_step(size, step_size, sz_decimals)
+def format_size_for_step(size: Decimal, sz_decimals: int) -> str:
+    normalized = quantize_to_step(size, sz_decimals)
     if sz_decimals > 0:
         return f"{normalized:.{sz_decimals}f}"
     return f"{normalized:.0f}"
@@ -525,7 +501,7 @@ def main() -> None:
         raise RuntimeError(f"Precisione non valida per {coin}: tick={tick_size}, step={step_size}")
 
     logger.info(
-        f"{coin} mid={mid_price} tick={tick_size} step={step_size} "
+        f"{coin} mid={mid_price} tick_base={tick_size} step={step_size} "
         f"px_decimals={px_decimals} sz_decimals={sz_decimals}"
     )
 
@@ -549,8 +525,8 @@ def main() -> None:
     if normalized_size <= 0:
         raise RuntimeError("Size normalizzata non valida")
 
-    normalized_size = quantize_to_step(normalized_size, step_size, sz_decimals)
-    size_str = format_size_for_step(normalized_size, step_size, sz_decimals)
+    normalized_size = quantize_to_step(normalized_size, sz_decimals)
+    size_str = format_size_for_step(normalized_size, sz_decimals)
 
     expected_notional = normalized_size * mid_price
     if expected_notional < Decimal("10"):
@@ -564,24 +540,22 @@ def main() -> None:
 
     if side == "buy":
         entry_price_raw = mid_price * (Decimal("1") + ioc_buffer_pct)
-        entry_price_quantized = quantize_to_tick(entry_price_raw, tick_size, px_decimals)
-        sl_price_raw = entry_price_quantized * (Decimal("1") - sl_pct)
-        tp_price_raw = entry_price_quantized * (Decimal("1") + tp_pct)
+        sl_price_raw = entry_price_raw * (Decimal("1") - sl_pct)
+        tp_price_raw = entry_price_raw * (Decimal("1") + tp_pct)
         close_side = "sell"
     else:
         entry_price_raw = mid_price * (Decimal("1") - ioc_buffer_pct)
-        entry_price_quantized = quantize_to_tick(entry_price_raw, tick_size, px_decimals)
-        sl_price_raw = entry_price_quantized * (Decimal("1") + sl_pct)
-        tp_price_raw = entry_price_quantized * (Decimal("1") - tp_pct)
+        sl_price_raw = entry_price_raw * (Decimal("1") + sl_pct)
+        tp_price_raw = entry_price_raw * (Decimal("1") - tp_pct)
         close_side = "buy"
 
-    entry_price_str = format_price_for_tick(entry_price_quantized, tick_size, px_decimals)
-    sl_price_str = format_price_for_tick(sl_price_raw, tick_size, px_decimals)
-    tp_price_str = format_price_for_tick(tp_price_raw, tick_size, px_decimals)
+    entry_price_str = format_price_for_hyperliquid(entry_price_raw, sz_decimals)
+    sl_price_str = format_price_for_hyperliquid(sl_price_raw, sz_decimals)
+    tp_price_str = format_price_for_hyperliquid(tp_price_raw, sz_decimals)
 
     logger.info(
-        "Prezzi formattati strict tick (metadata): "
-        f"entry={entry_price_str}, sl={sl_price_str}, tp={tp_price_str}, tick={tick_size}"
+        "Prezzi formattati Hyperliquid strict: "
+        f"entry={entry_price_str}, sl={sl_price_str}, tp={tp_price_str}"
     )
 
     action = build_atomic_action(

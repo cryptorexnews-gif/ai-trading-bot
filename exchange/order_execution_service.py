@@ -3,6 +3,7 @@ import logging
 from decimal import Decimal
 from typing import Any, Dict, List, Optional, Tuple
 
+from exchange.market_rules import format_price_for_hyperliquid
 from exchange.order_builder import (
     build_cancel_action,
     build_limit_order_action,
@@ -26,18 +27,23 @@ class OrderExecutionService:
     def __init__(self, client):
         self.client = client
 
-    def _format_price_for_asset(self, asset_id: int, price: Decimal) -> str:
+    def _format_price_for_asset(self, coin: str, asset_id: int, price: Decimal) -> str:
         """
-        Formatta il prezzo in stringa rispettando esattamente il tick size dell'asset:
-        - arrotondamento tramite _round_price_to_tick
-        - numero decimali fisso in base alla precisione asset
+        Formatta il prezzo in stringa rispettando:
+        1) tick/precision da metadata se disponibili
+        2) regole Hyperliquid sig-fig + max decimali da szDecimals come fallback robusto
         """
         rounded = self.client._round_price_to_tick(asset_id, price)
         _tick_size, precision = self.client.get_tick_size_and_precision(asset_id)
-        decimals = precision if precision >= 0 else 0
-        if decimals > 0:
-            return f"{rounded:.{decimals}f}"
-        return f"{rounded:.0f}"
+
+        if precision >= 0:
+            decimals = precision
+            if decimals > 0:
+                return f"{rounded:.{decimals}f}"
+            return f"{rounded:.0f}"
+
+        sz_decimals = self.client.get_sz_decimals(coin)
+        return format_price_for_hyperliquid(rounded, sz_decimals)
 
     def set_leverage(self, coin: str, leverage: int) -> bool:
         if not self.client._live_orders_enabled():
@@ -184,9 +190,9 @@ class OrderExecutionService:
         if rounded_sl <= 0 or rounded_tp <= 0:
             return {"success": False, "mode": "live", "reason": "invalid_trigger_price", "notional": "0"}
 
-        entry_price_wire = self._format_price_for_asset(asset_id, entry_limit_price)
-        sl_price_wire = self._format_price_for_asset(asset_id, rounded_sl)
-        tp_price_wire = self._format_price_for_asset(asset_id, rounded_tp)
+        entry_price_wire = self._format_price_for_asset(coin, asset_id, entry_limit_price)
+        sl_price_wire = self._format_price_for_asset(coin, asset_id, rounded_sl)
+        tp_price_wire = self._format_price_for_asset(coin, asset_id, rounded_tp)
 
         is_buy = normalized_side == "buy"
         close_is_buy = not is_buy
