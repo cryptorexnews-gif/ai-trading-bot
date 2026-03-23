@@ -189,6 +189,10 @@ class OrderExecutionService:
         stop_loss_price: Decimal,
         take_profit_price: Decimal,
     ) -> Dict[str, Any]:
+        """
+        Atomic batch order: entry + TP + SL with grouping='positionTpsl'.
+        Only valid when all three orders are sent together.
+        """
         if not self.client._live_orders_enabled():
             return {"success": False, "mode": "live", "reason": "live_disabled_fail_closed", "notional": "0"}
 
@@ -328,6 +332,10 @@ class OrderExecutionService:
         reduce_only: bool = True,
         is_market: bool = True,
     ) -> Dict[str, Any]:
+        """
+        Place a standalone trigger order (TP or SL).
+        Uses grouping='na' — 'positionTpsl' is only valid in atomic batch with entry.
+        """
         if not self.client._live_orders_enabled():
             return {"success": False, "reason": "live_disabled_fail_closed"}
 
@@ -374,6 +382,8 @@ class OrderExecutionService:
         if existing_oid is not None:
             return {"success": True, "order_id": existing_oid}
 
+        # IMPORTANT: standalone trigger orders use grouping="na"
+        # "positionTpsl" is only valid when sent as atomic batch with entry order
         action = build_trigger_order_action(
             asset_id=asset_id,
             is_buy=(normalized_side == "buy"),
@@ -382,7 +392,7 @@ class OrderExecutionService:
             tpsl=tpsl,
             reduce_only=reduce_only,
             is_market=is_market,
-            grouping="positionTpsl",
+            grouping="na",
             trigger_price_str=trigger_price_wire,
             size_str=size_wire,
         )
