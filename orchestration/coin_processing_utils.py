@@ -1,7 +1,8 @@
 import logging
 from decimal import Decimal
-from typing import Any, Dict, Tuple
+from typing import Dict, List, Tuple
 
+from bot_live_writer import write_live_status
 from technical_analyzer_simple import technical_fetcher
 
 logger = logging.getLogger(__name__)
@@ -9,7 +10,7 @@ logger = logging.getLogger(__name__)
 
 def late_confirm_fill(
     coin: str,
-    snapshot: Dict[str, Any],
+    snapshot: Dict[str, any],
     expected_side: str,
     expected_size: Decimal,
     portfolio_service,
@@ -36,7 +37,7 @@ def late_confirm_fill(
     return False, "not_filled"
 
 
-def log_coin_indicators(coin: str, market_data, tech_data: Dict[str, Any]) -> None:
+def log_coin_indicators(coin: str, market_data, tech_data: Dict[str, any]) -> None:
     trends_aligned = tech_data.get("trends_aligned", False)
     intraday_trend = tech_data.get("intraday_trend", "unknown")
     hourly_ctx = tech_data.get("hourly_context", {})
@@ -52,6 +53,38 @@ def log_coin_indicators(coin: str, market_data, tech_data: Dict[str, Any]) -> No
     )
 
 
+def _min_size_from_hyperliquid_meta(coin: str) -> Decimal:
+    """
+    Ricava min size dalla precisione size ufficiale dell'asset su Hyperliquid:
+    min_size = 10^(-szDecimals)
+    """
+    meta = technical_fetcher.get_meta()
+    if not isinstance(meta, dict):
+        return Decimal("0")
+
+    universe = meta.get("universe", [])
+    if not isinstance(universe, list):
+        return Decimal("0")
+
+    target = str(coin or "").strip().upper()
+    for asset in universe:
+        asset_name = str(asset.get("name", "")).strip().upper()
+        if asset_name != target:
+            continue
+
+        raw_sz_decimals = asset.get("szDecimals")
+        if raw_sz_decimals is None:
+            return Decimal("0")
+
+        sz_decimals = int(str(raw_sz_decimals))
+        if sz_decimals < 0:
+            return Decimal("0")
+
+        return Decimal("1").scaleb(-sz_decimals) if sz_decimals > 0 else Decimal("1")
+
+    return Decimal("0")
+
+
 def resolve_min_size(coin: str, cfg, dynamic_cache: Dict[str, Decimal]) -> Decimal:
     if coin in cfg.min_size_by_coin:
         return cfg.min_size_by_coin[coin]
@@ -59,6 +92,14 @@ def resolve_min_size(coin: str, cfg, dynamic_cache: Dict[str, Decimal]) -> Decim
     if coin in dynamic_cache:
         return dynamic_cache[coin]
 
+    # 1) Fonte primaria: metadata Hyperliquid (szDecimals)
+    meta_min_size = _min_size_from_hyperliquid_meta(coin)
+    if meta_min_size > 0:
+        dynamic_cache[coin] = meta_min_size
+        logger.info(f"Dynamic min size from Hyperliquid meta for {coin}: {meta_min_size}")
+        return meta_min_size
+
+    # 2) Fallback storico: euristica da prezzo mid
     mids = technical_fetcher.get_all_mids()
     if mids and coin in mids:
         mid_price = Decimal(str(mids[coin]))
@@ -82,7 +123,7 @@ def resolve_min_size(coin: str, cfg, dynamic_cache: Dict[str, Decimal]) -> Decim
                 resolved = Decimal("10000")
 
             dynamic_cache[coin] = resolved
-            logger.info(f"Dynamic min size for {coin}: {resolved} (price=${mid_price})")
+            logger.info(f"Fallback dynamic min size for {coin}: {resolved} (price=${mid_price})")
             return resolved
 
     logger.warning(f"No min size data for {coin}, using default {cfg.default_min_size}")
