@@ -27,6 +27,7 @@ Parametri test (opzionali):
 - TEST_ORDERS_CONFIRM_SLEEP_SEC=1
 """
 
+import json
 import logging
 import os
 import sys
@@ -62,11 +63,28 @@ def mask_wallet(wallet: str) -> str:
     return f"{wallet[:6]}...{wallet[-4:]}"
 
 
-def round_to_tick(price: Decimal, tick_size: Decimal) -> Decimal:
+def tick_decimals(tick_size: Decimal) -> int:
+    normalized = format(tick_size.normalize(), "f")
+    if "." not in normalized:
+        return 0
+    return len(normalized.split(".")[1])
+
+
+def quantize_to_tick(price: Decimal, tick_size: Decimal, decimals: int) -> Decimal:
     if price <= 0:
-        return price
+        return Decimal("0")
     units = (price / tick_size).to_integral_value(rounding=ROUND_DOWN)
-    return units * tick_size
+    rounded = units * tick_size
+    if decimals > 0:
+        q = Decimal("1").scaleb(-decimals)
+        rounded = rounded.quantize(q)
+    return rounded
+
+
+def format_price_for_tick(price: Decimal, tick_size: Decimal) -> str:
+    decimals = tick_decimals(tick_size)
+    rounded = quantize_to_tick(price, tick_size, decimals)
+    return f"{rounded:.{decimals}f}" if decimals > 0 else f"{rounded:.0f}"
 
 
 def get_position_size(client: HyperliquidExchangeClient, trading_user: str, coin: str) -> Decimal:
@@ -281,6 +299,78 @@ def wait_protective_orders_confirmation(
     return False, 0, 0, []
 
 
+def build_atomic_action(
+    asset_id: int,
+    is_buy: bool,
+    size: Decimal,
+    entry_price_str: str,
+    tp_price_str: str,
+    sl_price_str: str,
+) -> Dict:
+    close_is_buy = not is_buy
+
+    entry_order = {
+        "a": asset_id,
+        "b": is_buy,
+        "p": entry_price_str,
+        "s": str(size.normalize()),
+        "r": False,
+        "t": {"limit": {"tif": "Gtc"}},
+    }
+
+    tp_order = {
+        "a": asset_id,
+        "b": close_is_buy,
+        "p": "0",
+        "s": str(size.normalize()),
+        "r": True,
+        "t": {
+            "trigger": {
+                "isMarket": True,
+                "triggerPx": tp_price_str,
+                "tpsl": "tp",
+            }
+        },
+    }
+
+    sl_order = {
+        "a": asset_id,
+        "b": close_is_buy,
+        "p": "0",
+        "s": str(size.normalize()),
+        "r": True,
+        "t": {
+            "trigger": {
+                "isMarket": True,
+                "triggerPx": sl_price_str,
+                "tpsl": "sl",
+            }
+        },
+    }
+
+    return {
+        "type": "order",
+        "orders": [entry_order, tp_order, sl_order],
+        "grouping": "positionTpsl",
+    }
+
+
+def validate_exchange_ack(result: Dict) -> Tuple[bool, str]:
+    if not isinstance(result, dict):
+        return False, "invalid_response_type"
+    if result.get("status") != "ok":
+        return False, f"exchange_status_{result.get('status', 'unknown')}"
+
+    statuses = result.get("response", {}).get("data", {}).get("statuses", [])
+    if isinstance(statuses, list):
+        for st in statuses:
+            if isinstance(st, dict) and st.get("error"):
+                return False, f"status_error:{st.get('error')}"
+        if statuses and not any((isinstance(st, dict) and (st.get("resting") or st.get("filled"))) for st in statuses):
+            return False, "not_acknowledged"
+    return True, "ok"
+
+
 def main() -> None:
     private_key = os.getenv("HYPERLIQUID_PRIVATE_KEY", "")
     env_wallet = os.getenv("HYPERLIQUID_WALLET_ADDRESS", "")
@@ -301,7 +391,7 @@ def main() -> None:
     if derived.lower() != env_wallet.lower():
         raise RuntimeError(
             f"Mismatch key/address: derived={derived} env={env_wallet}. "
-            f"Correggi .env prima del test."
+            "Correggi .env prima del test."
         )
 
     coin = os.getenv("TEST_COIN", "ETH").strip().upper()
@@ -410,40 +500,42 @@ def main() -> None:
     logger.info(f"Posizione prima entry su {coin}: size={size_before_entry}")
 
     if side == "buy":
-        entry_limit = mid_price * (Decimal("1") + ioc_buffer_pct)
-    else:
-        entry_limit = mid_price * (Decimal("1") - ioc_buffer_pct)
-    entry_limit = round_to_tick(entry_limit, tick_size)
-
-    if side == "buy":
-        sl_price = round_to_tick(mid_price * (Decimal("1") - sl_pct), tick_size)
-        tp_price = round_to_tick(mid_price * (Decimal("1") + tp_pct), tick_size)
+        entry_price_raw = mid_price * (Decimal("1") + ioc_buffer_pct)
+        sl_price_raw = mid_price * (Decimal("1") - sl_pct)
+        tp_price_raw = mid_price * (Decimal("1") + tp_pct)
         close_side = "sell"
     else:
-        sl_price = round_to_tick(mid_price * (Decimal("1") + sl_pct), tick_size)
-        tp_price = round_to_tick(mid_price * (Decimal("1") - tp_pct), tick_size)
+        entry_price_raw = mid_price * (Decimal("1") - ioc_buffer_pct)
+        sl_price_raw = mid_price * (Decimal("1") + sl_pct)
+        tp_price_raw = mid_price * (Decimal("1") - tp_pct)
         close_side = "buy"
 
-    if entry_limit <= 0 or sl_price <= 0 or tp_price <= 0:
-        raise RuntimeError("Prezzi entry/SL/TP non validi dopo arrotondamento tick")
+    entry_price_str = format_price_for_tick(entry_price_raw, tick_size)
+    sl_price_str = format_price_for_tick(sl_price_raw, tick_size)
+    tp_price_str = format_price_for_tick(tp_price_raw, tick_size)
 
     logger.info(
-        "Invio BATCH ATOMICO positionTpsl: "
-        f"entry_side={side.upper()} size={normalized_size} entry={entry_limit} tp={tp_price} sl={sl_price}"
+        "Prezzi formattati strict tick: "
+        f"entry={entry_price_str}, sl={sl_price_str}, tp={tp_price_str}, tick={tick_size}"
     )
 
-    batch_result = client.place_entry_with_tpsl_batch(
-        coin=coin,
-        side=side,
+    action = build_atomic_action(
+        asset_id=asset_id,
+        is_buy=(side == "buy"),
         size=normalized_size,
-        desired_price=entry_limit,
-        stop_loss_price=sl_price,
-        take_profit_price=tp_price,
+        entry_price_str=entry_price_str,
+        tp_price_str=tp_price_str,
+        sl_price_str=sl_price_str,
     )
-    if not batch_result.get("success"):
-        raise RuntimeError(f"Batch atomico fallito: {batch_result}")
 
-    logger.info(f"Batch successo: {batch_result}")
+    logger.info("Payload batch inviato:\n" + json.dumps(action, indent=2))
+
+    result = client._post_signed_action_with_master_retry(action)
+    ok, reason = validate_exchange_ack(result if isinstance(result, dict) else {})
+    if not ok:
+        raise RuntimeError(f"Batch atomico fallito: {reason} | raw={result}")
+
+    logger.info(f"Batch successo: {result}")
 
     min_delta = normalized_size * Decimal("0.8")
     entry_confirmed, size_after_entry = wait_position_delta_confirmation(
