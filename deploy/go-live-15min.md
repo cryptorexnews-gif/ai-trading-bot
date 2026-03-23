@@ -38,17 +38,15 @@ Controlla:
 - Endpoint health API risponde.
 - Bot visibile in dashboard (stato, ciclo, log, circuit breaker).
 
-## Minuto 10-12 — Test rischio e protezioni
-Verifica da dashboard:
-- caricamento posizioni
-- managed positions
-- logs senza errori critici ripetuti
-- margine entro soglia
+## Minuto 10-12 — Cutover HTTPS
+- Imposta il tuo dominio nel file `deploy/nginx/default-https.conf` (sostituisci `your-domain.com`).
+- Usa l’override `docker-compose.https.yml` quando i certificati sono pronti.
+- Conferma redirect HTTP→HTTPS e certificato valido.
 
 ## Minuto 12-14 — Hardening finale
-- Attiva HTTPS sul dominio (certificato valido).
 - Conferma che API key dashboard sia obbligatoria.
 - Conferma che nessun segreto compaia nei log.
+- Verifica che i websocket (`/ws/`) funzionino anche su HTTPS.
 
 ## Minuto 14-15 — Avvio controllato
 - Esegui primo periodo live con size ridotte.
