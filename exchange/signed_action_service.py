@@ -28,7 +28,6 @@ class SignedActionService:
         return current_ms
 
     def _build_signature(self, action: Dict[str, Any], nonce: int) -> Dict[str, Any]:
-        # Firma canonica unica (no legacy/recovery fallback)
         return sign_l1_action_exact(
             account=self.account,
             action=action,
@@ -63,29 +62,22 @@ class SignedActionService:
         if now < self._auth_block_until:
             return {"status": "err", "response": "auth_cooldown_active"}
 
-        # Due tentativi canonical-only (nuovo nonce al secondo tentativo)
+        # Single canonical attempt — no retry that could produce wrong address
         result = self._post_once(action=action, timeout=timeout)
-        if result is not None and not self._is_auth_error(result):
-            self._auth_error_count = 0
-            return result
 
-        logger.warning("Signed action auth-style rejection on canonical signature, retrying once with fresh nonce")
-        result_retry = self._post_once(action=action, timeout=timeout)
-        if result_retry is not None and not self._is_auth_error(result_retry):
-            self._auth_error_count = 0
-            return result_retry
-
-        # Gestione cooldown auth
-        final_result = result_retry if result_retry is not None else result
-        if self._is_auth_error(final_result):
+        if result is not None and self._is_auth_error(result):
             self._auth_error_count += 1
-            if self._auth_error_count >= 2:
+            logger.warning(
+                f"Auth error on signed action (count={self._auth_error_count}): "
+                f"{str(result.get('response', ''))[:200]}"
+            )
+            if self._auth_error_count >= 3:
                 self._auth_block_until = time.time() + self._auth_cooldown_sec
                 logger.error(
-                    f"Auth error persisted on canonical signature; entering cooldown for "
-                    f"{int(self._auth_cooldown_sec)}s"
+                    f"Auth error persisted {self._auth_error_count} times; "
+                    f"entering cooldown for {int(self._auth_cooldown_sec)}s"
                 )
-        else:
+        elif result is not None:
             self._auth_error_count = 0
 
-        return final_result
+        return result
