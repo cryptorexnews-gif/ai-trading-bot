@@ -32,7 +32,7 @@ import logging
 import os
 import sys
 import time
-from decimal import Decimal, ROUND_DOWN
+from decimal import Decimal, ROUND_DOWN, ROUND_HALF_UP
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -70,10 +70,41 @@ def tick_decimals(tick_size: Decimal) -> int:
     return len(normalized.split(".")[1])
 
 
+def get_tick_size_from_meta(client: HyperliquidExchangeClient, coin: str) -> Tuple[Decimal, int]:
+    """
+    Source of truth: pxDecimals da /info meta.
+    Tick size = 10 ** (-pxDecimals)
+    """
+    meta = client.get_meta(force_refresh=True)
+    if not isinstance(meta, dict):
+        raise RuntimeError("Metadata Hyperliquid non disponibile")
+
+    for asset in meta.get("universe", []):
+        if str(asset.get("name", "")).strip().upper() != coin.upper():
+            continue
+
+        px_decimals_raw = asset.get("pxDecimals")
+        if px_decimals_raw is None:
+            raise RuntimeError(f"pxDecimals mancante per {coin} nel metadata")
+
+        try:
+            px_decimals = int(px_decimals_raw)
+        except (TypeError, ValueError):
+            raise RuntimeError(f"pxDecimals invalido per {coin}: {px_decimals_raw}")
+
+        if px_decimals < 0:
+            raise RuntimeError(f"pxDecimals negativo per {coin}: {px_decimals}")
+
+        tick_size = Decimal("1").scaleb(-px_decimals) if px_decimals > 0 else Decimal("1")
+        return tick_size, px_decimals
+
+    raise RuntimeError(f"Coin {coin} non trovata nel metadata Hyperliquid")
+
+
 def quantize_to_tick(price: Decimal, tick_size: Decimal, decimals: int) -> Decimal:
     if price <= 0:
         return Decimal("0")
-    units = (price / tick_size).to_integral_value(rounding=ROUND_DOWN)
+    units = (price / tick_size).to_integral_value(rounding=ROUND_HALF_UP)
     rounded = units * tick_size
     if decimals > 0:
         q = Decimal("1").scaleb(-decimals)
@@ -81,10 +112,10 @@ def quantize_to_tick(price: Decimal, tick_size: Decimal, decimals: int) -> Decim
     return rounded
 
 
-def format_price_for_tick(price: Decimal, tick_size: Decimal) -> str:
-    decimals = tick_decimals(tick_size)
-    rounded = quantize_to_tick(price, tick_size, decimals)
-    return f"{rounded:.{decimals}f}" if decimals > 0 else f"{rounded:.0f}"
+def format_price_for_tick(price: Decimal, tick_size: Decimal, decimals: Optional[int] = None) -> str:
+    effective_decimals = decimals if decimals is not None else tick_decimals(tick_size)
+    rounded = quantize_to_tick(price, tick_size, effective_decimals)
+    return f"{rounded:.{effective_decimals}f}" if effective_decimals > 0 else f"{rounded:.0f}"
 
 
 def get_position_size(client: HyperliquidExchangeClient, trading_user: str, coin: str) -> Decimal:
@@ -462,11 +493,11 @@ def main() -> None:
     if asset_id is None:
         raise RuntimeError(f"Asset ID non trovato per {coin}")
 
-    tick_size, precision = client.get_tick_size_and_precision(asset_id)
+    tick_size, precision = get_tick_size_from_meta(client, coin)
     if tick_size <= 0:
         raise RuntimeError(f"Tick size non valida per {coin}: {tick_size}")
 
-    logger.info(f"{coin} mid={mid_price} tick={tick_size} precision={precision}")
+    logger.info(f"{coin} mid={mid_price} tick={tick_size} px_decimals={precision}")
 
     max_leverage = client.get_max_leverage(coin)
     if leverage > max_leverage:
@@ -510,12 +541,12 @@ def main() -> None:
         tp_price_raw = mid_price * (Decimal("1") - tp_pct)
         close_side = "buy"
 
-    entry_price_str = format_price_for_tick(entry_price_raw, tick_size)
-    sl_price_str = format_price_for_tick(sl_price_raw, tick_size)
-    tp_price_str = format_price_for_tick(tp_price_raw, tick_size)
+    entry_price_str = format_price_for_tick(entry_price_raw, tick_size, precision)
+    sl_price_str = format_price_for_tick(sl_price_raw, tick_size, precision)
+    tp_price_str = format_price_for_tick(tp_price_raw, tick_size, precision)
 
     logger.info(
-        "Prezzi formattati strict tick: "
+        "Prezzi formattati strict tick (da pxDecimals metadata): "
         f"entry={entry_price_str}, sl={sl_price_str}, tp={tp_price_str}, tick={tick_size}"
     )
 
