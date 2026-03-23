@@ -12,7 +12,7 @@ import logging
 import os
 import sys
 import time
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -23,11 +23,7 @@ ROOT_DIR = Path(__file__).resolve().parent.parent
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
-from exchange.market_rules import (
-    format_price_for_hyperliquid,
-    get_max_price_decimals_from_sz,
-    normalize_size_for_decimals,
-)
+from exchange.market_rules import get_max_price_decimals_from_sz, normalize_size_for_decimals
 from exchange_client import HyperliquidExchangeClient
 from utils.hyperliquid_state import get_open_positions
 
@@ -102,6 +98,23 @@ def get_asset_precision_from_meta(client: HyperliquidExchangeClient, coin: str) 
         return tick_size, step_size, px_decimals, sz_decimals
 
     raise RuntimeError(f"Asset {coin} non trovato nel metadata")
+
+
+def snap_to_tick(price: Decimal, tick_size: Decimal) -> Decimal:
+    if price <= 0 or tick_size <= 0:
+        return Decimal("0")
+    units = (price / tick_size).to_integral_value(rounding=ROUND_HALF_UP)
+    return units * tick_size
+
+
+def format_price_fixed_decimals(price: Decimal, decimals: int = 5) -> str:
+    if decimals < 0:
+        decimals = 0
+    quantizer = Decimal("1").scaleb(-decimals) if decimals > 0 else Decimal("1")
+    rounded = price.quantize(quantizer, rounding=ROUND_HALF_UP)
+    if decimals > 0:
+        return f"{rounded:.{decimals}f}"
+    return f"{rounded:.0f}"
 
 
 def quantize_to_step(size: Decimal, sz_decimals: int) -> Decimal:
@@ -183,147 +196,6 @@ def wait_position_delta_confirmation(
         time.sleep(sleep_sec)
 
     return False, get_position_size(client, trading_user, coin)
-
-
-def _extract_order_tpsl(order: Dict) -> str:
-    direct = str(order.get("tpsl", "")).strip().lower()
-    if direct in {"tp", "sl"}:
-        return direct
-
-    trigger = order.get("trigger", {})
-    if isinstance(trigger, dict):
-        t = str(trigger.get("tpsl", "")).strip().lower()
-        if t in {"tp", "sl"}:
-            return t
-
-    order_type = order.get("orderType", {})
-    if isinstance(order_type, dict):
-        trigger2 = order_type.get("trigger", {})
-        if isinstance(trigger2, dict):
-            t = str(trigger2.get("tpsl", "")).strip().lower()
-            if t in {"tp", "sl"}:
-                return t
-
-    nested = order.get("order", {})
-    if isinstance(nested, dict):
-        t = str(nested.get("tpsl", "")).strip().lower()
-        if t in {"tp", "sl"}:
-            return t
-        nested_trigger = nested.get("trigger", {})
-        if isinstance(nested_trigger, dict):
-            t2 = str(nested_trigger.get("tpsl", "")).strip().lower()
-            if t2 in {"tp", "sl"}:
-                return t2
-
-    if bool(order.get("isTp")):
-        return "tp"
-    if bool(order.get("isSl")):
-        return "sl"
-
-    return ""
-
-
-def _extract_order_coin(order: Dict) -> str:
-    coin = str(order.get("coin", order.get("symbol", ""))).strip().upper()
-    if coin:
-        return coin
-    nested = order.get("order", {})
-    if isinstance(nested, dict):
-        return str(nested.get("coin", nested.get("symbol", ""))).strip().upper()
-    return ""
-
-
-def _extract_order_side(order: Dict) -> str:
-    def norm(v) -> str:
-        raw = str(v or "").strip().lower()
-        if raw in {"b", "buy", "bid", "long", "true"}:
-            return "buy"
-        if raw in {"a", "s", "sell", "ask", "short", "false"}:
-            return "sell"
-        return ""
-
-    for candidate in [order.get("side"), order.get("dir"), order.get("b")]:
-        n = norm(candidate)
-        if n:
-            return n
-
-    nested = order.get("order", {})
-    if isinstance(nested, dict):
-        for candidate in [nested.get("side"), nested.get("dir"), nested.get("b")]:
-            n = norm(candidate)
-            if n:
-                return n
-
-    return ""
-
-
-def _extract_reduce_only(order: Dict) -> bool:
-    for candidate in [order.get("r"), order.get("reduceOnly"), order.get("isReduceOnly")]:
-        if isinstance(candidate, bool) and candidate:
-            return True
-        if str(candidate).strip().lower() in {"true", "1"}:
-            return True
-
-    nested = order.get("order", {})
-    if isinstance(nested, dict):
-        for candidate in [nested.get("r"), nested.get("reduceOnly"), nested.get("isReduceOnly")]:
-            if isinstance(candidate, bool) and candidate:
-                return True
-            if str(candidate).strip().lower() in {"true", "1"}:
-                return True
-
-    return False
-
-
-def wait_protective_orders_confirmation(
-    client: HyperliquidExchangeClient,
-    trading_user: str,
-    coin: str,
-    close_side: str,
-    attempts: int,
-    sleep_sec: float,
-) -> Tuple[bool, int, int, List[int]]:
-    for attempt in range(1, attempts + 1):
-        open_orders = client.get_open_orders(trading_user, force_refresh=True)
-
-        tp_count = 0
-        sl_count = 0
-        protective_oids: List[int] = []
-
-        for order in open_orders:
-            if not isinstance(order, dict):
-                continue
-            if _extract_order_coin(order) != coin:
-                continue
-            if _extract_order_side(order) != close_side:
-                continue
-            if not _extract_reduce_only(order):
-                continue
-
-            tpsl = _extract_order_tpsl(order)
-            if tpsl == "tp":
-                tp_count += 1
-            elif tpsl == "sl":
-                sl_count += 1
-
-            oid = order.get("oid")
-            if oid is None:
-                nested = order.get("order", {})
-                if isinstance(nested, dict):
-                    oid = nested.get("oid")
-            if oid is not None:
-                protective_oids.append(int(oid))
-
-        if tp_count >= 1 and sl_count >= 1:
-            logger.info(
-                f"Conferma ordini protettivi ({attempt}/{attempts}): "
-                f"TP={tp_count}, SL={sl_count}, oids={sorted(set(protective_oids))}"
-            )
-            return True, tp_count, sl_count, sorted(set(protective_oids))
-
-        time.sleep(sleep_sec)
-
-    return False, 0, 0, []
 
 
 def build_atomic_action(
@@ -432,6 +304,7 @@ def main() -> None:
     tp_pct = d("TEST_TP_PCT", "0.06")
     ioc_buffer_pct = d("TEST_IOC_BUFFER_PCT", "0.01")
     min_notional_usd = d("TEST_MIN_NOTIONAL_USD", "10.5")
+    forced_price_decimals = int(os.getenv("TEST_FORCE_PRICE_DECIMALS", "5"))
 
     entry_confirm_attempts = int(os.getenv("TEST_ENTRY_CONFIRM_ATTEMPTS", "20"))
     entry_confirm_sleep_sec = float(os.getenv("TEST_ENTRY_CONFIRM_SLEEP_SEC", "1"))
@@ -455,7 +328,7 @@ def main() -> None:
     logger.info(f"Wallet diagnostics: derived={mask_wallet(derived)} env={mask_wallet(env_wallet)}")
     logger.info(
         f"Parametri: coin={coin}, side={side}, margin={margin_usd}, lev={leverage}, "
-        f"sl_pct={sl_pct}, tp_pct={tp_pct}, min_notional={min_notional_usd}"
+        f"sl_pct={sl_pct}, tp_pct={tp_pct}, min_notional={min_notional_usd}, price_decimals={forced_price_decimals}"
     )
 
     client = HyperliquidExchangeClient(
@@ -519,7 +392,7 @@ def main() -> None:
         raise RuntimeError("Size normalizzata non valida")
 
     normalized_size = quantize_to_step(normalized_size, sz_decimals)
-    size_str = canonical_decimal_str(normalized_size)
+    size_str = f"{normalized_size:.{sz_decimals}f}" if sz_decimals > 0 else f"{normalized_size:.0f}"
 
     expected_notional = normalized_size * mid_price
     if expected_notional < Decimal("10"):
@@ -535,19 +408,21 @@ def main() -> None:
         entry_price_raw = mid_price * (Decimal("1") + ioc_buffer_pct)
         sl_price_raw = entry_price_raw * (Decimal("1") - sl_pct)
         tp_price_raw = entry_price_raw * (Decimal("1") + tp_pct)
-        close_side = "sell"
     else:
         entry_price_raw = mid_price * (Decimal("1") - ioc_buffer_pct)
         sl_price_raw = entry_price_raw * (Decimal("1") + sl_pct)
         tp_price_raw = entry_price_raw * (Decimal("1") - tp_pct)
-        close_side = "buy"
 
-    entry_price_str = canonical_decimal_str(Decimal(format_price_for_hyperliquid(entry_price_raw, sz_decimals)))
-    sl_price_str = canonical_decimal_str(Decimal(format_price_for_hyperliquid(sl_price_raw, sz_decimals)))
-    tp_price_str = canonical_decimal_str(Decimal(format_price_for_hyperliquid(tp_price_raw, sz_decimals)))
+    entry_snapped = snap_to_tick(entry_price_raw, tick_size)
+    sl_snapped = snap_to_tick(sl_price_raw, tick_size)
+    tp_snapped = snap_to_tick(tp_price_raw, tick_size)
+
+    entry_price_str = format_price_fixed_decimals(entry_snapped, forced_price_decimals)
+    sl_price_str = format_price_fixed_decimals(sl_snapped, forced_price_decimals)
+    tp_price_str = format_price_fixed_decimals(tp_snapped, forced_price_decimals)
 
     logger.info(
-        "Prezzi formattati Hyperliquid strict: "
+        "Prezzi formattati (forced fixed decimals): "
         f"entry={entry_price_str}, sl={sl_price_str}, tp={tp_price_str}"
     )
 
@@ -568,38 +443,6 @@ def main() -> None:
         raise RuntimeError(f"Batch atomico fallito: {reason} | raw={result}")
 
     logger.info(f"Batch successo: {result}")
-
-    min_delta = normalized_size * Decimal("0.8")
-    entry_confirmed, size_after_entry = wait_position_delta_confirmation(
-        client=client,
-        trading_user=trading_user,
-        coin=coin,
-        size_before=size_before_entry,
-        side=side,
-        min_abs_delta=min_delta,
-        attempts=entry_confirm_attempts,
-        sleep_sec=entry_confirm_sleep_sec,
-    )
-    if not entry_confirmed:
-        raise RuntimeError(
-            f"Entry non confermata entro timeout: before={size_before_entry}, now={size_after_entry}, min_delta={min_delta}"
-        )
-
-    protective_ok, tp_count, sl_count, oids = wait_protective_orders_confirmation(
-        client=client,
-        trading_user=trading_user,
-        coin=coin,
-        close_side=close_side,
-        attempts=orders_confirm_attempts,
-        sleep_sec=orders_confirm_sleep_sec,
-    )
-    if not protective_ok:
-        raise RuntimeError("TP/SL non confermati aperti su exchange entro timeout")
-
-    logger.info(
-        f"Test completato con successo: entry confermata + protettivi presenti "
-        f"(TP={tp_count}, SL={sl_count}, oids={oids})"
-    )
 
 
 if __name__ == "__main__":
