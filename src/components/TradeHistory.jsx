@@ -1,3 +1,4 @@
+nel testo JSX per eliminare il warning di Vite.">
 import React, { useMemo, useState } from 'react'
 
 const actionColors = {
