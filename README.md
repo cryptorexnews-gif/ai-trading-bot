@@ -1,221 +1,339 @@
-# Hyperliquid AI Trading Bot — Guida Completa (Setup, Avvio, Gestione)
+# Hyperliquid AI Trading Bot — Documentazione Completa
 
-Bot di trading per Hyperliquid con dashboard web in tempo reale, controllo runtime, gestione posizioni (SL/TP/trailing), log live e metriche.
-
----
-
-## 1) Cosa fa il progetto
-
-- Esegue cicli di analisi su coin selezionate
-- Usa un LLM per decidere azioni di trading
-- Applica gestione posizione (stop loss, take profit, trailing stop, break-even)
-- Espone API Flask per dashboard e controllo bot
-- Mostra dashboard React con stato, performance, posizioni e log
+Bot di trading automatico per Hyperliquid con:
+- motore decisionale LLM (DeepSeek via OpenRouter),
+- gestione rischio avanzata (SL/TP/trailing/break-even),
+- dashboard React in tempo reale,
+- API Flask modulari,
+- modalità di firma **esclusiva con API wallet signer** (master wallet non esposto).
 
 ---
 
-## 2) Prerequisiti
+## Indice
 
-Assicurati di avere:
+1. [Panoramica progetto](#panoramica-progetto)  
+2. [Caratteristiche principali](#caratteristiche-principali)  
+3. [Architettura tecnica](#architettura-tecnica)  
+4. [Modalità sicurezza: API wallet signer (obbligatoria)](#modalità-sicurezza-api-wallet-signer-obbligatoria)  
+5. [Stack tecnologico](#stack-tecnologico)  
+6. [Struttura repository](#struttura-repository)  
+7. [Configurazione ambiente (.env)](#configurazione-ambiente-env)  
+8. [Tutorial sviluppo passo passo](#tutorial-sviluppo-passo-passo)  
+9. [Deploy produzione: Frontend Vercel + Backend VPS](#deploy-produzione-frontend-vercel--backend-vps)  
+10. [Dashboard: sezioni e uso operativo](#dashboard-sezioni-e-uso-operativo)  
+11. [Risk management e strategia](#risk-management-e-strategia)  
+12. [API principali](#api-principali)  
+13. [Troubleshooting](#troubleshooting)  
+14. [Best practice operative](#best-practice-operative)
 
+---
+
+## Panoramica progetto
+
+Questo progetto è un trading bot che opera su Hyperliquid e include un’interfaccia dashboard per monitoraggio e controllo runtime.
+
+### Obiettivi del sistema
+- Eseguire cicli di analisi continui su più asset.
+- Decidere azioni di trading tramite LLM su dati Hyperliquid.
+- Applicare gestione posizione automatica (SL/TP/trailing/break-even).
+- Esporre API e metriche per osservabilità e controllo.
+- Separare frontend e backend per deploy production-ready.
+
+---
+
+## Caratteristiche principali
+
+- **Dati di mercato solo Hyperliquid** (`/info`, `/exchange`).
+- **Decision engine LLM** con validazione output JSON.
+- **Strategie runtime**: trend e scalping.
+- **Gestione ordini protettivi** con sincronizzazione su exchange.
+- **Circuit breaker e rate limiter** per resilienza.
+- **Persistenza stato atomica** (state/metrics/trade history/equity snapshots).
+- **Dashboard real-time** (overview, settings, positions, history, system).
+- **Modalità firma sicura**: API wallet signer dedicato.
+- **Deploy consigliato**: frontend su Vercel, backend su VPS con reverse proxy TLS.
+
+---
+
+## Architettura tecnica
+
+### Moduli principali
+- `hyperliquid_bot_executable_orders.py`: entrypoint bot.
+- `bot/`: lifecycle, cycle execution, runtime config application.
+- `cycle_orchestrator.py`: orchestrazione fasi ciclo.
+- `exchange_client.py` + `exchange/`: client Hyperliquid, firma EIP-712, ordini.
+- `llm_engine.py` + `llm/prompt_builder.py`: decisioni LLM.
+- `risk_manager.py`, `position_manager.py`: risk & position controls.
+- `api/`: server Flask modulare (route + service layer).
+- `src/`: frontend React/Vite dashboard.
+- `state_store.py`: stato persistente e metriche.
+- `utils/`: circuit breaker, retry, validazioni, indicatori, logging.
+
+### Flusso semplificato
+1. Bot legge config runtime e stato.
+2. Recupera portfolio + dati mercato Hyperliquid.
+3. Calcola indicatori multi-timeframe.
+4. Chiede decisione al LLM.
+5. Applica controlli rischio.
+6. Esegue ordine e verifica fill.
+7. Sincronizza ordini protettivi.
+8. Aggiorna stato e dashboard.
+
+---
+
+## Modalità sicurezza: API wallet signer (obbligatoria)
+
+Il progetto è configurato per usare **solo** signer delegato (`api_wallet`), così il wallet master non espone mai la sua private key.
+
+### Modello operativo
+- `HYPERLIQUID_WALLET_ADDRESS` = wallet master (trading account).
+- `HYPERLIQUID_API_SIGNER_PRIVATE_KEY` = chiave signer delegato.
+- `HYPERLIQUID_SIGNER_MODE=api_wallet`.
+- I payload firmati includono `vaultAddress` del wallet master.
+
+### Implicazioni
+- Se il signer mode non è `api_wallet`, il bot si blocca.
+- Se è presente una key legacy `HYPERLIQUID_PRIVATE_KEY`, il bot si blocca.
+- Signer e master non devono coincidere.
+
+---
+
+## Stack tecnologico
+
+### Backend
 - Python 3.10+
-- Node.js (LTS consigliato)
-- Un wallet Hyperliquid con chiave privata
-- Chiave API OpenRouter (se vuoi decisioni LLM)
+- Flask + Flask-CORS + Flask-Sock
+- requests
+- eth_account
+- msgpack
+- pycryptodome (keccak)
+- decimal.Decimal
+- dotenv
+- logging
+
+### Frontend
+- React
+- Vite
+- Tailwind CSS
+- Recharts
+- Lightweight Charts
+- React Router
 
 ---
 
-## 3) Configurazione iniziale
+## Struttura repository
 
-### 3.1 File `.env`
+- `api/`: API server e route modulari
+- `bot/`: runtime loop e servizi ciclo
+- `exchange/`: firma/transazioni/order services
+- `orchestration/`: decision, risk gate, execution flow
+- `utils/`: helper infrastrutturali
+- `src/`: dashboard frontend
+- `deploy/`: config deploy (Nginx, guide VPS/Vercel)
+- `state/`: file runtime persistenti
 
-Crea (o aggiorna) il file `.env` nella root del progetto con almeno:
+---
 
+## Configurazione ambiente (.env)
+
+Il file `.env` deve includere almeno:
+
+### Identità trading
 - `HYPERLIQUID_WALLET_ADDRESS`
-- `HYPERLIQUID_PRIVATE_KEY`
+- `HYPERLIQUID_SIGNER_MODE=api_wallet`
+- `HYPERLIQUID_API_SIGNER_PRIVATE_KEY`
+
+### Modalità esecuzione
 - `EXECUTION_MODE=live`
 - `ENABLE_MAINNET_TRADING=true`
-- `OPENROUTER_API_KEY` (per usare il modello LLM)
-- `DASHBOARD_API_KEY` (protezione endpoint dashboard)
 
-### 3.2 Nota importante su Vault
+### LLM
+- `OPENROUTER_API_KEY`
+- `LLM_MODEL=deepseek/deepseek-v3.2`
 
-Il bot è configurato per operare in modalità **wallet + private key**.  
-L’uso vault è disabilitato nella logica attuale, quindi non è richiesto configurare un vault address.
+### Sicurezza dashboard
+- `DASHBOARD_API_KEY` (admin)
+- `DASHBOARD_READ_API_KEY` (read-only frontend)
 
----
-
-## 4) Avvio nell’interfaccia Dyad (consigliato qui)
-
-Usa i pulsanti azione sopra la chat:
-
-1. **Rebuild**  
-   Da usare al primo avvio o dopo cambiamenti importanti.
-2. **Restart**  
-   Riavvia server/app dopo modifiche.
-3. **Refresh**  
-   Aggiorna la preview dashboard.
+### API/CORS
+- `API_HOST`
+- `API_PORT`
+- `CORS_ALLOWED_ORIGINS`
+- `ALLOW_LOCALHOST_BYPASS=false`
 
 ---
 
-## 5) Comandi CMD (Windows) per esecuzione locale
+## Tutorial sviluppo passo passo
 
-> Usa questi comandi se stai eseguendo il progetto fuori dalla preview Dyad, da Prompt dei comandi.
+> Questo percorso è pensato per l’ambiente Dyad (consigliato).
 
-### 5.1 Setup ambiente Python (prima volta)
+### Step 1 — Preparazione config
+1. Inserisci/aggiorna il `.env` con i valori reali.
+2. Verifica che il signer mode sia `api_wallet`.
+3. Verifica che la key legacy master non sia presente.
 
-```bat
-cd C:\percorso\progetto\hyperliquid-ai-trading-bot
-python -m venv .venv
-.venv\Scripts\activate
-pip install -r requirements.txt
-```
+### Step 2 — Build ambiente
+1. Usa **Rebuild** nella UI Dyad (pulsante azione).
+2. Attendi installazione dipendenze backend/frontend.
 
-### 5.2 Setup frontend (prima volta)
+### Step 3 — Avvio servizi
+1. Usa **Restart** per riavviare stack applicativo.
+2. Usa **Refresh** per aggiornare la preview dashboard.
 
-```bat
-cd C:\percorso\progetto\hyperliquid-ai-trading-bot
-npm install
-```
+### Step 4 — Verifica stato API
+Controlla:
+- health endpoint disponibile,
+- dashboard raggiungibile,
+- nessun errore auth nei log.
 
-### 5.3 Avvio API server
+### Step 5 — Verifica wallet signer
+Controlla nei log:
+- signer mode `api_wallet`,
+- trading user (master) valorizzato,
+- assenza errori “wallet does not exist”.
 
-```bat
-cd C:\percorso\progetto\hyperliquid-ai-trading-bot
-.venv\Scripts\activate
-python api_server.py
-```
+### Step 6 — Test ciclo controllato
+Esegui un ciclo singolo in modalità di test operativo interno (senza run continuo) per validare:
+- fetch dati,
+- decisione LLM,
+- risk checks,
+- sync ordini protettivi.
 
-### 5.4 Avvio dashboard frontend (nuova finestra CMD)
+### Step 7 — Runtime controls
+Da dashboard:
+- apri **Settings**,
+- configura strategia e coppie,
+- salva runtime config,
+- avvia/ferma bot dal pannello controllo processo.
 
-```bat
-cd C:\percorso\progetto\hyperliquid-ai-trading-bot
-npm run dev
-```
-
-### 5.5 Avvio bot trading (nuova finestra CMD)
-
-```bat
-cd C:\percorso\progetto\hyperliquid-ai-trading-bot
-.venv\Scripts\activate
-python hyperliquid_bot_executable_orders.py
-```
-
-### 5.6 Esecuzione singolo ciclo (test sicuro)
-
-```bat
-cd C:\percorso\progetto\hyperliquid-ai-trading-bot
-.venv\Scripts\activate
-python hyperliquid_bot_executable_orders.py --single-cycle
-```
-
-### 5.7 Stop processi in CMD
-
-- API / Bot: `CTRL + C` nella finestra relativa
-- Frontend Vite: `CTRL + C` nella finestra frontend
+### Step 8 — Monitoraggio sviluppo
+Osserva:
+- tab **Overview** (saldo, PnL, ciclo),
+- tab **Positions** (posizioni/SL/TP),
+- tab **System** (log, circuit breaker).
 
 ---
 
-## 6) Avvio bot e dashboard dalla UI
+## Deploy produzione: Frontend Vercel + Backend VPS
 
-Dalla dashboard:
+### Obiettivo
+- Frontend pubblico su Vercel.
+- Backend Flask/Bot su VPS dietro Nginx HTTPS.
 
-1. Vai in **Settings**
-2. Sezione **Bot Process Control**
-3. Premi **Start Bot**
+### Backend VPS
+- API su `127.0.0.1:5000`.
+- Reverse proxy TLS (`deploy/nginx/vps-api.conf`).
+- CORS limitato ai domini frontend reali.
+- Bypass localhost disabilitato.
 
-Per fermarlo:
-- Premi **Stop Bot** nella stessa sezione.
+### Frontend Vercel
+Imposta environment variables:
+- `VITE_API_BASE_URL=https://api.tuodominio.com/api`
+- `VITE_DASHBOARD_TOKEN=<DASHBOARD_READ_API_KEY>`
 
----
+### Token policy
+- **Admin key**: solo backend/operazioni sensibili.
+- **Read key**: solo frontend pubblico.
 
-## 7) Configurazione runtime (senza riavvio codice)
-
-In **Settings → Runtime Trading Controls** puoi:
-
-- Cambiare strategia (`trend` / `scalping`)
-- Selezionare le coin monitorate
-- Salvare le impostazioni runtime
-
-Le modifiche vengono applicate dal bot nel ciclo successivo.
-
----
-
-## 8) Modalità operativa
-
-### Live mode (soldi reali)
-- `EXECUTION_MODE=live`
-- `ENABLE_MAINNET_TRADING=true`
-- Verifica sempre wallet, size e leva prima di avviare
+### Opzionale hardening
+- `ADMIN_ALLOWED_IPS` per limitare endpoint admin.
+- Rotazione periodica token.
 
 ---
 
-## 9) Struttura dashboard
+## Dashboard: sezioni e uso operativo
 
-- **Overview**: saldo, PnL, drawdown, grafico principale
-- **Settings**: controllo processo bot + runtime config
-- **Positions**: posizioni aperte e gestione rischio
-- **History**: storico trade, equity curve, export CSV
-- **System**: circuit breaker, log live, diagnostica
+### Overview
+- Bilancio, margine, PnL, ciclo bot, chart mercato.
 
----
+### Settings
+- Start/Stop processo bot.
+- Config runtime strategia, parametri, coppie.
 
-## 10) Gestione quotidiana consigliata
+### Positions
+- Posizioni aperte, SL/TP/trailing/break-even.
 
-1. Controlla che API e dashboard siano raggiungibili
-2. Verifica modalità live attiva
-3. Avvia il bot da **Settings**
-4. Monitora:
-   - `margin_usage`
-   - posizioni aperte
-   - log error/warning in **System**
-5. Se cambi configurazioni importanti:
-   - salva runtime config
-   - eventualmente fai **Restart**
+### History
+- Trade recenti, equity curve, export CSV.
+
+### System
+- Log live, stato circuit breaker, diagnostica.
 
 ---
 
-## 11) Troubleshooting rapido
+## Risk management e strategia
 
-### Il bot non apre posizioni
-Controlla nei log se trovi:
-- rifiuti risk manager
-- ordini non filled
-- problemi di connessione LLM/API
+### Risk controls principali
+- max drawdown,
+- max margin usage,
+- trade cooldown,
+- notional giornaliero,
+- max leva.
 
-### Errori LLM/intermittenti
-- Riprova con **Restart**
-- Controlla che `OPENROUTER_API_KEY` sia presente
-- Verifica timeout/retry nei log
+### Strategia trend
+- allineamento multi-timeframe,
+- gestione posizione conservativa,
+- protezioni obbligatorie.
 
-### Dashboard non aggiornata
-- Usa **Refresh**
-- Se persiste, usa **Restart**
-
-### Processo bot bloccato
-- **Stop Bot** → **Start Bot**
-- Se necessario, **Rebuild** e poi nuovo avvio
+### Strategia scalping
+- focus timeframe 5m,
+- conferma momentum/volume,
+- gestione rischio dinamica.
 
 ---
 
-## 12) Sicurezza
+## API principali
 
-- Non condividere mai `.env`
-- Non esporre chiavi in log o screenshot
-- Tieni `DASHBOARD_API_KEY` attiva
-- In live, usa size prudenti e monitora sempre il rischio
-
----
-
-## 13) Checklist prima di andare live
-
-- [ ] Wallet e private key corretti
-- [ ] `EXECUTION_MODE=live`
-- [ ] `ENABLE_MAINNET_TRADING=true`
-- [ ] Dashboard stabile (Overview/System senza errori critici)
-- [ ] Runtime coin list validata
-- [ ] Monitoraggio attivo durante i primi cicli
+- `GET /api/health`
+- `GET /api/status`
+- `GET /api/portfolio`
+- `GET /api/positions`
+- `GET /api/managed-positions`
+- `GET /api/runtime-config`
+- `POST /api/runtime-config`
+- `GET /api/trades`
+- `GET /api/performance`
+- `GET /api/logs`
+- `GET /metrics`
 
 ---
 
-Per aggiornamenti futuri, mantieni questa guida allineata con la configurazione reale del bot (env, risk policy e flusso operativo).
+## Troubleshooting
+
+### 1) Unauthorized dashboard
+- verifica `X-API-Key`,
+- verifica `DASHBOARD_READ_API_KEY`,
+- verifica CORS origins.
+
+### 2) Errori firma/auth exchange
+- controlla delega API signer su Hyperliquid,
+- controlla `HYPERLIQUID_SIGNER_MODE=api_wallet`,
+- controlla coerenza wallet master/signer.
+
+### 3) Nessuna posizione aperta
+- verifica risk constraints troppo stretti,
+- verifica confidence LLM e decisioni hold,
+- controlla log execution/risk rejection.
+
+### 4) Dashboard non aggiornata
+- usa Refresh,
+- poi Restart,
+- verifica raggiungibilità endpoint status/logs.
+
+---
+
+## Best practice operative
+
+- Usa signer dedicato con capitale limitato.
+- Non esporre mai key in log/screenshot.
+- Mantieni `ALLOW_LOCALHOST_BYPASS=false` in produzione.
+- Separa token read/admin.
+- Monitora daily notional, margin usage, drawdown.
+- Aggiorna periodicamente la runtime config in base alla volatilità.
+
+---
+
+Se vuoi estendere la documentazione, aggiungi:
+- runbook incident response,
+- policy rotazione signer,
+- piano rollback produzione.
