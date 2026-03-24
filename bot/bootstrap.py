@@ -85,16 +85,19 @@ class BotBootstrap:
 
     @staticmethod
     def _build_exchange_client(cfg: BotConfig) -> HyperliquidExchangeClient:
-        private_key = os.getenv("HYPERLIQUID_PRIVATE_KEY", "")
+        # Exclusive API wallet signer mode (validated in BotConfig.validate)
+        api_signer_key = cfg.api_signer_private_key
         return HyperliquidExchangeClient(
             base_url=cfg.base_url,
-            private_key=private_key,
+            private_key=api_signer_key,
             enable_mainnet_trading=cfg.enable_mainnet_trading,
             execution_mode=cfg.execution_mode,
             meta_cache_ttl_sec=cfg.meta_cache_ttl_sec,
             paper_slippage_bps=cfg.paper_slippage_bps,
             info_timeout=cfg.info_timeout,
             exchange_timeout=cfg.exchange_timeout,
+            trading_user_address=cfg.wallet_address,
+            signer_mode=cfg.signer_mode,
         )
 
     @staticmethod

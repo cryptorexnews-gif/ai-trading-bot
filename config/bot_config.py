@@ -42,6 +42,10 @@ class BotConfig:
     def __init__(self):
         self.wallet_address = _env("HYPERLIQUID_WALLET_ADDRESS", "").strip()
 
+        # Security: exclusive signer mode (api wallet only)
+        self.signer_mode = _env("HYPERLIQUID_SIGNER_MODE", "api_wallet").strip().lower()
+        self.api_signer_private_key = _env("HYPERLIQUID_API_SIGNER_PRIVATE_KEY", "").strip()
+
         env_mode = _env("EXECUTION_MODE", "live").lower()
         self.execution_mode = "live" if env_mode != "live" else env_mode
         self.enable_mainnet_trading = _env_bool("ENABLE_MAINNET_TRADING", False)
@@ -163,24 +167,35 @@ class BotConfig:
         if not self.wallet_address:
             raise SystemExit("CRITICAL: HYPERLIQUID_WALLET_ADDRESS not set")
 
-        private_key = os.getenv("HYPERLIQUID_PRIVATE_KEY", "")
-        if not private_key:
-            raise SystemExit("CRITICAL: HYPERLIQUID_PRIVATE_KEY not set")
-
         if not _is_valid_eth_address(self.wallet_address):
             raise SystemExit(
                 f"CRITICAL: trading wallet address invalid format: {self.wallet_address[:10]}..."
             )
 
+        # Enforce exclusive API wallet signer mode
+        if self.signer_mode != "api_wallet":
+            raise SystemExit(
+                "CRITICAL: HYPERLIQUID_SIGNER_MODE must be 'api_wallet'. "
+                "Master-key signing mode is disabled for security."
+            )
+
+        legacy_master_key = os.getenv("HYPERLIQUID_PRIVATE_KEY", "").strip()
+        if legacy_master_key:
+            raise SystemExit(
+                "CRITICAL: HYPERLIQUID_PRIVATE_KEY must NOT be set. "
+                "Use HYPERLIQUID_API_SIGNER_PRIVATE_KEY only."
+            )
+
+        if not self.api_signer_private_key:
+            raise SystemExit("CRITICAL: HYPERLIQUID_API_SIGNER_PRIVATE_KEY not set")
+
         from eth_account import Account
 
-        signer_address = Account.from_key(private_key).address
-        signer_matches_trading = signer_address.lower() == self.wallet_address.lower()
-
-        if not signer_matches_trading:
+        signer_address = Account.from_key(self.api_signer_private_key).address
+        if signer_address.lower() == self.wallet_address.lower():
             raise SystemExit(
-                f"CRITICAL: HYPERLIQUID_PRIVATE_KEY ({signer_address[:6]}...{signer_address[-4:]}) "
-                f"non corrisponde al trading wallet ({self.wallet_address[:6]}...{self.wallet_address[-4:]})."
+                "CRITICAL: API signer address matches master trading wallet. "
+                "Use a dedicated delegated API wallet signer."
             )
 
         if self.llm_model != self.REQUIRED_LLM_MODEL:

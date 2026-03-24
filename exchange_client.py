@@ -21,8 +21,9 @@ logger = logging.getLogger(__name__)
 
 class HyperliquidExchangeClient:
     """
-    Hyperliquid client (live-only) in modalità wallet diretto:
-    signer address deve coincidere con HYPERLIQUID_WALLET_ADDRESS.
+    Hyperliquid client in modalità esclusiva API wallet signer:
+    - trading_user_address = wallet master (account reale su Hyperliquid)
+    - account (private key) = delegated API signer
     """
 
     def __init__(
@@ -35,6 +36,8 @@ class HyperliquidExchangeClient:
         paper_slippage_bps: Decimal = Decimal("5"),
         info_timeout: int = 15,
         exchange_timeout: int = 30,
+        trading_user_address: str = "",
+        signer_mode: str = "api_wallet",
     ):
         self.base_url = base_url
         self.enable_mainnet_trading = enable_mainnet_trading
@@ -44,20 +47,23 @@ class HyperliquidExchangeClient:
         self.info_timeout = info_timeout
         self.exchange_timeout = exchange_timeout
 
+        self.signer_mode = str(signer_mode or "").strip().lower()
+        if self.signer_mode != "api_wallet":
+            raise ValueError("Only api_wallet signer mode is supported.")
+
         self.session = create_robust_session()
         self.account = Account.from_key(private_key)
 
-        env_wallet = (os.getenv("HYPERLIQUID_WALLET_ADDRESS", "") or "").strip()
+        env_wallet = (trading_user_address or os.getenv("HYPERLIQUID_WALLET_ADDRESS", "") or "").strip()
         if not self._is_valid_wallet_address_format(env_wallet):
             raise ValueError(
                 "HYPERLIQUID_WALLET_ADDRESS invalido o mancante. "
                 "È richiesto un address 0x... lungo 42 caratteri da .env."
             )
 
-        signer_matches_wallet = self.account.address.lower() == env_wallet.lower()
-        if not signer_matches_wallet:
+        if self.account.address.lower() == env_wallet.lower():
             raise ValueError(
-                "HYPERLIQUID_PRIVATE_KEY non corrisponde a HYPERLIQUID_WALLET_ADDRESS."
+                "API signer address must be different from trading master wallet address."
             )
 
         self._trading_user_address = env_wallet
@@ -84,6 +90,8 @@ class HyperliquidExchangeClient:
             account=self.account,
             post_exchange_func=self._post_exchange,
             is_auth_error_func=self._is_auth_error,
+            trading_user_address=self._trading_user_address,
+            signer_mode=self.signer_mode,
         )
 
         self._order_query = OrderQueryService(
@@ -98,7 +106,8 @@ class HyperliquidExchangeClient:
 
         logger.info(
             f"Exchange client initialized: base_url={self.base_url}, mode={self.execution_mode}, "
-            f"mainnet={self.enable_mainnet_trading}, signer={self.get_wallet_address_masked()} "
+            f"mainnet={self.enable_mainnet_trading}, signer_mode={self.signer_mode}, "
+            f"api_signer={self.get_wallet_address_masked()} "
             f"(trading_user={self._mask_address(self._trading_user_address)})"
         )
 
@@ -128,8 +137,8 @@ class HyperliquidExchangeClient:
             return False
         msg = str(result.get("response", "")).lower()
         return (
-            "wallet" in msg and "does not exist" in msg
-        ) or ("api wallet" in msg and "does not exist" in msg)
+            "wallet" in msg and "does not exist"
+        ) or ("api wallet" in msg and "does not exist")
 
     @staticmethod
     def validate_wallet_address(private_key: str, expected_address: str) -> bool:

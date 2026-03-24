@@ -10,10 +10,18 @@ logger = logging.getLogger(__name__)
 class SignedActionService:
     """Handles signed Hyperliquid action posting with auth cooldown protection."""
 
-    def __init__(self, account, post_exchange_func, is_auth_error_func):
+    def __init__(self, account, post_exchange_func, is_auth_error_func, trading_user_address: str, signer_mode: str = "api_wallet"):
         self.account = account
         self._post_exchange = post_exchange_func
         self._is_auth_error = is_auth_error_func
+        self._trading_user_address = str(trading_user_address or "").strip()
+
+        self._signer_mode = str(signer_mode or "").strip().lower()
+        if self._signer_mode != "api_wallet":
+            raise ValueError("Only api_wallet signer mode is supported.")
+
+        if not self._trading_user_address:
+            raise ValueError("trading_user_address is required for api_wallet signer mode.")
 
         self._last_nonce: int = 0
         self._auth_error_count = 0
@@ -43,6 +51,7 @@ class SignedActionService:
             "action": action,
             "nonce": nonce,
             "signature": signature,
+            "vaultAddress": self._trading_user_address,
         }
         return self._post_exchange(payload, timeout)
 
