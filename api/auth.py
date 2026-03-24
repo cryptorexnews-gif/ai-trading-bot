@@ -8,7 +8,13 @@ from typing import Dict
 from flask import jsonify, request
 
 from api.config import API_AUTH_KEY, DASHBOARD_READ_API_KEY
-from api.security_utils import env_bool, is_loopback_ip
+from api.security_utils import (
+    env_bool,
+    get_request_client_ip,
+    ip_in_allowlist,
+    is_loopback_ip,
+    parse_ip_allowlist,
+)
 from utils.rate_limiter import TokenBucketRateLimiter
 
 _AUTH_RATE_LIMITERS: Dict[str, TokenBucketRateLimiter] = {}
@@ -18,6 +24,8 @@ _AUTH_RL_CLEANUP_INTERVAL_SEC = 300.0
 _AUTH_RL_STALE_SEC = 3600.0
 
 _READ_METHODS = {"GET", "HEAD", "OPTIONS"}
+_ADMIN_ALLOWED_IPS = parse_ip_allowlist(os.getenv("ADMIN_ALLOWED_IPS", ""))
+_TRUST_PROXY_HEADERS = env_bool("TRUST_PROXY_HEADERS", True)
 
 
 def _is_server_loopback_bound() -> bool:
@@ -71,6 +79,16 @@ def _is_authorized_for_request(provided_key: str) -> bool:
     return False
 
 
+def _admin_ip_allowed() -> bool:
+    if _is_read_request():
+        return True
+    if not _ADMIN_ALLOWED_IPS:
+        return True
+
+    client_ip = get_request_client_ip(request, trust_proxy_headers=_TRUST_PROXY_HEADERS)
+    return ip_in_allowlist(client_ip, _ADMIN_ALLOWED_IPS)
+
+
 def _get_auth_rate_limiter_for_ip(client_ip: str) -> TokenBucketRateLimiter:
     global _AUTH_RL_LAST_CLEANUP
     now = time.time()
@@ -100,7 +118,7 @@ def _get_auth_rate_limiter_for_ip(client_ip: str) -> TokenBucketRateLimiter:
 
 
 def _auth_rate_limit_exceeded() -> bool:
-    client_ip = (request.remote_addr or "unknown").strip() or "unknown"
+    client_ip = get_request_client_ip(request, trust_proxy_headers=_TRUST_PROXY_HEADERS)
     limiter = _get_auth_rate_limiter_for_ip(client_ip)
     return not limiter.try_acquire(1)
 
@@ -124,6 +142,9 @@ def require_api_key(f):
         provided_key = request.headers.get("X-API-Key", "")
         if not _is_authorized_for_request(provided_key):
             return jsonify({"error": "unauthorized"}), 401
+
+        if not _admin_ip_allowed():
+            return jsonify({"error": "forbidden"}), 403
 
         return f(*args, **kwargs)
 

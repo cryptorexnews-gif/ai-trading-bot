@@ -33,9 +33,15 @@ Sicurezza API:
 - `DASHBOARD_API_KEY=<token-admin-lungo-casuale>`
 - `DASHBOARD_READ_API_KEY=<token-readonly-lungo-casuale>`
 
+Hardening opzionale admin:
+
+- `TRUST_PROXY_HEADERS=true`
+- `ADMIN_ALLOWED_IPS=203.0.113.10,198.51.100.0/24`
+
 Note:
 - `DASHBOARD_API_KEY` (admin) serve per endpoint sensibili (es. start/stop bot, update runtime).
 - `DASHBOARD_READ_API_KEY` serve ai soli endpoint GET dashboard (frontend pubblico).
+- `ADMIN_ALLOWED_IPS` limita gli endpoint admin (metodi non-GET) ai soli IP/cidr indicati.
 
 ---
 
@@ -96,6 +102,7 @@ I websocket restano disponibili dietro Nginx e possono essere riabilitati gradua
 - [ ] `CORS_ALLOWED_ORIGINS` impostato ai soli domini frontend
 - [ ] `DASHBOARD_API_KEY` impostata (admin)
 - [ ] `DASHBOARD_READ_API_KEY` impostata (read-only)
+- [ ] (Opzionale) `ADMIN_ALLOWED_IPS` impostata per limitare endpoint admin
 - [ ] Vercel con `VITE_API_BASE_URL` e `VITE_DASHBOARD_TOKEN`
 - [ ] Test dashboard completa (overview, history, positions, logs)
 - [ ] Test endpoint admin solo con key admin
