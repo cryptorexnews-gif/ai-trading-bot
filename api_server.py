@@ -21,7 +21,7 @@ def main() -> None:
     host = os.getenv("API_HOST", "127.0.0.1")
     port = int(os.getenv("API_PORT", "5000"))
     debug = os.getenv("API_DEBUG", "false").lower() == "true"
-    allow_localhost_bypass = env_bool("ALLOW_LOCALHOST_BYPASS", True)
+    allow_localhost_bypass = env_bool("ALLOW_LOCALHOST_BYPASS", False)
     loopback_bound = is_loopback_ip(host)
 
     env_mode = os.getenv("EXECUTION_MODE", "live").lower()
@@ -39,7 +39,7 @@ def main() -> None:
 
     auth_mode = "API key required"
     if allow_localhost_bypass and loopback_bound:
-        auth_mode = "localhost loopback bypass enabled; remote requires API key"
+        auth_mode = "localhost loopback bypass enabled; remote/proxied requests require API key"
 
     logger.info(
         f"🚀 Starting API server on http://{host}:{port} "
@@ -47,8 +47,8 @@ def main() -> None:
     )
     logger.info(f"API Server ready: http://{host}:{port}")
     if allow_localhost_bypass and loopback_bound:
-        logger.info("Local loopback requests: ALLOWED without API key")
-        logger.info("Non-loopback requests: API key required")
+        logger.info("Local direct loopback requests: ALLOWED without API key")
+        logger.info("Forwarded/non-loopback requests: API key required")
     else:
         logger.info("API key required for protected endpoints")
     logger.info("Health endpoint available at /api/health")

@@ -3,6 +3,23 @@ import os
 from typing import Any, Callable, Dict, List, Tuple
 
 
+def _sanitize_value(value: Any, sanitizer: Callable[[str], str]) -> Any:
+    if isinstance(value, str):
+        return sanitizer(value)
+
+    if isinstance(value, dict):
+        sanitized_dict: Dict[str, Any] = {}
+        for key, item in value.items():
+            safe_key = sanitizer(str(key))
+            sanitized_dict[safe_key] = _sanitize_value(item, sanitizer)
+        return sanitized_dict
+
+    if isinstance(value, list):
+        return [_sanitize_value(item, sanitizer) for item in value]
+
+    return value
+
+
 def read_recent_logs(
     log_file: str,
     limit: int,
@@ -24,11 +41,14 @@ def read_recent_logs(
 
         try:
             entry = json.loads(line)
-            if "message" in entry:
-                entry["message"] = sanitizer(str(entry["message"]))
-            if "exception" in entry:
-                entry["exception"] = sanitizer(str(entry["exception"]))
-            log_entries.append(entry)
+            sanitized_entry = _sanitize_value(entry, sanitizer)
+            if isinstance(sanitized_entry, dict):
+                log_entries.append(sanitized_entry)
+            else:
+                log_entries.append({
+                    "message": sanitizer(str(sanitized_entry)),
+                    "level": "INFO",
+                })
         except json.JSONDecodeError:
             log_entries.append({
                 "message": sanitizer(line),
