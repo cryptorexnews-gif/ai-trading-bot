@@ -56,6 +56,19 @@ class LLMPromptBuilder:
         lines.append(f"  Trend Strength: {td.get('trend_strength', 0)}/3 timeframes aligned")
         lines.append(f"  Trends Aligned: {'YES ✅' if td.get('trends_aligned', False) else 'NO ⚠️'}")
 
+        scalp = self._safe_dict(td.get("scalping_context", {}))
+        if scalp:
+            lines.append("\n  ⚡ 5M TIMEFRAME (Scalping):")
+            lines.append(f"    Trend: {scalp.get('trend', 'unknown').upper()}")
+            lines.append(f"    EMA9: ${float(scalp.get('ema_9', 0)):.4f}")
+            lines.append(f"    EMA21: ${float(scalp.get('ema_21', 0)):.4f}")
+            lines.append(f"    RSI14: {float(scalp.get('rsi_14', 50)):.1f}")
+            lines.append(f"    MACD Hist: {float(scalp.get('macd_histogram', 0)):.5f}")
+            lines.append(f"    ATR14: ${float(scalp.get('atr_14', 0)):.4f}")
+            lines.append(f"    VWAP: ${float(scalp.get('vwap', 0)):.4f}")
+            lines.append(f"    BB Position: {float(scalp.get('bb_position', 0.5)) * 100:.1f}%")
+            lines.append(f"    Volume Ratio: {float(scalp.get('volume_ratio', 1)):.2f}x")
+
         lines.append("\n  ⏰ 1H TIMEFRAME (Entry Timing):")
         lines.append(f"    EMA9: ${float(td.get('current_ema9', 0)):.2f}")
         lines.append(f"    EMA21: ${float(td.get('current_ema21', 0)):.2f}")
@@ -175,6 +188,91 @@ class LLMPromptBuilder:
             f"  tp_open_orders_count: {len(tp_ids)}"
         )
 
+    def _build_strategy_block(self, strategy_mode: str, trend_analysis: str) -> str:
+        mode = str(strategy_mode or "trend").strip().lower()
+
+        if mode == "scalping":
+            return """=== SCALPING STRATEGY RULES (5M FOCUS) ===
+
+PRIMARY EXECUTION FRAME (5M):
+- Use 5m context as main entry/exit driver.
+- Trend filter: prefer LONG only when 5m EMA9 > EMA21, SHORT only when 5m EMA9 < EMA21.
+- Confirm momentum with MACD histogram direction and RSI regime:
+  - LONG preference: RSI 45-65 with rising MACD histogram.
+  - SHORT preference: RSI 35-55 with falling MACD histogram.
+- Avoid entries on exhausted extremes:
+  - Avoid fresh LONG if RSI > 75 or BB position > 90%.
+  - Avoid fresh SHORT if RSI < 25 or BB position < 10%.
+
+MICRO RISK & EXECUTION:
+- Prefer quick mean-reversion/continuation setups around VWAP and EMA21 (5m).
+- Require volume confirmation on impulse entries: 5m volume_ratio >= 1.2.
+- In low momentum (flat MACD + low volume), prefer HOLD.
+- Keep leverage and size conservative when trend_strength (higher TF) is weak.
+
+STOP-LOSS / TAKE-PROFIT DECISION:
+- You MUST choose dynamic stop_loss_pct and take_profit_pct based on 5m ATR regime.
+- Typical scalping logic:
+  - tighter SL in low ATR
+  - wider SL/TP in high ATR
+- For HOLD actions, set stop_loss_pct and take_profit_pct to null.
+- If protective TP/SL orders are missing or inconsistent, prefer actions that restore proper protection.
+
+PROTECTIVE ORDER SAFETY:
+- If there is an open position and protective TP/SL orders are missing (sl_open_orders_count=0 or tp_open_orders_count=0),
+  DO NOT open/increase risk. Prefer HOLD with valid stop_loss_pct and take_profit_pct to restore protection.
+
+CONFIDENCE SCORING (SCALPING):
+- 0.85-1.00: clean 5m structure + momentum + volume confirmation
+- 0.75-0.84: good setup but one confirmation weaker
+- 0.65-0.74: marginal setup, prefer smaller size
+- <0.65: HOLD unless managing existing position"""
+
+        return f"""{trend_analysis}
+
+=== TREND TRADING STRATEGY RULES (4H/1D FOCUS) ===
+
+TREND IDENTIFICATION CRITERIA — Enter ONLY when:
+1. PRIMARY TREND (4H): EMA9 > EMA21 > EMA50 (uptrend) or EMA9 < EMA21 < EMA50 (downtrend)
+2. MAIN TREND (1D): Confirms primary trend direction
+3. TREND STRENGTH: At least 2/3 timeframes aligned (preferably 3/3)
+4. VOLUME CONFIRMATION: volume_ratio > 1.3 on breakout/breakdown
+5. RSI POSITION: RSI14 between 40-60 for continuation, <30/>70 for reversal setups
+6. NO MAJOR DIVERGENCES: Price making higher highs with indicators confirming
+
+ENTRY TIMING (1H timeframe):
+- Wait for pullback to key levels: EMA21, VWAP, or previous support/resistance
+- RSI14 between 30-40 for longs, 60-70 for shorts (pullback zones)
+- MACD histogram turning positive (longs) or negative (shorts)
+- Price above VWAP for longs, below VWAP for shorts
+- Bollinger Band position <30% for longs, >70% for shorts (reversion to mean)
+
+STOP-LOSS / TAKE-PROFIT DECISION:
+- You MUST choose dynamic stop_loss_pct and take_profit_pct based on volatility and market structure.
+- Use ATR and trend strength to set distances.
+- In high volatility, use wider SL/TP; in low volatility, tighter levels.
+- Prefer minimum risk/reward around 1:1.5 unless setup quality is very low.
+- For HOLD actions, set stop_loss_pct and take_profit_pct to null.
+- If protective TP/SL orders are missing or inconsistent, prefer actions that restore proper protection.
+
+CRITICAL RULES FOR TREND TRADING:
+- DO NOT counter-trend trade (no buying in downtrend, no selling in uptrend)
+- If drawdown > 10%, reduce position sizes by 50%
+- If consecutive losses > 2, switch to 1% position sizes until recovery
+- Monitor funding rates: Extreme positive (>0.01%) = caution on longs
+- Monitor funding rates: Extreme negative (<-0.01%) = caution on shorts
+- Weekend rule: Reduce leverage by 30% before weekends (higher volatility)
+- News events: Avoid opening new positions 1 hour before/after major announcements
+- If no clear trend exists, ALWAYS hold — capital preservation is priority #1
+- If there is an open position and protective TP/SL orders are missing (sl_open_orders_count=0 or tp_open_orders_count=0), DO NOT open/increase risk. Prefer HOLD with valid stop_loss_pct and take_profit_pct to restore protection.
+
+CONFIDENCE SCORING FOR TREND TRADES:
+- 0.90-1.0: All 3 timeframes aligned + strong volume + clean pullback
+- 0.80-0.89: 2/3 timeframes aligned + decent volume + good entry timing
+- 0.70-0.79: Trend present but entry timing suboptimal
+- 0.60-0.69: Weak trend signal — only for managing existing positions
+- Below 0.60: No trade — wait for better setup"""
+
     def build_prompt(
         self,
         market_data: MarketData,
@@ -187,6 +285,7 @@ class LLMPromptBuilder:
         consecutive_losses: int = 0,
         managed_position: Optional[Dict[str, Any]] = None,
         protective_orders: Optional[List[Dict[str, Any]]] = None,
+        strategy_mode: str = "trend",
     ) -> str:
         mids = self._safe_dict(all_mids)
         all_mids_section = ""
@@ -252,8 +351,12 @@ Consistency checks:
 {self._build_protection_consistency(managed_position, protective_orders)}
 """
 
-        prompt = f"""You are an elite cryptocurrency trend trader on Hyperliquid exchange, specialized in 4HOUR and 1DAY trend following.
+        strategy_block = self._build_strategy_block(strategy_mode=strategy_mode, trend_analysis=trend_analysis)
+        effective_mode = str(strategy_mode or "trend").strip().lower()
+
+        prompt = f"""You are an elite cryptocurrency trader on Hyperliquid exchange.
 ALL data below comes directly from the Hyperliquid API. Make your decision based ONLY on this data.
+ACTIVE STRATEGY MODE: {effective_mode.upper()}
 
 {all_mids_section}
 
@@ -264,10 +367,8 @@ TARGET ASSET: {market_data.coin}
   Funding Rate: {float(market_data.funding_rate):.6f}%
 {funding_section}
 
-TECHNICAL INDICATORS (Multi-timeframe analysis for trend trading):
+TECHNICAL INDICATORS (Multi-timeframe analysis):
 {self._format_technical_data(technical_data)}
-
-{trend_analysis}
 
 PORTFOLIO STATE:
   Total Balance: ${portfolio_state.total_balance}
@@ -283,48 +384,7 @@ CURRENT POSITIONS:
 {protective_section}
 {recent_trades_section}
 
-=== TREND TRADING STRATEGY RULES (4H/1D FOCUS) ===
-
-TREND IDENTIFICATION CRITERIA — Enter ONLY when:
-1. PRIMARY TREND (4H): EMA9 > EMA21 > EMA50 (uptrend) or EMA9 < EMA21 < EMA50 (downtrend)
-2. MAIN TREND (1D): Confirms primary trend direction
-3. TREND STRENGTH: At least 2/3 timeframes aligned (preferably 3/3)
-4. VOLUME CONFIRMATION: volume_ratio > 1.3 on breakout/breakdown
-5. RSI POSITION: RSI14 between 40-60 for continuation, <30/>70 for reversal setups
-6. NO MAJOR DIVERGENCES: Price making higher highs with indicators confirming
-
-ENTRY TIMING (1H timeframe):
-- Wait for pullback to key levels: EMA21, VWAP, or previous support/resistance
-- RSI14 between 30-40 for longs, 60-70 for shorts (pullback zones)
-- MACD histogram turning positive (longs) or negative (shorts)
-- Price above VWAP for longs, below VWAP for shorts
-- Bollinger Band position <30% for longs, >70% for shorts (reversion to mean)
-
-STOP-LOSS / TAKE-PROFIT DECISION:
-- You MUST choose dynamic stop_loss_pct and take_profit_pct based on volatility and market structure.
-- Use ATR and trend strength to set distances.
-- In high volatility, use wider SL/TP; in low volatility, tighter levels.
-- Prefer minimum risk/reward around 1:1.5 unless setup quality is very low.
-- For HOLD actions, set stop_loss_pct and take_profit_pct to null.
-- If protective TP/SL orders are missing or inconsistent, prefer actions that restore proper protection.
-
-CRITICAL RULES FOR TREND TRADING:
-- DO NOT counter-trend trade (no buying in downtrend, no selling in uptrend)
-- If drawdown > 10%, reduce position sizes by 50%
-- If consecutive losses > 2, switch to 1% position sizes until recovery
-- Monitor funding rates: Extreme positive (>0.01%) = caution on longs
-- Monitor funding rates: Extreme negative (<-0.01%) = caution on shorts
-- Weekend rule: Reduce leverage by 30% before weekends (higher volatility)
-- News events: Avoid opening new positions 1 hour before/after major announcements
-- If no clear trend exists, ALWAYS hold — capital preservation is priority #1
-- If there is an open position and protective TP/SL orders are missing (sl_open_orders_count=0 or tp_open_orders_count=0), DO NOT open/increase risk. Prefer HOLD with valid stop_loss_pct and take_profit_pct to restore protection.
-
-CONFIDENCE SCORING FOR TREND TRADES:
-- 0.90-1.0: All 3 timeframes aligned + strong volume + clean pullback
-- 0.80-0.89: 2/3 timeframes aligned + decent volume + good entry timing
-- 0.70-0.79: Trend present but entry timing suboptimal
-- 0.60-0.69: Weak trend signal — only for managing existing positions
-- Below 0.60: No trade — wait for better setup
+{strategy_block}
 
 Respond with ONLY this JSON (no markdown, no extra text):
 {{
@@ -334,6 +394,6 @@ Respond with ONLY this JSON (no markdown, no extra text):
   "confidence": 0.85,
   "stop_loss_pct": 0.03,
   "take_profit_pct": 0.06,
-  "reasoning": "Trend analysis: [timeframe alignment] + [entry timing] + [risk assessment]"
+  "reasoning": "Setup summary + risk assessment"
 }}"""
         return prompt.strip()

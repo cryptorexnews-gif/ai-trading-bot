@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 class LLMEngine:
     """
-    LLM Engine using DeepSeek v3.2 via OpenRouter for trend trading decisions.
+    LLM Engine using DeepSeek v3.2 via OpenRouter for trend/scalping decisions.
     All market data comes from Hyperliquid API; no external data sources.
     """
 
@@ -249,6 +249,7 @@ class LLMEngine:
         consecutive_losses: int = 0,
         managed_position: Optional[Dict[str, Any]] = None,
         protective_orders: Optional[List[Dict[str, Any]]] = None,
+        strategy_mode: str = "trend",
     ) -> Optional[Dict[str, Any]]:
         prompt = self.prompt_builder.build_prompt(
             market_data=market_data,
@@ -261,9 +262,13 @@ class LLMEngine:
             consecutive_losses=consecutive_losses,
             managed_position=managed_position,
             protective_orders=protective_orders,
+            strategy_mode=strategy_mode,
         )
 
-        logger.info(f"Requesting LLM decision for {market_data.coin} (prompt ~{len(prompt)} chars)")
+        logger.info(
+            f"Requesting LLM decision for {market_data.coin} "
+            f"(mode={strategy_mode}, prompt ~{len(prompt)} chars)"
+        )
 
         response_text = self._call_openrouter(prompt)
         if not response_text:

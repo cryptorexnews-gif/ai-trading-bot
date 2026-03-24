@@ -38,7 +38,14 @@ def get_decision_for_coin(
     exchange_client,
     sync_exchange_protective_orders,
     logger,
+    cfg,
 ) -> TradeDecision:
+    strategy_mode = str(
+        getattr(cfg, "active_strategy_mode", getattr(cfg, "default_strategy_mode", "trend"))
+    ).strip().lower()
+    if strategy_mode not in {"trend", "scalping"}:
+        strategy_mode = "trend"
+
     if llm_engine:
         llm_rate_limiter.acquire(1)
         metrics.increment("llm_calls_total")
@@ -63,6 +70,7 @@ def get_decision_for_coin(
             consecutive_losses=consecutive_losses,
             managed_position=managed_position,
             protective_orders=protective_orders,
+            strategy_mode=strategy_mode,
         )
         if not decision_dict:
             metrics.increment("llm_errors_total")

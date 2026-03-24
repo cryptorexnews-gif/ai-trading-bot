@@ -14,6 +14,7 @@ class RuntimeConfigApplier:
         self.active_runtime_pairs: List[str] = list(context.cfg.trading_pairs)
         self.active_runtime_params: Dict[str, str] = {}
         self.next_cycle_sec = context.cfg.default_cycle_sec
+        self.context.cfg.active_strategy_mode = self.active_strategy_mode
 
     def _validate_trading_pairs(self, pairs: List[str], force_refresh: bool = False) -> List[str]:
         meta = self.context.exchange_client.get_meta(force_refresh=force_refresh)
@@ -75,6 +76,7 @@ class RuntimeConfigApplier:
 
         self.context.orchestrator.trading_pairs = validated_pairs
         self.context.cfg.trading_pairs = list(validated_pairs)
+        self.context.cfg.active_strategy_mode = runtime_mode
 
         self.active_strategy_mode = runtime_mode
         self.active_runtime_pairs = list(validated_pairs)

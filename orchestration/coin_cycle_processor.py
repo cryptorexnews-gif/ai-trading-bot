@@ -114,6 +114,7 @@ class CoinCycleProcessor:
             exchange_client=self.context.execution_engine.exchange_client,
             sync_exchange_protective_orders=self.context.sync_exchange_protective_orders,
             logger=logger,
+            cfg=self.context.cfg,
         )
 
         logger.info(

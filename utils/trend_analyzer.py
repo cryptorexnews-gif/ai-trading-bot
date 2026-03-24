@@ -53,12 +53,67 @@ class TrendAnalyzer:
             return self._trend_cache[coin]
 
         # Get data for each timeframe
+        scalp_candles = self.data_fetcher.get_candle_snapshot(coin, "5m", 180)
         intraday_candles = self.data_fetcher.get_candle_snapshot(coin, "1h", 120)
         hourly_candles = self.data_fetcher.get_candle_snapshot(coin, "4h", 80)
         daily_candles = self.data_fetcher.get_candle_snapshot(coin, "1d", 240)
 
         if not intraday_candles or len(intraday_candles) < 25:
-            return {"trend_strength": 0, "trend_direction": "neutral", "trends_aligned": False}
+            return {
+                "trend_strength": 0,
+                "trend_direction": "neutral",
+                "trends_aligned": False,
+                "scalping_context": {},
+            }
+
+        # 5m timeframe analysis (scalping context)
+        scalping_context = {}
+        if scalp_candles and len(scalp_candles) >= 30:
+            scalp_closes = [c["close"] for c in scalp_candles]
+            scalp_highs = [c["high"] for c in scalp_candles]
+            scalp_lows = [c["low"] for c in scalp_candles]
+            scalp_volumes = [c["volume"] for c in scalp_candles]
+
+            ema_9_5m = TechnicalIndicators.calculate_ema(scalp_closes, 9)
+            ema_21_5m = TechnicalIndicators.calculate_ema(scalp_closes, 21)
+            rsi_14_5m = TechnicalIndicators.calculate_rsi(scalp_closes, 14)
+            macd_line_5m, signal_line_5m, histogram_5m = TechnicalIndicators.calculate_macd(scalp_closes)
+            atr_14_5m = TechnicalIndicators.calculate_atr(scalp_highs, scalp_lows, scalp_closes, 14)
+            bollinger_5m = TechnicalIndicators.calculate_bollinger_bands(scalp_closes, 20, Decimal("2"))
+            vwap_5m = TechnicalIndicators.calculate_vwap(scalp_highs, scalp_lows, scalp_closes, scalp_volumes)
+
+            scalp_trend = self._ema_trend_short_mid(
+                ema_9_5m[-1] if ema_9_5m else Decimal("0"),
+                ema_21_5m[-1] if ema_21_5m else Decimal("0"),
+            )
+
+            scalp_current_volume = scalp_volumes[-1] if scalp_volumes else Decimal("0")
+            scalp_avg_volume = (
+                sum(scalp_volumes[-30:]) / Decimal(str(min(30, len(scalp_volumes))))
+                if scalp_volumes
+                else Decimal("0")
+            )
+            scalp_volume_ratio = (scalp_current_volume / scalp_avg_volume) if scalp_avg_volume > 0 else Decimal("1")
+
+            scalp_price = scalp_closes[-1]
+            bb_upper_5m = bollinger_5m["upper"][-1] if bollinger_5m["upper"] else scalp_price
+            bb_lower_5m = bollinger_5m["lower"][-1] if bollinger_5m["lower"] else scalp_price
+            bb_range_5m = bb_upper_5m - bb_lower_5m
+            scalp_bb_position = ((scalp_price - bb_lower_5m) / bb_range_5m) if bb_range_5m > 0 else Decimal("0.5")
+
+            scalping_context = {
+                "ema_9": ema_9_5m[-1] if ema_9_5m else Decimal("0"),
+                "ema_21": ema_21_5m[-1] if ema_21_5m else Decimal("0"),
+                "rsi_14": rsi_14_5m[-1] if rsi_14_5m else Decimal("50"),
+                "macd_line": macd_line_5m[-1] if macd_line_5m else Decimal("0"),
+                "macd_signal": signal_line_5m[-1] if signal_line_5m else Decimal("0"),
+                "macd_histogram": histogram_5m[-1] if histogram_5m else Decimal("0"),
+                "atr_14": atr_14_5m[-1] if atr_14_5m else Decimal("0"),
+                "vwap": vwap_5m,
+                "bb_position": scalp_bb_position,
+                "volume_ratio": scalp_volume_ratio,
+                "trend": scalp_trend,
+            }
 
         # Extract price data
         intraday_closes = [c["close"] for c in intraday_candles]
@@ -216,6 +271,7 @@ class TrendAnalyzer:
             "vwap": vwap_1h,
             "hourly_context": hourly_context,
             "long_term_context": long_term_context,
+            "scalping_context": scalping_context,
         }
 
         self._trend_cache[coin] = result
