@@ -1,11 +1,27 @@
 import { defineConfig, loadEnv } from 'vite'
 import react from '@vitejs/plugin-react'
-import dyadComponentTagger from '@dyad-sh/react-vite-component-tagger';
+import dyadComponentTagger from '@dyad-sh/react-vite-component-tagger'
+
+const SENSITIVE_ENV_HINTS = ['KEY', 'SECRET', 'TOKEN', 'PRIVATE', 'PASSWORD', 'MNEMONIC']
+
+function isSensitiveViteEnvKey(key) {
+  if (!key.startsWith('VITE_')) return false
+  const upperKey = key.toUpperCase()
+  return SENSITIVE_ENV_HINTS.some((hint) => upperKey.includes(hint))
+}
 
 export default defineConfig(({ mode }) => {
-  const env = loadEnv(mode, process.cwd(), '');
-  const dashboardApiKey = env.DASHBOARD_API_KEY || process.env.DASHBOARD_API_KEY || '';
-  const proxyHeaders = dashboardApiKey ? { 'X-API-Key': dashboardApiKey } : {};
+  const env = loadEnv(mode, process.cwd(), '')
+  const leakedViteKeys = Object.keys(env).filter(isSensitiveViteEnvKey)
+
+  if (leakedViteKeys.length > 0) {
+    throw new Error(
+      `Security error: sensitive env vars must never use VITE_ prefix. Found: ${leakedViteKeys.join(', ')}`
+    )
+  }
+
+  const dashboardApiKey = env.DASHBOARD_API_KEY || process.env.DASHBOARD_API_KEY || ''
+  const proxyHeaders = dashboardApiKey ? { 'X-API-Key': dashboardApiKey } : {}
 
   return {
     plugins: [dyadComponentTagger(), react()],
@@ -30,8 +46,8 @@ export default defineConfig(({ mode }) => {
           changeOrigin: true,
           secure: false,
           headers: proxyHeaders,
-        }
-      }
-    }
-  };
-});
+        },
+      },
+    },
+  }
+})
