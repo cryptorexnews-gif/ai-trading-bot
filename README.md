@@ -19,7 +19,7 @@ Bot di trading automatico per Hyperliquid con:
 6. [Struttura repository](#struttura-repository)  
 7. [Configurazione ambiente (.env)](#configurazione-ambiente-env)  
 8. [Tutorial sviluppo passo passo](#tutorial-sviluppo-passo-passo)  
-9. [Comandi operativi di setup (Dyad)](#comandi-operativi-di-setup-dyad)  
+9. [Comandi operativi produzione (VPS)](#comandi-operativi-produzione-vps)  
 10. [Deploy produzione: Frontend Vercel + Backend VPS](#deploy-produzione-frontend-vercel--backend-vps)  
 11. [Dashboard: sezioni e uso operativo](#dashboard-sezioni-e-uso-operativo)  
 12. [Risk management e strategia](#risk-management-e-strategia)  
@@ -166,20 +166,18 @@ Il file `.env` deve includere almeno:
 
 ## Tutorial sviluppo passo passo
 
-> Questo percorso è pensato per l’ambiente Dyad (consigliato).
-
 ### Step 1 — Preparazione config
 1. Inserisci/aggiorna il `.env` con i valori reali.
 2. Verifica che il signer mode sia `api_wallet`.
 3. Verifica che la key legacy master non sia presente.
 
 ### Step 2 — Build ambiente
-1. Usa **Rebuild** nella UI Dyad (pulsante azione).
-2. Attendi installazione dipendenze backend/frontend.
+1. Installa dipendenze backend e frontend.
+2. Verifica che il progetto buildi correttamente.
 
 ### Step 3 — Avvio servizi
-1. Usa **Restart** per riavviare stack applicativo.
-2. Usa **Refresh** per aggiornare la preview dashboard.
+1. Avvia API + bot + frontend.
+2. Verifica che i processi siano up.
 
 ### Step 4 — Verifica stato API
 Controlla:
@@ -194,7 +192,7 @@ Controlla nei log:
 - assenza errori “wallet does not exist”.
 
 ### Step 6 — Test ciclo controllato
-Esegui un ciclo singolo in modalità di test operativo interno (senza run continuo) per validare:
+Esegui un ciclo singolo per validare:
 - fetch dati,
 - decisione LLM,
 - risk checks,
@@ -207,7 +205,7 @@ Da dashboard:
 - salva runtime config,
 - avvia/ferma bot dal pannello controllo processo.
 
-### Step 8 — Monitoraggio sviluppo
+### Step 8 — Monitoraggio
 Osserva:
 - tab **Overview** (saldo, PnL, ciclo),
 - tab **Positions** (posizioni/SL/TP),
@@ -215,44 +213,45 @@ Osserva:
 
 ---
 
-## Comandi operativi di setup (Dyad)
+## Comandi operativi produzione (VPS)
 
-Nel workspace Dyad usa i pulsanti sopra la chat:
+> Se usi Docker Compose (file presenti: `docker-compose.yml` e opzionale `docker-compose.https.yml`).
 
-### 1) Rebuild
-Quando usarlo:
-- primo setup del progetto,
-- dopo cambio dipendenze,
-- se l’ambiente è incoerente.
+### 1) Primo avvio stack
+`docker compose up -d`
 
-Effetto:
-- ricrea l’ambiente da zero (reinstall completa).
+### 2) Verifica stato container
+`docker compose ps`
 
-### 2) Restart
-Quando usarlo:
-- dopo modifica `.env`,
-- dopo cambi backend Python,
-- dopo cambi logica bot/API.
+### 3) Log aggregati
+`docker compose logs -f --tail=200`
 
-Effetto:
-- riavvia i processi applicativi.
+### 4) Log singolo servizio
+- API: `docker compose logs -f --tail=200 api`
+- Bot: `docker compose logs -f --tail=200 bot`
+- Frontend: `docker compose logs -f --tail=200 frontend`
+- Nginx: `docker compose logs -f --tail=200 nginx`
 
-### 3) Refresh
-Quando usarlo:
-- dopo modifiche frontend,
-- dopo restart per aggiornare la preview.
+### 5) Riavvio servizi
+- Tutto stack: `docker compose restart`
+- Solo bot: `docker compose restart bot`
+- Solo API: `docker compose restart api`
 
-Effetto:
-- aggiorna solo la pagina di anteprima.
+### 6) Deploy update (nuova versione codice)
+`docker compose down && docker compose up -d`
 
-### Sequenza consigliata di setup iniziale
-1. **Rebuild**
-2. **Restart**
-3. **Refresh**
+### 7) Healthcheck API
+`curl -sS http://127.0.0.1:5000/api/health`
 
-### Sequenza consigliata dopo modifica configurazione (.env)
-1. **Restart**
-2. **Refresh**
+### 8) Stop controllato
+`docker compose down`
+
+### 9) Avvio con HTTPS (quando cert pronti)
+`docker compose -f docker-compose.yml -f docker-compose.https.yml up -d`
+
+### 10) Rollback rapido
+1. ripristina commit/tag precedente del codice  
+2. riesegui: `docker compose down && docker compose up -d`
 
 ---
 
@@ -358,9 +357,9 @@ Imposta environment variables:
 - controlla log execution/risk rejection.
 
 ### 4) Dashboard non aggiornata
-- usa Refresh,
-- poi Restart,
-- verifica raggiungibilità endpoint status/logs.
+- verifica stato container frontend/api,
+- verifica raggiungibilità endpoint status/logs,
+- controlla CORS su backend.
 
 ---
 
