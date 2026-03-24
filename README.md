@@ -19,12 +19,13 @@ Bot di trading automatico per Hyperliquid con:
 6. [Struttura repository](#struttura-repository)  
 7. [Configurazione ambiente (.env)](#configurazione-ambiente-env)  
 8. [Tutorial sviluppo passo passo](#tutorial-sviluppo-passo-passo)  
-9. [Deploy produzione: Frontend Vercel + Backend VPS](#deploy-produzione-frontend-vercel--backend-vps)  
-10. [Dashboard: sezioni e uso operativo](#dashboard-sezioni-e-uso-operativo)  
-11. [Risk management e strategia](#risk-management-e-strategia)  
-12. [API principali](#api-principali)  
-13. [Troubleshooting](#troubleshooting)  
-14. [Best practice operative](#best-practice-operative)
+9. [Comandi operativi di setup (Dyad)](#comandi-operativi-di-setup-dyad)  
+10. [Deploy produzione: Frontend Vercel + Backend VPS](#deploy-produzione-frontend-vercel--backend-vps)  
+11. [Dashboard: sezioni e uso operativo](#dashboard-sezioni-e-uso-operativo)  
+12. [Risk management e strategia](#risk-management-e-strategia)  
+13. [API principali](#api-principali)  
+14. [Troubleshooting](#troubleshooting)  
+15. [Best practice operative](#best-practice-operative)
 
 ---
 
@@ -211,6 +212,47 @@ Osserva:
 - tab **Overview** (saldo, PnL, ciclo),
 - tab **Positions** (posizioni/SL/TP),
 - tab **System** (log, circuit breaker).
+
+---
+
+## Comandi operativi di setup (Dyad)
+
+Nel workspace Dyad usa i pulsanti sopra la chat:
+
+### 1) Rebuild
+Quando usarlo:
+- primo setup del progetto,
+- dopo cambio dipendenze,
+- se l’ambiente è incoerente.
+
+Effetto:
+- ricrea l’ambiente da zero (reinstall completa).
+
+### 2) Restart
+Quando usarlo:
+- dopo modifica `.env`,
+- dopo cambi backend Python,
+- dopo cambi logica bot/API.
+
+Effetto:
+- riavvia i processi applicativi.
+
+### 3) Refresh
+Quando usarlo:
+- dopo modifiche frontend,
+- dopo restart per aggiornare la preview.
+
+Effetto:
+- aggiorna solo la pagina di anteprima.
+
+### Sequenza consigliata di setup iniziale
+1. **Rebuild**
+2. **Restart**
+3. **Refresh**
+
+### Sequenza consigliata dopo modifica configurazione (.env)
+1. **Restart**
+2. **Refresh**
 
 ---
 
