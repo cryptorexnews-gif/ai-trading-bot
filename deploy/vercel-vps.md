@@ -49,6 +49,7 @@ Configura su Vercel:
 Note:
 - Il frontend userà il token read-only.
 - Non usare token admin nel frontend.
+- VITE espone variabili al client: usa solo valori pensati per accesso pubblico limitato.
 
 ---
 
@@ -64,14 +65,31 @@ Esempio:
 
 ---
 
-## 5) WebSocket in questa architettura
+## 5) Reverse proxy VPS (Nginx)
 
-Con frontend su dominio diverso (Vercel) e backend su VPS, la dashboard funziona in modo affidabile via polling HTTP.
-Se vuoi websocket cross-domain in futuro, conviene abilitarli dietro reverse proxy con una strategia auth dedicata.
+È incluso il template:
+
+- `deploy/nginx/vps-api.conf`
+
+Personalizza:
+- `server_name`
+- percorsi certificati TLS
+
+Comportamento:
+- redirect HTTP -> HTTPS
+- proxy di `/api`, `/metrics`, `/ws` verso Flask locale (`127.0.0.1:5000`)
+- forwarding header standard (`X-Forwarded-*`)
 
 ---
 
-## 6) Checklist finale prima del go-live
+## 6) WebSocket in questa architettura
+
+Con frontend su dominio diverso (Vercel) e backend su VPS, la dashboard è già affidabile via polling HTTP autenticato.
+I websocket restano disponibili dietro Nginx e possono essere riabilitati gradualmente se necessario.
+
+---
+
+## 7) Checklist finale prima del go-live
 
 - [ ] Backend HTTPS attivo e certificato valido
 - [ ] `ALLOW_LOCALHOST_BYPASS=false`
@@ -81,3 +99,4 @@ Se vuoi websocket cross-domain in futuro, conviene abilitarli dietro reverse pro
 - [ ] Vercel con `VITE_API_BASE_URL` e `VITE_DASHBOARD_TOKEN`
 - [ ] Test dashboard completa (overview, history, positions, logs)
 - [ ] Test endpoint admin solo con key admin
+- [ ] Rotazione periodica token read-only/admin
