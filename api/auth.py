@@ -7,7 +7,7 @@ from typing import Dict
 
 from flask import jsonify, request
 
-from api.config import API_AUTH_KEY
+from api.config import API_AUTH_KEY, DASHBOARD_READ_API_KEY
 from api.security_utils import env_bool, is_loopback_ip
 from utils.rate_limiter import TokenBucketRateLimiter
 
@@ -16,6 +16,8 @@ _AUTH_RL_LOCK = threading.Lock()
 _AUTH_RL_LAST_CLEANUP = 0.0
 _AUTH_RL_CLEANUP_INTERVAL_SEC = 300.0
 _AUTH_RL_STALE_SEC = 3600.0
+
+_READ_METHODS = {"GET", "HEAD", "OPTIONS"}
 
 
 def _is_server_loopback_bound() -> bool:
@@ -43,6 +45,30 @@ def _is_local_socket_request() -> bool:
         return False
 
     return True
+
+
+def _is_read_request() -> bool:
+    return request.method.upper() in _READ_METHODS
+
+
+def _auth_keys_configured_for_request() -> bool:
+    if _is_read_request():
+        return bool(API_AUTH_KEY or DASHBOARD_READ_API_KEY)
+    return bool(API_AUTH_KEY)
+
+
+def _is_authorized_for_request(provided_key: str) -> bool:
+    if not provided_key:
+        return False
+
+    if API_AUTH_KEY and hmac.compare_digest(provided_key.encode("utf-8"), API_AUTH_KEY.encode("utf-8")):
+        return True
+
+    if _is_read_request() and DASHBOARD_READ_API_KEY:
+        if hmac.compare_digest(provided_key.encode("utf-8"), DASHBOARD_READ_API_KEY.encode("utf-8")):
+            return True
+
+    return False
 
 
 def _get_auth_rate_limiter_for_ip(client_ip: str) -> TokenBucketRateLimiter:
@@ -92,14 +118,11 @@ def require_api_key(f):
         if allow_localhost_bypass and _is_server_loopback_bound() and _is_local_socket_request():
             return f(*args, **kwargs)
 
-        if not API_AUTH_KEY:
+        if not _auth_keys_configured_for_request():
             return jsonify({"error": "unauthorized"}), 401
 
         provided_key = request.headers.get("X-API-Key", "")
-        if not provided_key:
-            return jsonify({"error": "unauthorized"}), 401
-
-        if not hmac.compare_digest(provided_key.encode("utf-8"), API_AUTH_KEY.encode("utf-8")):
+        if not _is_authorized_for_request(provided_key):
             return jsonify({"error": "unauthorized"}), 401
 
         return f(*args, **kwargs)

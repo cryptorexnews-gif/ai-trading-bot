@@ -1,7 +1,22 @@
 import { useEffect, useRef, useState } from 'react'
 import { getApiBase, getHeaders } from './useApi'
 
-function buildWsUrl(path) {
+function toWsOriginFromApiBase(apiBase) {
+  if (!apiBase || apiBase.startsWith('/')) return ''
+  try {
+    const parsed = new URL(apiBase)
+    const wsProtocol = parsed.protocol === 'https:' ? 'wss:' : 'ws:'
+    return `${wsProtocol}//${parsed.host}`
+  } catch {
+    return ''
+  }
+}
+
+function buildWsUrl(path, apiBase) {
+  const wsOriginFromApi = toWsOriginFromApiBase(apiBase)
+  if (wsOriginFromApi) {
+    return `${wsOriginFromApi}${path}`
+  }
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
   return `${protocol}//${window.location.host}${path}`
 }
@@ -19,6 +34,7 @@ export default function useRealtimeStatus() {
 
   useEffect(() => {
     let active = true
+    const isRemoteApi = Boolean(apiBase && !apiBase.startsWith('/'))
 
     const fallbackFetch = async () => {
       const response = await fetch(`${apiBase}/status`, {
@@ -52,7 +68,14 @@ export default function useRealtimeStatus() {
     }
 
     const connect = () => {
-      const ws = new WebSocket(buildWsUrl('/ws/status'))
+      if (isRemoteApi) {
+        // In deployment Vercel + VPS usiamo polling HTTP autenticato
+        setConnected(false)
+        startFallbackPolling()
+        return
+      }
+
+      const ws = new WebSocket(buildWsUrl('/ws/status', apiBase))
       wsRef.current = ws
 
       ws.onopen = () => {

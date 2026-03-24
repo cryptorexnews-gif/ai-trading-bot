@@ -7,6 +7,8 @@ function normalizeBaseUrl(value) {
 }
 
 const API_BASE = normalizeBaseUrl(import.meta.env.VITE_API_BASE_URL)
+const DASHBOARD_TOKEN = String(import.meta.env.VITE_DASHBOARD_TOKEN || '').trim()
+
 const inFlightByEndpoint = new Map()
 const latestByEndpoint = new Map()
 const lastFetchAtByEndpoint = new Map()
@@ -17,7 +19,10 @@ export function getApiBase() {
 }
 
 export function getHeaders() {
-  return {}
+  if (!DASHBOARD_TOKEN) {
+    return {}
+  }
+  return { 'X-API-Key': DASHBOARD_TOKEN }
 }
 
 async function fetchEndpointJson(endpoint) {

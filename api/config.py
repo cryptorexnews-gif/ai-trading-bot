@@ -9,8 +9,9 @@ import re
 
 logger = logging.getLogger(__name__)
 
-# Security: Dashboard API key
+# Security: Dashboard API keys
 API_AUTH_KEY = os.getenv("DASHBOARD_API_KEY", "")
+DASHBOARD_READ_API_KEY = os.getenv("DASHBOARD_READ_API_KEY", "")
 
 # Security: CORS origins — validated
 _raw_cors = os.getenv(

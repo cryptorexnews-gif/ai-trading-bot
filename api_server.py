@@ -10,7 +10,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from api import create_app
-from api.config import API_AUTH_KEY, CORS_ORIGINS
+from api.config import API_AUTH_KEY, DASHBOARD_READ_API_KEY, CORS_ORIGINS
 from api.security_utils import env_bool, is_loopback_ip
 
 logger = logging.getLogger(__name__)
@@ -35,7 +35,9 @@ def main() -> None:
         )
 
     api_key_status = "SET ✓" if API_AUTH_KEY else "EMPTY ✗"
-    logger.info(f"DASHBOARD_API_KEY status: {api_key_status} (length={len(API_AUTH_KEY) if API_AUTH_KEY else 0})")
+    read_key_status = "SET ✓" if DASHBOARD_READ_API_KEY else "EMPTY ✗"
+    logger.info(f"DASHBOARD_API_KEY (admin) status: {api_key_status} (length={len(API_AUTH_KEY) if API_AUTH_KEY else 0})")
+    logger.info(f"DASHBOARD_READ_API_KEY (read-only) status: {read_key_status} (length={len(DASHBOARD_READ_API_KEY) if DASHBOARD_READ_API_KEY else 0})")
 
     auth_mode = "API key required"
     if allow_localhost_bypass and loopback_bound:
@@ -50,7 +52,7 @@ def main() -> None:
         logger.info("Local direct loopback requests: ALLOWED without API key")
         logger.info("Forwarded/non-loopback requests: API key required")
     else:
-        logger.info("API key required for protected endpoints")
+        logger.info("API key required for protected endpoints (GET supports read-only key if configured)")
     logger.info("Health endpoint available at /api/health")
 
     app.run(host=host, port=port, debug=debug, use_reloader=False)
