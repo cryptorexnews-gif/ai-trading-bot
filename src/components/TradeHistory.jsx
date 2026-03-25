@@ -46,11 +46,11 @@ export default function TradeHistory({ trades, minConfidence = 0.6 }) {
       <div className="bg-gray-900 rounded-xl p-6 border border-gray-800">
         <h3 className="text-lg font-semibold mb-2">Recent Bot Decisions</h3>
         <p className="text-xs text-gray-500 mb-4">
-          Showing only decisions with confidence > {(minConfidence * 100).toFixed(0)}% (holds excluded)
+          Showing only decisions with confidence {(minConfidence * 65).toFixed(0)}% (holds excluded)
         </p>
         <div className="flex flex-col items-center justify-center py-8 text-gray-500">
           <div className="text-4xl mb-2">📋</div>
-          <p className="text-sm">No qualifying decisions yet</p>
+          <p className="text-sm" No qualifying decisions yet</p>
         </div>
       </div>
     )
