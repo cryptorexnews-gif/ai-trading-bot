@@ -50,7 +50,7 @@ export default function TradeHistory({ trades, minConfidence = 0.6 }) {
         </p>
         <div className="flex flex-col items-center justify-center py-8 text-gray-500">
           <div className="text-4xl mb-2">📋</div>
-          <p className="text-sm" No qualifying decisions yet</p>
+          <p className="text-sm"> No qualifying decisions yet </p>
         </div>
       </div>
     )
